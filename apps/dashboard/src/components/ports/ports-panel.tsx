@@ -22,7 +22,7 @@ export function PortsPanel({ requestPreviewUrl, forwardPort, provider }: PortsPa
   const [adding, setAdding] = useState(false);
   const [portInput, setPortInput] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
-  const showForward = isElectron && provider === 'docker';
+  const showForward = isElectron && (provider === 'docker' || provider === 'apple-container');
 
   const handleOpenPreview = useCallback(
     async (port: number) => {

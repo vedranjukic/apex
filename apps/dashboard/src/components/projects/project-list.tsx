@@ -11,6 +11,15 @@ import { CreateProjectDialog } from './create-project-dialog';
 import { settingsApi } from '../../api/client';
 import type { Project, Thread } from '../../api/client';
 
+const STATUS_LABELS: Record<string, string> = {
+  creating: 'creating',
+  pulling_image: 'pulling image',
+  starting: 'starting',
+  running: 'running',
+  stopped: 'stopped',
+  error: 'error',
+};
+
 function ThreadStatusIcon({ status, className }: { status: string; className?: string }) {
   const size = className ?? 'w-3 h-3';
   switch (status) {
@@ -335,6 +344,7 @@ function ForkRow({
 }) {
   const statusColors: Record<string, string> = {
     creating: 'text-yellow-400 bg-yellow-400/10',
+    pulling_image: 'text-yellow-400 bg-yellow-400/10',
     starting: 'text-yellow-400 bg-yellow-400/10',
     running: 'text-green-400 bg-green-400/10',
     stopped: 'text-gray-400 bg-gray-400/10',
@@ -359,7 +369,7 @@ function ForkRow({
                 statusColors[project.status] || 'text-gray-400 bg-gray-400/10',
               )}
             >
-              {project.status}
+              {STATUS_LABELS[project.status] || project.status}
             </span>
             {threads.length > 0 && (
               <span className="flex items-center gap-0.5">
@@ -434,6 +444,7 @@ function ProjectCard({
 }) {
   const statusColors: Record<string, string> = {
     creating: 'text-yellow-400 bg-yellow-400/10',
+    pulling_image: 'text-yellow-400 bg-yellow-400/10',
     starting: 'text-yellow-400 bg-yellow-400/10',
     running: 'text-green-400 bg-green-400/10',
     stopped: 'text-gray-400 bg-gray-400/10',
@@ -457,7 +468,7 @@ function ProjectCard({
                 statusColors[project.status] || 'text-gray-400 bg-gray-400/10',
               )}
             >
-              {project.status}
+              {STATUS_LABELS[project.status] || project.status}
             </span>
           </div>
           {project.description && (

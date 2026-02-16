@@ -101,7 +101,7 @@ export function ProjectPage() {
 
 
 
-  const shouldPoll = project?.status === 'creating' || project?.status === 'stopped' || project?.status === 'starting';
+  const shouldPoll = project?.status === 'creating' || project?.status === 'pulling_image' || project?.status === 'stopped' || project?.status === 'starting';
 
   useEffect(() => {
     if (!projectId || !project || !shouldPoll) {
@@ -203,7 +203,7 @@ export function ProjectPage() {
       }
     >
       {/* Loading overlay while sandbox provisions, starts, or layout restores */}
-      {(project.status === 'creating' || project.status === 'starting' || project.status === 'stopped' || project.status === 'error' || !layoutReady) && (
+      {(project.status === 'creating' || project.status === 'pulling_image' || project.status === 'starting' || project.status === 'stopped' || project.status === 'error' || !layoutReady) && (
         <SandboxOverlay project={project} provisionMsg={provisionMsg} />
       )}
       <CentralPanel
@@ -295,17 +295,19 @@ function SandboxOverlay({ project, provisionMsg }: { project: Project; provision
 
   const statusMessage = provisionMsg
     ? provisionMsg
-    : project.status === 'creating'
-      ? 'Provisioning sandbox environment…'
-      : project.status === 'starting'
-        ? 'Starting sandbox…'
-        : isStopped && !project.sandboxId
-          ? 'No sandbox provisioned. Attempting to create one…'
-          : isStopped
-            ? 'Sandbox is stopped. Starting…'
-            : isError
-              ? project.statusError || 'Unknown sandbox error'
-              : 'Restoring workspace…';
+    : project.status === 'pulling_image'
+      ? 'Pulling container image… This may take a few minutes.'
+      : project.status === 'creating'
+        ? 'Provisioning sandbox environment…'
+        : project.status === 'starting'
+          ? 'Starting sandbox…'
+          : isStopped && !project.sandboxId
+            ? 'No sandbox provisioned. Attempting to create one…'
+            : isStopped
+              ? 'Sandbox is stopped. Starting…'
+              : isError
+                ? project.statusError || 'Unknown sandbox error'
+                : 'Restoring workspace…';
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.85)' }}>

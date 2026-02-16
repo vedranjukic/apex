@@ -109,6 +109,10 @@ Uses `dockerode` to manage containers via the Docker Engine API over `/var/run/d
 
 In Docker-in-Docker (DinD), sandbox containers get IPs on the Docker bridge network. The devcontainer host can reach these IPs directly without port mapping. The `SandboxManager` WebSocket connection handles `http://` → `ws://` conversion automatically, so bridge connectivity works out of the box.
 
+### Preview proxy
+
+Docker container IPs are not reachable from the user's browser. The API provides a built-in HTTP reverse proxy at `/preview/:projectId/:port/*` that forwards requests to the container IP. The bridge's `get_preview_url` MCP tool returns proxy URLs (e.g. `/preview/abc123/3000/`) when `APEX_PROXY_BASE_URL` and `APEX_PROJECT_ID` env vars are set. See `workdocs/ports-panel.md` for full details.
+
 ### Limitations
 
 - **No fork**: Docker doesn't support copy-on-write sandbox forking. `fork()` throws.
@@ -123,6 +127,49 @@ In Docker-in-Docker (DinD), sandbox containers get IPs on the Docker bridge netw
 
 ---
 
+## Apple Container Provider
+
+File: `libs/orchestrator/src/lib/providers/apple-container-provider.ts`
+
+Uses Apple's `container` CLI to manage lightweight Linux VMs on macOS (Apple silicon). Each container runs in its own VM for strong isolation. The CLI is invoked via `child_process.execFile` — no npm dependency needed.
+
+### How it works
+
+- `initialize()`: Runs `container system status` to verify the service is running.
+- `create()`: Pulls the image with `container image pull` if needed, then runs `container run -d --name apex-<name>-<uuid8> --init -u daytona -l apex.sandbox=true -e K=V ... <image>`. Waits until the container is responsive via `container exec ... echo ready`.
+- `AppleContainerInstance` implements all sub-interfaces via `container exec`:
+  - **`fs.uploadFile`**: Base64-encodes content, writes via exec. Large files are chunked (64 KB) to avoid argument length limits.
+  - **`fs.downloadFile`**: Exec `base64 '<path>'`, decode stdout.
+  - **`fs.createFolder`**: Exec `mkdir -p && chmod`.
+  - **`process.executeCommand`**: Exec `sh -c '<cmd>'` with working directory and `--user daytona`, returns stdout+stderr and exit code.
+  - **`process.createSession`**: No-op (sessions aren't tracked).
+  - **`process.executeSessionCommand`**: Exec with `--detach` for async commands (e.g. starting the bridge).
+  - **`git.clone`**: Builds and runs a `git clone` command.
+- `getPreviewLink(port)`: Returns `http://<container-ip>:<port>` using the VM's IP on the virtual network.
+
+### Container IP networking
+
+Each Apple Container VM gets an IP on the macOS virtual network (typically `192.168.64.x/24`). The IP is extracted from `container inspect` JSON output (`networks[0].ipv4Address`, CIDR format stripped). The host macOS can reach these IPs directly, so bridge connectivity works without port mapping.
+
+### Preview proxy
+
+Same as Docker — the VM IPs are not reachable from the user's browser. The API's built-in HTTP reverse proxy at `/preview/:projectId/:port/*` forwards requests to the VM IP. The bridge's `get_preview_url` MCP tool returns proxy URLs when running on a local provider. See `workdocs/ports-panel.md` for full details.
+
+### Limitations
+
+- **No fork**: Apple Containers doesn't support copy-on-write sandbox forking. `fork()` throws.
+- **No signed preview URLs**: `getSignedPreviewUrl` is not implemented.
+- **No SSH access**: `createSshAccess` is not implemented.
+- **macOS only**: Requires macOS 26+ on Apple silicon.
+
+### Requirements
+
+- `container` CLI installed (`brew install container`)
+- Container service running (`container system start`)
+- macOS 26 (Tahoe) or later on Apple silicon
+
+---
+
 ## Per-Project Provider Selection
 
 Each project stores its provider in the `provider` column (default: `'daytona'`). The provider is selected at project creation time via the UI.
@@ -130,14 +177,14 @@ Each project stores its provider in the `provider` column (default: `'daytona'`)
 ### Data model
 
 - **DB schema** (`apps/api/src/database/schema.ts`): `provider: text('provider').notNull().default('daytona')`
-- **Shared enum** (`libs/shared/src/lib/enums.ts`): `SandboxProvider { Daytona = 'daytona', Docker = 'docker' }`
+- **Shared enum** (`libs/shared/src/lib/enums.ts`): `SandboxProvider { Daytona = 'daytona', Docker = 'docker', AppleContainer = 'apple-container' }`
 - **Shared interface** (`libs/shared/src/lib/interfaces.ts`): `IProject.provider: string`
 - **DTO** (`libs/shared/src/lib/dto.ts`): `CreateProjectDto.provider?: string`
 - **Frontend** (`apps/dashboard/src/api/client.ts`): `Project.provider: string`
 
 ### Backend routing
 
-`ProjectsService` maintains a `Map<string, SandboxManager>` — one manager per provider type. At startup, it attempts to initialize both Daytona (if API keys are set) and Docker (if the daemon is available).
+`ProjectsService` maintains a `Map<string, SandboxManager>` — one manager per provider type. At startup, it attempts to initialize Daytona (if API keys are set), Docker (if the daemon is available), and Apple Container (if the `container` CLI and service are available).
 
 When performing sandbox operations, the service looks up the project's `provider` field and routes to the correct manager:
 
@@ -149,7 +196,7 @@ The `agent.ws.ts` gateway passes `project.provider` when calling `getSandboxMana
 
 ### UI
 
-The `CreateProjectDialog` presents a provider selector with two options: **Daytona (Cloud)** and **Docker (Local)**. The selection is sent with the `POST /api/projects` request.
+The `CreateProjectDialog` presents a provider selector with three options: **Daytona (Cloud)**, **Docker (Local)**, and **Apple Container (macOS VM)**. The selection is sent with the `POST /api/projects` request.
 
 ---
 
@@ -190,10 +237,12 @@ switch (type) {
 | `libs/orchestrator/src/lib/providers/index.ts` | Provider factory function |
 | `libs/orchestrator/src/lib/providers/daytona-provider.ts` | Daytona provider (wraps `@daytonaio/sdk`) |
 | `libs/orchestrator/src/lib/providers/docker-provider.ts` | Docker provider (uses `dockerode`) |
-| `libs/orchestrator/src/lib/providers/apple-container-provider.ts` | Apple Container provider (stub) |
+| `libs/orchestrator/src/lib/providers/apple-container-provider.ts` | Apple Container provider (uses `container` CLI) |
 | `libs/orchestrator/src/lib/sandbox-manager.ts` | Provider-agnostic sandbox lifecycle, bridge, terminals |
 | `libs/orchestrator/src/lib/types.ts` | `OrchestratorConfig` and bridge message types |
 | `apps/api/src/modules/projects/projects.service.ts` | Per-project provider routing via manager map |
+| `apps/api/src/modules/preview/preview.routes.ts` | HTTP reverse proxy for Docker/Apple Container sandbox ports |
+| `apps/api/src/modules/preview/port-forwarder.ts` | TCP port forwarding for local sandboxes (Electron use) |
 | `apps/api/src/database/schema.ts` | `provider` column on projects table |
 | `libs/shared/src/lib/enums.ts` | `SandboxProvider` enum |
 | `apps/dashboard/src/components/projects/create-project-dialog.tsx` | Provider selector UI |

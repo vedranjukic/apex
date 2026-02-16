@@ -7,7 +7,7 @@
       "build": {
         "executor": "nx:run-commands",
         "options": {
-          "command": "bun build src/main.ts --target=bun --outdir=dist --sourcemap",
+          "command": "bun build src/main.ts --target=bun --outdir=dist --sourcemap --external cpu-features --external better-sqlite3 --external ssh2",
           "cwd": "apps/api"
         }
       },

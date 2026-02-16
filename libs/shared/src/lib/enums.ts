@@ -1,6 +1,7 @@
 // ── Project ──────────────────────────────────────────
 export enum ProjectStatus {
   Creating = 'creating',
+  PullingImage = 'pulling_image',
   Starting = 'starting',
   Running = 'running',
   Stopped = 'stopped',
@@ -16,6 +17,7 @@ export enum AgentType {
 export enum SandboxProvider {
   Daytona = 'daytona',
   Docker = 'docker',
+  AppleContainer = 'apple-container',
 }
 
 // ── Task ─────────────────────────────────────────────

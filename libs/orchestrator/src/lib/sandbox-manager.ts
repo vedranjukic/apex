@@ -158,6 +158,7 @@ export class SandboxManager extends EventEmitter {
     gitRepo?: string,
     agentType?: string,
     projectId?: string,
+    onStatusChange?: (status: string) => void,
   ): Promise<string> {
     if (!this.provider) throw new Error("SandboxManager not initialized");
 
@@ -165,6 +166,7 @@ export class SandboxManager extends EventEmitter {
       snapshot: snapshot || this.config.snapshot,
       image: this.config.image,
       autoStopInterval: 0,
+      onStatusChange,
     });
 
     if (projectName) this.projectNames.set(sandbox.id, projectName);

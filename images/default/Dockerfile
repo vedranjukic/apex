@@ -77,8 +77,9 @@ RUN python3 -m pip install --no-cache-dir \
 # Create the Daytona user and configure sudo access
 RUN useradd -m daytona && echo "daytona ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/91-daytona
 
-# Install Go
-RUN curl -fsSL https://go.dev/dl/go1.26.1.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+# Install Go (arch-aware)
+ARG TARGETARCH=amd64
+RUN curl -fsSL "https://go.dev/dl/go1.26.1.linux-${TARGETARCH}.tar.gz" | tar -C /usr/local -xzf -
 ENV PATH="/usr/local/go/bin:${PATH}" \
     GOBIN=/usr/local/bin
 
@@ -99,8 +100,8 @@ RUN bash -c "source /usr/local/share/nvm/nvm.sh && nvm install 25 && nvm use 25 
 
 RUN npm install -g ts-node@10.9.2 typescript@5.9.3 typescript-language-server@5.1.3 bun@1.3.6 @anthropic-ai/claude-code@2.1.19 openclaw@2026.2.1 opencode-ai@1.1.35 oh-my-openagent
 
-# Install Daytona daemon
-COPY assets/daytona-daemon /usr/local/bin/daytona-daemon
+# Install Daytona daemon (arch-specific)
+COPY assets/daytona-daemon-${TARGETARCH} /usr/local/bin/daytona-daemon
 RUN chmod +x /usr/local/bin/daytona-daemon
 
 # Create directory for computer use plugin

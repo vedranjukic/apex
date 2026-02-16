@@ -1,5 +1,5 @@
 import { useState, FormEvent } from 'react';
-import { X, Cloud, Container } from 'lucide-react';
+import { X, Cloud, Container, Laptop } from 'lucide-react';
 import { useProjectsStore } from '../../stores/projects-store';
 import { cn } from '../../lib/cn';
 
@@ -12,6 +12,7 @@ interface Props {
 const PROVIDERS = [
   { value: 'daytona', label: 'Daytona', sublabel: 'Cloud sandbox', icon: Cloud },
   { value: 'docker', label: 'Docker', sublabel: 'Local container', icon: Container },
+  { value: 'apple-container', label: 'Apple Container', sublabel: 'macOS VM', icon: Laptop },
 ] as const;
 
 export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
@@ -70,7 +71,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
 
           <div>
             <label className="block text-sm font-medium mb-1">Sandbox Provider</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               {PROVIDERS.map((p) => {
                 const Icon = p.icon;
                 const selected = provider === p.value;

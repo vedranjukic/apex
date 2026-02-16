@@ -1,10 +1,10 @@
 # Ports Panel
 
-> Periodic port scanning inside Daytona sandboxes with forwarded-port preview URLs, displayed in a bottom-panel tab and status bar indicator.
+> Periodic port scanning inside sandboxes with preview URLs, displayed in a bottom-panel tab and status bar indicator.
 
 ## Overview
 
-The ports panel automatically discovers processes listening on TCP ports inside the sandbox, displays them in a dedicated tab in the bottom panel (alongside terminals), and lets users open preview URLs via the Daytona SDK. A status bar indicator shows the live port count.
+The ports panel automatically discovers processes listening on TCP ports inside the sandbox, displays them in a dedicated tab in the bottom panel (alongside terminals), and lets users open preview URLs. For Daytona (cloud) sandboxes, preview URLs come from the Daytona SDK. For Docker and Apple Container (local) sandboxes, the API's built-in preview proxy serves requests via `/preview/:projectId/:port/`. A status bar indicator shows the live port count.
 
 ## Architecture
 
@@ -20,19 +20,29 @@ Bridge (sandbox)
 Preview URL (lazy, on user click):
   Dashboard emits `port_preview_url { projectId, port }`
     → AgentGateway resolves sandbox
-      → SandboxManager.getPortPreviewUrl() calls Daytona SDK
+      → Daytona: SandboxManager.getPortPreviewUrl() calls SDK → public URL
+      → Docker/Apple Container: returns `/preview/<projectId>/<port>` proxy path
     ← emits `port_preview_url_result { port, url }` back to client
   → Dashboard opens URL in new browser tab
+
+Preview Proxy (Docker / Apple Container only):
+  Browser requests `/preview/<projectId>/<port>/...`
+    → Elysia onRequest handler (preview.routes.ts)
+      → Resolves project → sandbox IP via manager.getPortPreviewUrl()
+      → Proxies HTTP request to http://<container-ip>:<port>/...
+    ← Returns upstream response to browser
 ```
 
 ## File Map
 
 | File | Purpose |
 |------|---------|
-| `libs/orchestrator/src/lib/bridge-script.ts` | Port scanner: `parseNetstatOutput()`, 3-second `setInterval`, change detection via JSON comparison |
+| `libs/orchestrator/src/lib/bridge-script.ts` | Port scanner: `parseNetstatOutput()`, 3-second `setInterval`, change detection via JSON comparison. Also `get_preview_url` MCP endpoint that returns proxy URLs for local providers or Daytona signed URLs for cloud. |
 | `libs/orchestrator/src/lib/types.ts` | `PortInfo` and `BridgePortsUpdate` interfaces, included in `BridgeMessage` union |
-| `libs/orchestrator/src/lib/sandbox-manager.ts` | `ports_update` event in `SandboxManagerEvents`, handler in WS message block, `getPortPreviewUrl()` method |
-| `apps/api/src/modules/agent/agent.gateway.ts` | `ports_update` forwarding in `attachTerminalListeners()`, `@SubscribeMessage('port_preview_url')` handler |
+| `libs/orchestrator/src/lib/sandbox-manager.ts` | `ports_update` event in `SandboxManagerEvents`, handler in WS message block, `getPortPreviewUrl()` method, `registerProjectId()` for proxy URL generation |
+| `apps/api/src/modules/agent/agent.ws.ts` | `ports_update` forwarding, `port_preview_url` handler (returns proxy path for local providers), `forward_port`/`unforward_port` TCP forwarding |
+| `apps/api/src/modules/preview/preview.routes.ts` | HTTP reverse proxy: `/preview/:projectId/:port/*` → container IP |
+| `apps/api/src/modules/preview/port-forwarder.ts` | TCP port forwarding for Docker/Apple Container sandboxes (used by Electron) |
 | `apps/dashboard/src/stores/ports-store.ts` | Zustand store: `ports` array, `setPorts`, `reset` |
 | `apps/dashboard/src/hooks/use-ports-socket.ts` | Socket hook: listens for `ports_update`, exposes `requestPreviewUrl(port)` with promise-based one-shot listener |
 | `apps/dashboard/src/stores/terminal-store.ts` | Extended with `activeBottomTab: 'terminals' \| 'ports'` and `setActiveBottomTab` action |
@@ -65,7 +75,7 @@ The bridge runs `netstat -tlnp` every 3 seconds and sends updates only when the 
 - Localhost-only listeners (127.x.x.x, ::1)
 - `daytona-daemon` processes
 
-### Preview URL Request (frontend → orchestrator → Daytona SDK)
+### Preview URL Request (frontend → orchestrator → provider-specific)
 
 **Client → Server**: `port_preview_url`
 ```typescript
@@ -79,7 +89,33 @@ The bridge runs `netstat -tlnp` every 3 seconds and sends updates only when the 
 { port: number; error: string }
 ```
 
-The server calls `sandbox.getPreviewLink(port)` from the Daytona SDK, which returns a proxied public URL for the port.
+The URL returned depends on the project's provider:
+- **Daytona**: calls `sandbox.getPreviewLink(port)` which returns a Daytona platform proxied URL with a token
+- **Docker / Apple Container**: returns `/preview/<projectId>/<port>` — a local reverse proxy path handled by `preview.routes.ts`
+
+### TCP Port Forwarding (Docker / Apple Container only)
+
+For local sandboxes, the frontend can request a TCP tunnel via the `forward_port` event. The API binds a local port and pipes TCP connections to the container IP. This is primarily used by the Electron app where `localhost` URLs are needed.
+
+**Client → Server**: `forward_port`
+```typescript
+{ projectId: string; port: number }
+```
+
+**Server → Client**: `forward_port_result`
+```typescript
+{ port: number; localPort: number; url: string }
+// or on error:
+{ port: number; error: string }
+```
+
+### Bridge `get_preview_url` MCP Tool
+
+Agents inside the sandbox use the `get_preview_url` MCP tool to obtain preview URLs for ports they start. The bridge checks env vars to decide the URL strategy:
+
+1. If `APEX_PROXY_BASE_URL` and `APEX_PROJECT_ID` are set (Docker/Apple Container): returns `<proxyBaseUrl>/preview/<projectId>/<port>`
+2. If `DAYTONA_API_KEY` and `DAYTONA_SANDBOX_ID` are set (Daytona): calls the Daytona API for a signed preview URL
+3. Otherwise: returns an error
 
 ## UI Components
 

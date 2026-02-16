@@ -48,6 +48,15 @@ class ProjectsService {
     } catch (err) {
       console.log('[projects] Docker SandboxManager skipped – Docker not available:', (err as Error).message);
     }
+
+    try {
+      const mgr = new SandboxManager({ ...sharedConfig, provider: 'apple-container' });
+      await mgr.initialize();
+      this.sandboxManagers.set('apple-container', mgr);
+      console.log('[projects] SandboxManager initialized (provider=apple-container)');
+    } catch (err) {
+      console.log('[projects] Apple Container SandboxManager skipped – not available:', (err as Error).message);
+    }
   }
 
   async reinitSandboxManager() {
@@ -305,8 +314,14 @@ class ProjectsService {
       return;
     }
     const manager = this.sandboxManagers.get(provider)!;
+    const onStatusChange = async (status: string) => {
+      await db.update(projects).set({ status }).where(eq(projects.id, projectId));
+      projectsWsBroadcast('project_updated', await this.findById(projectId));
+    };
     try {
-      const sandboxId = await manager.createSandbox(snapshot, projectName, gitRepo || undefined, agentType, projectId);
+      const sandboxId = await manager.createSandbox(
+        snapshot, projectName, gitRepo || undefined, agentType, projectId, onStatusChange,
+      );
       await db.update(projects).set({ sandboxId, status: 'running', statusError: null }).where(eq(projects.id, projectId));
       projectsWsBroadcast('project_updated', await this.findById(projectId));
     } catch (err) {

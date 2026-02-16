@@ -488,7 +488,7 @@ async function handleMessage(client: WsClient, message: unknown) {
         const resolved = await tryResolveProject(payload.projectId);
         if (!resolved) { emitTo(client, 'port_preview_url_result', { port: payload.port, error: 'Sandbox not ready' }); break; }
         let { url, token } = await resolved.manager.getPortPreviewUrl(resolved.sandboxId, payload.port);
-        if (resolved.project.provider === 'docker') {
+        if (resolved.project.provider === 'docker' || resolved.project.provider === 'apple-container') {
           url = `/preview/${resolved.project.id}/${payload.port}`;
         }
         emitTo(client, 'port_preview_url_result', { port: payload.port, url, token });
@@ -507,7 +507,7 @@ async function handleMessage(client: WsClient, message: unknown) {
       case 'forward_port': {
         const project = await projectsService.findById(payload.projectId);
         if (!project.sandboxId) { emitTo(client, 'forward_port_result', { port: payload.port, error: 'Sandbox not ready' }); break; }
-        if (project.provider !== 'docker') { emitTo(client, 'forward_port_result', { port: payload.port, error: 'Port forwarding is only for Docker sandboxes' }); break; }
+        if (project.provider !== 'docker' && project.provider !== 'apple-container') { emitTo(client, 'forward_port_result', { port: payload.port, error: 'Port forwarding is only for local sandboxes' }); break; }
         const mgr = projectsService.getSandboxManager(project.provider);
         if (!mgr) { emitTo(client, 'forward_port_result', { port: payload.port, error: 'Manager not available' }); break; }
         try {

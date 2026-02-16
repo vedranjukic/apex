@@ -35,6 +35,8 @@ export interface CreateSandboxParams {
   labels?: Record<string, string>;
   /** Human-readable sandbox name. */
   name?: string;
+  /** Called by the provider to signal status changes (e.g. 'pulling_image'). */
+  onStatusChange?: (status: string) => void;
 }
 
 // ── File system sub-interface ────────────────────────

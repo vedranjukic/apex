@@ -3,7 +3,7 @@
 ## Stack
 - **API**: NestJS + TypeORM + SQLite (`apps/api`) on port 6000
 - **Dashboard**: React + Zustand + Tailwind (`apps/dashboard`) on port 4200 (Vite)
-- **Orchestrator lib**: `libs/orchestrator` – provider-agnostic sandbox management (Daytona cloud or Docker local) + WebSocket bridge to agent CLIs
+- **Orchestrator lib**: `libs/orchestrator` – provider-agnostic sandbox management (Daytona cloud, Docker local, or Apple Container macOS VM) + WebSocket bridge to agent CLIs
 - **Sandbox bridge**: Node.js script uploaded into each Daytona sandbox. Uses an adapter pattern to support three agent backends:
   - **Claude Code**: long-lived `claude --output-format stream-json --input-format stream-json` process with bidirectional stdin/stdout pipes
   - **OpenCode**: per-prompt `opencode run --format json` processes with `--session` for context continuity
@@ -11,7 +11,7 @@
   All adapters normalize output into the same event format (`system`/`assistant`/`result` with content blocks) so the gateway and dashboard stay agent-agnostic. Terminal PTY sessions are shared across all agent types.
 
 ## Data Model
-- **Project** → has a sandbox (provisioned async on creation). Each project stores a `provider` field (`daytona` or `docker`) that selects the sandbox backend. Optional `gitRepo` URL for cloning a repository. Stores `agentType` as the project-level default agent (claude_code, open_code, codex).
+- **Project** → has a sandbox (provisioned async on creation). Each project stores a `provider` field (`daytona`, `docker`, or `apple-container`) that selects the sandbox backend. Optional `gitRepo` URL for cloning a repository. Stores `agentType` as the project-level default agent (claude_code, open_code, codex).
 - **Thread** (DB table: `tasks`) → belongs to a project, has messages. Title auto-generated from first prompt. Stores `claudeSessionId` to maintain a persistent Claude Code session across follow-up prompts. Optional `agentType` overrides the project default, allowing different threads within one project to use different agents.
 - **Message** → belongs to a thread. Roles: `user`, `assistant`, `system`. Content is JSON array of blocks (text, tool_use, tool_result).
 
@@ -116,6 +116,36 @@ When the user sends a prompt in **Plan** mode, the response renders in a special
 6. After Build, the button grays out and shows "Built" (detected by checking for `BUILD_PROMPT_PREFIX` in user messages)
 7. After page refresh, plans reconstruct from message content: `AgentGroup` scans text blocks for headings, and the build-prompt message proves plan-mode history
 
+## Preview Proxy (Local Providers)
+
+Docker and Apple Container sandboxes have IPs reachable only from the API server host (Docker bridge network or macOS virtual network). The **preview proxy** makes sandbox ports accessible to the browser without port mapping.
+
+### HTTP Reverse Proxy
+
+`apps/api/src/modules/preview/preview.routes.ts` registers an Elysia `onRequest` handler matching `/preview/:projectId/:port/*`. It resolves the project's sandbox IP via `SandboxManager.getPortPreviewUrl()` and proxies the request to `http://<container-ip>:<port>/<subpath>`.
+
+The bridge's `get_preview_url` MCP tool (used by agents) returns proxy URLs when `APEX_PROXY_BASE_URL` and `APEX_PROJECT_ID` are set:
+
+```
+/preview/<projectId>/<port>/
+```
+
+For Daytona sandboxes, the MCP tool falls back to the Daytona API's signed preview URL (proxied through the Daytona platform).
+
+### TCP Port Forwarding
+
+`apps/api/src/modules/preview/port-forwarder.ts` provides on-demand TCP tunnels for Docker and Apple Container sandboxes. The `forward_port` socket event creates a local TCP server that pipes connections to the container IP. This is used by the Electron desktop app where `localhost` URLs are required. Forwards are cleaned up via `unforward_port` or when the sandbox is deleted.
+
+### Socket Events
+
+| Event | Direction | Description |
+|---|---|---|
+| `port_preview_url` | client→server | Request a preview URL for a port |
+| `port_preview_url_result` | server→client | Returns `{ port, url }` — proxy path for Docker/Apple Container, Daytona URL for cloud |
+| `forward_port` | client→server | Create a TCP forward (local providers only) |
+| `forward_port_result` | server→client | Returns `{ port, localPort, url }` |
+| `unforward_port` | client→server | Tear down a TCP forward |
+
 ## Terminal UI
 - Bottom resizable panel (VS Code style) with drag handle
 - Tab bar with terminal names + "+" to create, "x" to close
@@ -142,7 +172,7 @@ A single-line bottom bar displays project info and git controls (VS Code-style).
 - **Git branch button** — clickable, opens a `BranchPicker` dropdown with commands (create branch, create from, checkout detached) and a scrollable branch list sorted by last used. Branch name reads from `useGitStore.branch` (stable) → `info.gitBranch` → `project.gitRepo` fallback chain.
 - **Sync status button** — refresh icon + ↓N ↑M (commits behind/ahead). Clicking triggers pull/push as needed. Refresh icon spins during git operations.
 
-**Right side**: `SandboxStatus` indicator + "VS Code" browser IDE button.
+**Right side**: `SandboxStatus` indicator + "VS Code" browser IDE button (or "Open in IDE" for Electron).
 
 - **Branch resolution**: Primary source is `useGitStore.branch` (updated every 5s from `git_status` polling, never resets mid-session). Falls back to `useProjectInfoSocket` (polls `project_info` every 10s) and `project.gitRepo`.
 - **Branch management**: `listBranches`, `createBranch`, `checkout` actions in `useGitSocket` emit `git_branches` / `git_create_branch` / `git_checkout` events to the gateway.
@@ -198,6 +228,8 @@ apps/dashboard/src/components/editor/lang-map.ts          – File extension →
 apps/dashboard/src/components/terminal/terminal-panel.tsx  – Resizable bottom panel with tabs
 apps/dashboard/src/components/terminal/terminal-tab.tsx    – Single xterm.js terminal renderer
 apps/dashboard/src/components/terminal/terminal-tabs.tsx   – Tab bar (names, +, x)
+apps/api/src/modules/preview/preview.routes.ts             – HTTP reverse proxy for Docker/Apple Container sandbox ports
+apps/api/src/modules/preview/port-forwarder.ts             – TCP port forwarding for local sandboxes (Electron)
 apps/dashboard/src/hooks/use-file-tree-socket.ts          – Socket.io hook for file explorer (list, CRUD, read, write)
 apps/dashboard/src/components/layout/project-status-bar.tsx – Bottom status bar (project name, git branch picker, sync status)
 apps/dashboard/src/components/layout/branch-picker.tsx     – Branch picker dropdown (create/checkout/list branches)

@@ -18,6 +18,18 @@ const statusConfig: Record<
     dotColor: 'bg-yellow-400',
     animate: true,
   },
+  pulling_image: {
+    label: 'Pulling image…',
+    color: 'text-yellow-500',
+    dotColor: 'bg-yellow-400',
+    animate: true,
+  },
+  starting: {
+    label: 'Starting…',
+    color: 'text-yellow-500',
+    dotColor: 'bg-yellow-400',
+    animate: true,
+  },
   running: {
     label: 'Running',
     color: 'text-emerald-500',

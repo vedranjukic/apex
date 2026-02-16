@@ -298,7 +298,7 @@ export class DockerSandboxProvider implements SandboxProvider {
   async create(params: CreateSandboxParams): Promise<SandboxInstance> {
     const image = params.image || this.defaultImage;
 
-    await this.ensureImage(image);
+    await this.ensureImage(image, params.onStatusChange);
 
     const shortId = crypto.randomUUID().slice(0, 8);
     const containerName = params.name
@@ -355,7 +355,10 @@ export class DockerSandboxProvider implements SandboxProvider {
 
   // ── Private helpers ───────────────────────────────
 
-  private async ensureImage(image: string): Promise<void> {
+  private async ensureImage(
+    image: string,
+    onStatusChange?: (status: string) => void,
+  ): Promise<void> {
     try {
       await this.docker.getImage(image).inspect();
       return;
@@ -363,6 +366,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       // Image not found locally — pull it
     }
 
+    onStatusChange?.("pulling_image");
     console.log(`[docker-provider] Pulling image ${image}...`);
     const stream = await this.docker.pull(image);
     await new Promise<void>((resolve, reject) => {
