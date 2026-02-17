@@ -97,7 +97,12 @@ export function ProjectPage() {
         }
       })
       .finally(() => setLoading(false));
-  }, [projectId]);
+
+    // Reset terminal state when switching projects
+    return () => {
+      resetTerminals();
+    };
+  }, [projectId, resetTerminals]);
 
 
 
