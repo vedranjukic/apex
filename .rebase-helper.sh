@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 MAX_ITERATIONS=100
 i=0
@@ -25,20 +24,26 @@ while [ $i -lt $MAX_ITERATIONS ]; do
   
   git add -A
   
-  if GIT_EDITOR=true git rebase --continue 2>/tmp/rebase-output.txt; then
+  output=$(GIT_EDITOR=true git rebase --continue 2>&1)
+  ec=$?
+  
+  if [ $ec -eq 0 ]; then
     echo "=== REBASE COMPLETE after $i iterations ==="
-    cat /tmp/rebase-output.txt | grep "Rebasing" | tail -1
+    echo "$output" | grep "Rebasing" | tail -1
     break
   fi
   
-  output=$(cat /tmp/rebase-output.txt)
-  
   if echo "$output" | grep -q "CONFLICT"; then
     step=$(echo "$output" | grep "Rebasing" | tail -1)
-    echo "Step $i: $step (resolving...)"
+    echo "Step $i: $step"
   else
     echo "=== UNEXPECTED ERROR at step $i ==="
-    cat /tmp/rebase-output.txt
+    echo "$output"
     exit 1
   fi
 done
+
+if [ $i -ge $MAX_ITERATIONS ]; then
+  echo "=== GAVE UP after $MAX_ITERATIONS iterations ==="
+  exit 1
+fi
