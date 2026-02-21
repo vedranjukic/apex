@@ -42,6 +42,62 @@ const terminals = new Map();
 const pendingAskUser = new Map();
 const sessionEmittedParts = new Map();
 
+// ── File watcher (inotifywait-based for Linux) ──────
+const path = require("path");
+let inotifyProc = null;
+const changedDirs = new Set();
+let debounceTimer = null;
+
+function startFileWatcher() {
+  if (inotifyProc) return;
+  try {
+    inotifyProc = spawn("inotifywait", [
+      "-mr", "--format", "%w", "-e", "create,delete,move,modify",
+      "--exclude", "(/\\\\.git/|/node_modules/)",
+      PROJECT_DIR,
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+
+    inotifyProc.stdout.on("data", (chunk) => {
+      const lines = chunk.toString().split("\\n");
+      for (const line of lines) {
+        const dir = line.trim().replace(/\\/$/, "");
+        if (dir) changedDirs.add(dir);
+      }
+      if (changedDirs.size > 0) {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(flushFileChanges, 300);
+      }
+    });
+
+    inotifyProc.stderr.on("data", (chunk) => {
+      const msg = chunk.toString().trim();
+      if (msg && !msg.startsWith("Setting up watches") && !msg.startsWith("Watches established")) {
+        log("\\u{1F441}", "inotify stderr: " + msg);
+      }
+    });
+
+    inotifyProc.on("exit", (code) => {
+      log("\\u{1F441}", "inotifywait exited with code " + code);
+      inotifyProc = null;
+    });
+
+    log("\\u{1F441}", "File watcher (inotifywait) started for " + PROJECT_DIR);
+  } catch (e) {
+    log("\\u{274C}", "File watcher failed: " + e.message + " — is inotify-tools installed?");
+  }
+}
+
+function flushFileChanges() {
+  if (changedDirs.size === 0) return;
+  const dirs = Array.from(changedDirs);
+  changedDirs.clear();
+  if (state.ws && state.ws.readyState === 1) {
+    state.ws.send(JSON.stringify({ type: "file_changed", dirs: dirs }));
+  }
+}
+
+startFileWatcher();
+
 // ── Logging ──────────────────────────────────────────
 function log(emoji, msg) {
   console.log(new Date().toISOString() + " " + emoji + " " + msg);
