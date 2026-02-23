@@ -362,3 +362,10 @@ body {
   color: var(--color-primary);
   text-decoration: underline;
 }
+
+/* ── Prompt editor placeholder ─────────────────────── */
+.prompt-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
