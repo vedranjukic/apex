@@ -419,6 +419,22 @@ export class SandboxManager extends EventEmitter {
     );
   }
 
+  /** Send a user's answer to an AskUserQuestion back to the running Claude process. */
+  async sendUserAnswer(
+    sandboxId: string,
+    chatId: string,
+    toolUseId: string,
+    answer: string,
+  ): Promise<void> {
+    const session = await this.ensureConnected(sandboxId);
+    session.ws!.send(JSON.stringify({
+      type: 'claude_user_answer',
+      chatId,
+      toolUseId,
+      answer,
+    }));
+  }
+
   /** Get session info for a sandbox */
   getSession(sandboxId: string): SandboxSession | undefined {
     const s = this.sessions.get(sandboxId);
