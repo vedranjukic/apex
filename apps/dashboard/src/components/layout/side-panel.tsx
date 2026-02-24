@@ -4,6 +4,7 @@ import type { ActivityCategory } from './activity-bar';
 import { FileTree, type FileTreeActions } from '../explorer/file-tree';
 import { SearchPanel } from '../search/search-panel';
 import { SourceControlPanel } from '../source-control/source-control-panel';
+import { ForksPanel } from '../forks/forks-panel';
 import type { GitActions } from '../../hooks/use-git-socket';
 import { useThemeStore } from '../../stores/theme-store';
 import { themes, themeIds, type ThemeId } from '../../lib/themes';
@@ -43,6 +44,7 @@ function PanelHeader({ category, fileActions }: { category: ActivityCategory; fi
     explorer: 'Explorer',
     git: 'Source Control',
     search: 'Search',
+    forks: 'Forks',
     settings: 'Settings',
   };
 
@@ -82,6 +84,8 @@ function PanelContent({ category, projectId, fileActions, gitActions, searchFile
       return <SourceControlPanel gitActions={gitActions} projectId={projectId} socket={socket} sendPrompt={sendPrompt} onAnalyzeGitignore={onAnalyzeGitignore} />;
     case 'search':
       return <SearchPanel projectId={projectId} onSearch={searchFiles} readFile={readFile} />;
+    case 'forks':
+      return <ForksPanel projectId={projectId} />;
     case 'settings':
       return <SettingsPlaceholder projectId={projectId} />;
   }

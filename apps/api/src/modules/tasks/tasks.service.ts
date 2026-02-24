@@ -72,6 +72,10 @@ class ThreadsService {
     await db.update(tasks).set({ planData, updatedAt: new Date().toISOString() }).where(eq(tasks.id, threadId));
   }
 
+  async updateMode(chatId: string, mode: string): Promise<void> {
+    await this.chatRepo.update(chatId, { mode });
+  }
+
   async addMessage(
     threadId: string,
     data: {
