@@ -495,3 +495,11 @@ body {
   background: var(--color-surface-secondary);
   font-weight: 600;
 }
+
+/* Tighter spacing for inline markdown in chat messages */
+.inline-markdown > *:last-child {
+  margin-bottom: 0;
+}
+.inline-markdown a {
+  word-break: break-all;
+}
