@@ -1265,6 +1265,129 @@ export class SandboxManager extends EventEmitter {
     }
   }
 
+  private static readonly DEFAULT_EXCLUDE_DIRS = [
+    // Version control
+    '.git', '.svn', '.hg',
+    // JS / Node
+    'node_modules', '.npm', '.yarn', '.pnp', 'bower_components',
+    // Build output
+    'dist', 'build', 'out', '.output', '.next', '.nuxt', '.svelte-kit',
+    // Bundler / cache
+    '.cache', '.parcel-cache', '.turbo', '.vite',
+    // Python
+    '__pycache__', '.venv', 'venv', 'env', '.mypy_cache', '.pytest_cache', '.tox', '*.egg-info',
+    // Rust
+    'target',
+    // Go
+    'vendor',
+    // Java / JVM
+    '.gradle', '.m2', '.mvn',
+    // IDE / editor
+    '.idea', '.vscode', '.vs',
+    // OS
+    '.DS_Store',
+    // Misc
+    'coverage', '.nyc_output', '.terraform', 'tmp', '.tmp',
+  ];
+
+  /** Search file contents in the sandbox using grep */
+  async searchFiles(
+    sandboxId: string,
+    query: string,
+    searchDir: string,
+    options: {
+      matchCase?: boolean;
+      wholeWord?: boolean;
+      useRegex?: boolean;
+      includePattern?: string;
+      excludePattern?: string;
+    } = {},
+  ): Promise<SearchResult[]> {
+    if (!query) return [];
+
+    const sandbox = await this.ensureSandbox(sandboxId);
+
+    const flags = ['-rn', '--binary-files=without-match'];
+    if (!options.matchCase) flags.push('-i');
+    if (options.wholeWord) flags.push('-w');
+    if (options.useRegex) flags.push('-E');
+    else flags.push('-F');
+
+    if (options.includePattern) {
+      for (const pat of options.includePattern.split(',').map(p => p.trim()).filter(Boolean)) {
+        flags.push(`--include=${pat}`);
+      }
+    }
+
+    // Build the set of directories to exclude:
+    // start with defaults, add user excludes, but remove any that appear in includePattern
+    const includeParts = (options.includePattern ?? '')
+      .split(',').map(p => p.trim().replace(/\/$/, '')).filter(Boolean);
+    const includeSet = new Set(includeParts);
+
+    const excludeDirs = new Set<string>();
+    for (const dir of SandboxManager.DEFAULT_EXCLUDE_DIRS) {
+      if (!includeSet.has(dir)) excludeDirs.add(dir);
+    }
+    if (options.excludePattern) {
+      for (const pat of options.excludePattern.split(',').map(p => p.trim()).filter(Boolean)) {
+        if (pat.includes('.') && !pat.includes('/')) {
+          flags.push(`--exclude=${pat}`);
+        } else {
+          excludeDirs.add(pat);
+        }
+      }
+    }
+    for (const dir of excludeDirs) {
+      flags.push(`--exclude-dir=${dir}`);
+    }
+
+    const escapedQuery = query.replace(/'/g, "'\\''");
+    const cmd = `grep ${flags.join(' ')} -- '${escapedQuery}' . 2>/dev/null | head -2000; exit 0`;
+
+    try {
+      const result = await sandbox.process.executeCommand(cmd, searchDir);
+      const raw = (result.result ?? '').trim();
+      if (!raw) return [];
+
+      const resultsByFile = new Map<string, SearchMatch[]>();
+
+      for (const line of raw.split('\n')) {
+        const colonIdx1 = line.indexOf(':');
+        if (colonIdx1 <= 0) continue;
+        const colonIdx2 = line.indexOf(':', colonIdx1 + 1);
+        if (colonIdx2 <= 0) continue;
+
+        const relPath = line.substring(0, colonIdx1);
+        const lineNum = parseInt(line.substring(colonIdx1 + 1, colonIdx2), 10);
+        const content = line.substring(colonIdx2 + 1);
+
+        if (isNaN(lineNum)) continue;
+
+        const cleanPath = relPath.startsWith('./') ? relPath.substring(2) : relPath;
+        const absPath = searchDir.endsWith('/')
+          ? `${searchDir}${cleanPath}`
+          : `${searchDir}/${cleanPath}`;
+
+        if (!resultsByFile.has(absPath)) {
+          resultsByFile.set(absPath, []);
+        }
+        resultsByFile.get(absPath)!.push({
+          line: lineNum,
+          content: content.substring(0, 500),
+        });
+      }
+
+      const results: SearchResult[] = [];
+      for (const [filePath, matches] of resultsByFile) {
+        results.push({ filePath, matches });
+      }
+      return results;
+    } catch {
+      return [];
+    }
+  }
+
   // ── Layout persistence methods ────────────────────
 
   private static readonly LAYOUT_FILE = "/home/daytona/.apex-layout.json";
