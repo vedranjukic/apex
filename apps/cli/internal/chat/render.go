@@ -3,12 +3,19 @@ package chat
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/glamour"
 	"github.com/apex/cli/internal/types"
 	"github.com/fatih/color"
 )
+
+// ProgressOut is the writer for progress/status output (spinner, tool use,
+// cost summary, etc.). Defaults to stdout. Set to os.Stderr with --stream
+// so that stdout contains only the assistant's text result.
+var ProgressOut io.Writer = os.Stdout
 
 var (
 	dimStyle     = color.New(color.Faint)
@@ -34,9 +41,9 @@ func init() {
 
 // RenderUserPrompt prints the user's prompt.
 func RenderUserPrompt(prompt string) {
-	fmt.Println()
-	userStyle.Print("You: ")
-	fmt.Println(prompt)
+	fmt.Fprintln(ProgressOut)
+	userStyle.Fprint(ProgressOut, "You: ")
+	fmt.Fprintln(ProgressOut, prompt)
 }
 
 // RenderAssistantBlocks renders a list of content blocks from an assistant message.
@@ -54,13 +61,22 @@ func RenderAssistantBlocks(blocks []types.ContentBlock) {
 }
 
 // RenderStreamingText appends text to the current output without a newline.
+// Always writes to stdout — this is result content.
 func RenderStreamingText(text string) {
 	fmt.Print(text)
 }
 
+func progress(format string, a ...interface{}) {
+	fmt.Fprintf(ProgressOut, format, a...)
+}
+
+func progressln(a ...interface{}) {
+	fmt.Fprintln(ProgressOut, a...)
+}
+
 // RenderResult prints the completion summary line.
 func RenderResult(output types.ClaudeOutput) {
-	fmt.Println()
+	fmt.Fprintln(ProgressOut)
 
 	parts := []string{}
 
@@ -80,11 +96,11 @@ func RenderResult(output types.ClaudeOutput) {
 	}
 
 	if len(parts) > 0 {
-		costStyle.Println("  " + strings.Join(parts, " | "))
+		costStyle.Fprintln(ProgressOut, "  "+strings.Join(parts, " | "))
 	}
 
 	if output.IsError != nil && *output.IsError {
-		errorStyle.Println("  Session ended with error")
+		errorStyle.Fprintln(ProgressOut, "  Session ended with error")
 	}
 }
 
@@ -98,23 +114,23 @@ func RenderSystemInit(output types.ClaudeOutput) {
 		parts = append(parts, "CWD: "+output.CWD)
 	}
 	if len(parts) > 0 {
-		dimStyle.Println("  " + strings.Join(parts, " | "))
+		dimStyle.Fprintln(ProgressOut, "  "+strings.Join(parts, " | "))
 	}
 }
 
 // RenderError prints an error message.
 func RenderError(msg string) {
-	fmt.Println()
-	errorStyle.Println("Error: " + msg)
+	fmt.Fprintln(ProgressOut)
+	errorStyle.Fprintln(ProgressOut, "Error: "+msg)
 }
 
 // RenderStatus prints a status change.
 func RenderStatus(status string) {
 	switch status {
 	case "completed":
-		successStyle.Println("  Session completed")
+		successStyle.Fprintln(ProgressOut, "  Session completed")
 	case "error":
-		errorStyle.Println("  Session error")
+		errorStyle.Fprintln(ProgressOut, "  Session error")
 	}
 }
 
@@ -157,7 +173,7 @@ func renderToolUse(block types.ContentBlock) {
 	if name == "" {
 		name = "unknown_tool"
 	}
-	toolStyle.Printf("  ⚡ %s", name)
+	toolStyle.Fprintf(ProgressOut, "  ⚡ %s", name)
 
 	if block.Input != nil {
 		inputJSON, err := json.Marshal(block.Input)
@@ -166,10 +182,10 @@ func renderToolUse(block types.ContentBlock) {
 			if len(summary) > 120 {
 				summary = summary[:120] + "…"
 			}
-			dimStyle.Printf(" %s", summary)
+			dimStyle.Fprintf(ProgressOut, " %s", summary)
 		}
 	}
-	fmt.Println()
+	fmt.Fprintln(ProgressOut)
 }
 
 func renderToolResult(block types.ContentBlock) {
@@ -184,7 +200,7 @@ func renderToolResult(block types.ContentBlock) {
 		lines = append(lines, dimStyle.Sprintf("    … (%d more lines)", len(strings.Split(content, "\n"))-maxLines))
 	}
 	for _, line := range lines {
-		dimStyle.Printf("    %s\n", line)
+		dimStyle.Fprintf(ProgressOut, "    %s\n", line)
 	}
 }
 
@@ -208,6 +224,6 @@ func renderMetadataSummary(metadata map[string]interface{}) {
 	}
 
 	if len(parts) > 0 {
-		costStyle.Println("  " + strings.Join(parts, " | "))
+		costStyle.Fprintln(ProgressOut, "  "+strings.Join(parts, " | "))
 	}
 }

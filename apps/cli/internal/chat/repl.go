@@ -97,20 +97,76 @@ func (r *REPL) Run() error {
 	}
 }
 
+// RunSinglePrompt creates a new session, sends the prompt, waits for
+// completion, and exits. Used for non-interactive `-p` invocations.
+func (r *REPL) RunSinglePrompt(prompt string) error {
+	r.spin = spinner.New(spinner.CharSets[14], 100*time.Millisecond)
+	r.spin.Suffix = " Thinking..."
+	r.spin.Writer = ProgressOut
+
+	fmt.Fprintln(ProgressOut)
+	color.New(color.FgHiWhite, color.Bold).Fprintf(ProgressOut, "  Apex — %s\n", r.project.Name)
+	fmt.Fprintln(ProgressOut)
+
+	r.handleUserInput(prompt)
+	return nil
+}
+
+// RunCommand executes a single slash command or prompt against an existing
+// chat, then exits. Used for non-interactive `cmd` invocations.
+func (r *REPL) RunCommand(chatID, input string) error {
+	r.spin = spinner.New(spinner.CharSets[14], 100*time.Millisecond)
+	r.spin.Suffix = " Thinking..."
+	r.spin.Writer = ProgressOut
+
+	if chatID != "" {
+		r.openChatByPrefix(chatID)
+		if r.activeChatID == "" {
+			return fmt.Errorf("chat not found: %s", chatID)
+		}
+	}
+
+	if strings.HasPrefix(input, "/") {
+		r.handleSlashCommand(input)
+		return nil
+	}
+
+	r.handleUserInput(input)
+	return nil
+}
+
+// openChatByPrefix resolves a chat ID prefix and sets it as active.
+func (r *REPL) openChatByPrefix(idPrefix string) {
+	chats, err := r.database.ListChats(r.projectID)
+	if err != nil {
+		return
+	}
+	for _, c := range chats {
+		if strings.HasPrefix(c.ID, idPrefix) {
+			r.activeChatID = c.ID
+			r.isNewChat = false
+			if c.ClaudeSessionID != nil {
+				r.activeSessionID = *c.ClaudeSessionID
+			}
+			return
+		}
+	}
+}
+
 func (r *REPL) prompt() string {
 	return color.New(color.FgCyan, color.Bold).Sprint("> ")
 }
 
 func (r *REPL) printWelcome() {
 	title := color.New(color.FgHiWhite, color.Bold)
-	fmt.Println()
-	title.Printf("  Apex — %s", r.project.Name)
-	fmt.Println()
+	fmt.Fprintln(ProgressOut)
+	title.Fprintf(ProgressOut, "  Apex — %s", r.project.Name)
+	fmt.Fprintln(ProgressOut)
 	if r.project.Status != "running" {
-		color.New(color.FgYellow).Printf("  Sandbox status: %s\n", r.project.Status)
+		color.New(color.FgYellow).Fprintf(ProgressOut, "  Sandbox status: %s\n", r.project.Status)
 	}
-	dimStyle.Println("  Type your prompt, /help or :help for commands")
-	fmt.Println()
+	dimStyle.Fprintln(ProgressOut, "  Type your prompt, /help or :help for commands")
+	fmt.Fprintln(ProgressOut)
 }
 
 // ── CLI commands (: prefix) ─────────────────────────────
@@ -495,7 +551,7 @@ func (r *REPL) handleUserInput(input string) {
 	if r.isNewChat || chatID == "" {
 		chatRow, err := r.database.CreateChat(r.projectID, input)
 		if err != nil {
-			errorStyle.Printf("  Failed to create chat: %v\n", err)
+			errorStyle.Fprintf(ProgressOut, "  Failed to create chat: %v\n", err)
 			r.mu.Lock()
 			r.streaming = false
 			r.mu.Unlock()
@@ -508,12 +564,12 @@ func (r *REPL) handleUserInput(input string) {
 
 		contentJSON := db.MarshalJSON([]types.ContentBlock{{Type: "text", Text: input}})
 		if err := r.database.AddMessage(chatID, "user", contentJSON, nil); err != nil {
-			errorStyle.Printf("  Failed to save message: %v\n", err)
+			errorStyle.Fprintf(ProgressOut, "  Failed to save message: %v\n", err)
 		}
 	} else {
 		contentJSON := db.MarshalJSON([]types.ContentBlock{{Type: "text", Text: input}})
 		if err := r.database.AddMessage(chatID, "user", contentJSON, nil); err != nil {
-			errorStyle.Printf("  Failed to save message: %v\n", err)
+			errorStyle.Fprintf(ProgressOut, "  Failed to save message: %v\n", err)
 		}
 	}
 
@@ -523,7 +579,7 @@ func (r *REPL) handleUserInput(input string) {
 
 	if err := r.manager.SendPrompt(chatID, input, sessionID); err != nil {
 		r.spin.Stop()
-		errorStyle.Printf("  Failed to send prompt: %v\n", err)
+		errorStyle.Fprintf(ProgressOut, "  Failed to send prompt: %v\n", err)
 		r.mu.Lock()
 		r.streaming = false
 		r.mu.Unlock()
@@ -545,7 +601,7 @@ func (r *REPL) processBridgeMessages(chatID string) {
 				r.mu.Lock()
 				r.streaming = false
 				r.mu.Unlock()
-				errorStyle.Println("\n  Connection closed")
+				errorStyle.Fprintln(ProgressOut, "\n  Connection closed")
 				return
 			}
 
@@ -587,7 +643,7 @@ func (r *REPL) processBridgeMessages(chatID string) {
 			r.mu.Lock()
 			r.streaming = false
 			r.mu.Unlock()
-			errorStyle.Println("\n  Connection lost")
+			errorStyle.Fprintln(ProgressOut, "\n  Connection lost")
 			return
 		}
 	}
@@ -625,7 +681,7 @@ func (r *REPL) handleClaudeMessage(chatID string, raw json.RawMessage) {
 			})
 			r.database.AddMessage(chatID, "assistant", contentJSON, metaJSON)
 
-			fmt.Println()
+			fmt.Fprintln(ProgressOut)
 			RenderAssistantBlocks(output.Message.Content)
 		}
 
