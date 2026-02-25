@@ -668,6 +668,40 @@ export class SandboxManager extends EventEmitter {
     };
   }
 
+  /** Create an SSH access token for the sandbox (default 24 hours). */
+  async createSshAccess(
+    sandboxId: string,
+    expiresInMinutes = 1440,
+  ): Promise<{ sshUser: string; sshHost: string; sshPort: number; sandboxId: string; remotePath: string; expiresAt: string }> {
+    const sandbox = await this.ensureSandbox(sandboxId);
+    const access = await sandbox.createSshAccess(expiresInMinutes);
+    const { user, host, port } = this.parseSshCommand(access.sshCommand);
+    const remotePath = this.getProjectDir(sandboxId);
+    return {
+      sshUser: user,
+      sshHost: host,
+      sshPort: port,
+      sandboxId,
+      remotePath,
+      expiresAt: new Date(access.expiresAt).toISOString(),
+    };
+  }
+
+  /** Parse a Daytona sshCommand string into components.
+   *  Handles both `ssh USER@HOST -p PORT` and `ssh -p PORT USER@HOST`. */
+  private parseSshCommand(cmd: string): { user: string; host: string; port: number } {
+    const userHostMatch = cmd.match(/(\S+)@(\S+)/);
+    const portMatch = cmd.match(/-p\s+(\d+)/);
+    if (!userHostMatch) {
+      throw new Error(`Unable to parse SSH command: ${cmd}`);
+    }
+    return {
+      user: userHostMatch[1],
+      host: userHostMatch[2],
+      port: portMatch ? parseInt(portMatch[1], 10) : 22,
+    };
+  }
+
   async getPortPreviewUrl(
     sandboxId: string,
     port: number,
