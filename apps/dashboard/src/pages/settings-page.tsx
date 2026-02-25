@@ -121,6 +121,13 @@ const FIELDS: FieldDef[] = [
     help: "Enables cloning, pushing, and pulling private repositories.",
     helpExtra: GITHUB_TOKEN_HELP,
   },
+  {
+    key: 'DAYTONA_SNAPSHOT',
+    label: 'Daytona Snapshot',
+    type: 'text' as const,
+    placeholder: 'daytona-apex-1',
+    help: 'Sandbox snapshot image name. Leave empty to use the default.',
+  },
 ];
 
 type Status = "idle" | "saving" | "saved" | "error";
