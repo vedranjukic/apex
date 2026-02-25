@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/glamour"
-	"github.com/codeany/cli/internal/types"
+	"github.com/apex/cli/internal/types"
 	"github.com/fatih/color"
 )
 

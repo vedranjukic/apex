@@ -11,9 +11,9 @@ import (
 
 	"github.com/briandowns/spinner"
 	"github.com/chzyer/readline"
-	"github.com/codeany/cli/internal/db"
-	"github.com/codeany/cli/internal/sandbox"
-	"github.com/codeany/cli/internal/types"
+	"github.com/apex/cli/internal/db"
+	"github.com/apex/cli/internal/sandbox"
+	"github.com/apex/cli/internal/types"
 	"github.com/fatih/color"
 )
 
@@ -104,7 +104,7 @@ func (r *REPL) prompt() string {
 func (r *REPL) printWelcome() {
 	title := color.New(color.FgHiWhite, color.Bold)
 	fmt.Println()
-	title.Printf("  CodeAny — %s", r.project.Name)
+	title.Printf("  Apex — %s", r.project.Name)
 	fmt.Println()
 	if r.project.Status != "running" {
 		color.New(color.FgYellow).Printf("  Sandbox status: %s\n", r.project.Status)
@@ -691,7 +691,7 @@ func historyFile() string {
 	if err != nil {
 		return ""
 	}
-	dir := home + "/.codeany"
+	dir := home + "/.apex"
 	os.MkdirAll(dir, 0755)
 	return dir + "/history"
 }
