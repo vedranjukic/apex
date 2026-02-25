@@ -4,6 +4,7 @@ directories:
   output: ../../dist-electron
   buildResources: assets
 files:
+  - VERSION
   - apps/api/dist/**/*
   - apps/dashboard/dist/**/*
   - apps/desktop/dist/**/*
