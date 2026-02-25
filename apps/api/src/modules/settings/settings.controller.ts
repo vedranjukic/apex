@@ -28,17 +28,25 @@ export class SettingsController {
   @Get()
   async getAll(): Promise<Record<string, string>> {
     const settings = await this.settingsService.getAll();
-    const masked: Record<string, string> = {};
+    const result: Record<string, string> = {};
     for (const [key, value] of Object.entries(settings)) {
-      masked[key] = maskValue(key, value);
+      const isSecret = key.includes('API_KEY');
+      result[key] = isSecret ? maskValue(key, value) : value;
     }
-    return masked;
+    return result;
   }
 
   @Put()
   async update(@Body() body: Record<string, string>): Promise<{ ok: boolean }> {
-    await this.settingsService.setAll(body);
-    await this.projectsService.reinitSandboxManager();
+    const filtered: Record<string, string> = {};
+    for (const [key, value] of Object.entries(body)) {
+      if (value.includes('••••')) continue;
+      filtered[key] = value;
+    }
+    if (Object.keys(filtered).length > 0) {
+      await this.settingsService.setAll(filtered);
+      await this.projectsService.reinitSandboxManager();
+    }
     return { ok: true };
   }
 }
