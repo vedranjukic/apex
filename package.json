@@ -1,0 +1,143 @@
+{
+  "name": "@apex/source",
+  "version": "0.0.1",
+  "license": "SEE LICENSE IN LICENSE",
+  "scripts": {
+    "build": "npx nx run-many --target=build --all",
+    "build:api": "npx nx build @apex/api",
+    "build:dashboard": "npx nx build @apex/dashboard",
+    "serve": "npx nx run-many --target=serve --projects=@apex/api,@apex/dashboard --parallel=2",
+    "serve:api": "npx nx serve @apex/api",
+    "serve:dashboard": "npx nx serve @apex/dashboard",
+    "desktop:build": "npx nx build @apex/api && npx nx build @apex/dashboard && node scripts/build-desktop.js",
+    "desktop:dev": "npx nx build @apex/api && npx nx build @apex/dashboard && npx tsc --project apps/desktop/tsconfig.json && npx @electron/rebuild -f -w better-sqlite3 && electron apps/desktop/dist/main.js",
+    "desktop:package": "npm run desktop:build && electron-builder --mac && node scripts/restore-workspace-links.js",
+    "desktop:restore-links": "node scripts/restore-workspace-links.js",
+    "postdesktop": "npm rebuild better-sqlite3 && node scripts/restore-workspace-links.js"
+  },
+  "private": true,
+  "dependencies": {
+    "@apex/orchestrator": "*",
+    "@apex/shared": "*",
+    "@daytonaio/sdk": "0.131.0-alpha.2",
+    "@headless-tree/core": "^1.6.3",
+    "@headless-tree/react": "^1.6.3",
+    "@monaco-editor/react": "^4.7.0",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.3",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@nestjs/platform-socket.io": "^11.1.13",
+    "@nestjs/serve-static": "^5.0.4",
+    "@nestjs/typeorm": "^11.0.0",
+    "@nestjs/websockets": "^11.1.13",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "axios": "^1.6.0",
+    "better-sqlite3": "^12.6.2",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.3",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.564.0",
+    "node-pty": "^1.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.13.0",
+    "reflect-metadata": "^0.1.13",
+    "remark-gfm": "^4.0.1",
+    "rxjs": "^7.8.0",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
+    "tailwind-merge": "^3.4.1",
+    "typeorm": "^0.3.28",
+    "uuid": "^13.0.0",
+    "ws": "^8.19.0",
+    "zustand": "^5.0.11"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
+    "@nestjs/schematics": "^11.0.0",
+    "@nestjs/testing": "^11.0.0",
+    "@nx/devkit": "22.5.1",
+    "@nx/js": "22.5.1",
+    "@nx/nest": "22.5.1",
+    "@nx/node": "22.5.1",
+    "@nx/playwright": "22.5.1",
+    "@nx/react": "22.5.1",
+    "@nx/vite": "22.5.1",
+    "@nx/web": "22.5.1",
+    "@nx/webpack": "22.5.1",
+    "@playwright/test": "^1.36.0",
+    "@swc-node/register": "~1.11.1",
+    "@swc/core": "~1.15.5",
+    "@swc/helpers": "~0.5.18",
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "20.19.9",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^4.2.0",
+    "@vitest/ui": "^4.0.0",
+    "electron": "^40.6.1",
+    "electron-builder": "^26.8.1",
+    "jiti": "2.4.2",
+    "jsdom": "~22.1.0",
+    "nx": "22.5.1",
+    "tailwindcss": "^4.1.18",
+    "tslib": "^2.3.0",
+    "typescript": "~5.9.2",
+    "vite": "^7.0.0",
+    "vitest": "^4.0.0",
+    "webpack-cli": "^5.1.4"
+  },
+  "workspaces": [
+    "apps/*",
+    "libs/*"
+  ],
+  "build": {
+    "appId": "com.apex.desktop",
+    "productName": "Apex",
+    "directories": {
+      "output": "dist-electron",
+      "buildResources": "assets/logo"
+    },
+    "files": [
+      "package.json",
+      "apps/api/dist",
+      "apps/dashboard/dist",
+      "apps/desktop/dist",
+      "libs/orchestrator/dist",
+      "libs/orchestrator/package.json",
+      "libs/shared/dist",
+      "libs/shared/package.json",
+      "node_modules/**",
+      "!node_modules/node-pty",
+      "!node_modules/@nx",
+      "!node_modules/@swc",
+      "!node_modules/typescript",
+      "!node_modules/@playwright",
+      "!node_modules/vite",
+      "!node_modules/@vitejs",
+      "!node_modules/tailwindcss"
+    ],
+    "asar": false,
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/logo/icon.png"
+    },
+    "extraMetadata": {
+      "main": "apps/desktop/dist/main.js"
+    }
+  }
+}

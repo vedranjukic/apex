@@ -1,0 +1,279 @@
+@import "tailwindcss";
+
+/* ── Custom design tokens (Tailwind v4 @theme) ────── */
+@theme {
+  --color-sidebar: var(--t-sidebar);
+  --color-sidebar-hover: var(--t-sidebar-hover);
+  --color-sidebar-active: var(--t-sidebar-active);
+  --color-activity-bar: var(--t-activity-bar);
+  --color-activity-bar-hover: var(--t-activity-bar-hover);
+  --color-surface: var(--t-surface);
+  --color-surface-secondary: var(--t-surface-secondary);
+  --color-surface-chat: var(--t-surface-chat);
+  --color-border: var(--t-border);
+  --color-primary: var(--t-primary);
+  --color-primary-hover: var(--t-primary-hover);
+  --color-accent: var(--t-accent);
+  --color-danger: var(--t-danger);
+  --color-text-primary: var(--t-text-primary);
+  --color-text-secondary: var(--t-text-secondary);
+  --color-text-muted: var(--t-text-muted);
+  --color-panel-text: var(--t-panel-text);
+  --color-panel-text-muted: var(--t-panel-text-muted);
+  --color-panel-icon: var(--t-panel-icon);
+  --color-panel-icon-active: var(--t-panel-icon-active);
+  --color-panel-border: var(--t-panel-border);
+  --color-scrollbar-thumb: var(--t-scrollbar-thumb);
+  --color-scrollbar-thumb-hover: var(--t-scrollbar-thumb-hover);
+  --color-terminal-bg: var(--t-terminal-bg);
+}
+
+/* ── Midnight Blue (default) ─────────────────────── */
+:root,
+[data-theme="midnight-blue"] {
+  --t-sidebar: #111827;
+  --t-sidebar-hover: #1f2937;
+  --t-sidebar-active: #374151;
+  --t-activity-bar: #0a0f1a;
+  --t-activity-bar-hover: #151c2c;
+  --t-surface: #1e2132;
+  --t-surface-secondary: #171a2a;
+  --t-surface-chat: #242840;
+  --t-border: #2e3348;
+  --t-primary: #6366f1;
+  --t-primary-hover: #4f46e5;
+  --t-accent: #10b981;
+  --t-danger: #ef4444;
+  --t-text-primary: #e2e4eb;
+  --t-text-secondary: #9ca3b4;
+  --t-text-muted: #6b7280;
+  --t-panel-text: #e2e4eb;
+  --t-panel-text-muted: #9ca3b4;
+  --t-panel-icon: #9ca3b4;
+  --t-panel-icon-active: #e2e4eb;
+  --t-panel-border: rgba(255,255,255,0.05);
+  --t-scrollbar-thumb: #374151;
+  --t-scrollbar-thumb-hover: #4b5563;
+  --t-terminal-bg: #1a1b26;
+  color-scheme: dark;
+}
+
+/* ── Dark (VS Code Dark+) ───────────────────────── */
+[data-theme="dark"] {
+  --t-sidebar: #252526;
+  --t-sidebar-hover: #2a2d2e;
+  --t-sidebar-active: #37373d;
+  --t-activity-bar: #333333;
+  --t-activity-bar-hover: #3c3c3c;
+  --t-surface: #1e1e1e;
+  --t-surface-secondary: #252526;
+  --t-surface-chat: #2d2d2d;
+  --t-border: #3c3c3c;
+  --t-primary: #6366f1;
+  --t-primary-hover: #4f46e5;
+  --t-accent: #10b981;
+  --t-danger: #ef4444;
+  --t-text-primary: #cccccc;
+  --t-text-secondary: #9d9d9d;
+  --t-text-muted: #6a6a6a;
+  --t-panel-text: #cccccc;
+  --t-panel-text-muted: #858585;
+  --t-panel-icon: #858585;
+  --t-panel-icon-active: #cccccc;
+  --t-panel-border: rgba(255,255,255,0.06);
+  --t-scrollbar-thumb: #424242;
+  --t-scrollbar-thumb-hover: #4f4f4f;
+  --t-terminal-bg: #1e1e1e;
+  color-scheme: dark;
+}
+
+/* ── Light (VS Code Light+) ─────────────────────── */
+[data-theme="light"] {
+  --t-sidebar: #f3f3f3;
+  --t-sidebar-hover: #e8e8e8;
+  --t-sidebar-active: #d6d6d6;
+  --t-activity-bar: #2c2c2c;
+  --t-activity-bar-hover: #383838;
+  --t-surface: #ffffff;
+  --t-surface-secondary: #f5f5f5;
+  --t-surface-chat: #f0f0f0;
+  --t-border: #e0e0e0;
+  --t-primary: #6366f1;
+  --t-primary-hover: #4f46e5;
+  --t-accent: #10b981;
+  --t-danger: #ef4444;
+  --t-text-primary: #1f1f1f;
+  --t-text-secondary: #616161;
+  --t-text-muted: #999999;
+  --t-panel-text: #333333;
+  --t-panel-text-muted: #717171;
+  --t-panel-icon: #717171;
+  --t-panel-icon-active: #333333;
+  --t-panel-border: #e0e0e0;
+  --t-scrollbar-thumb: #c1c1c1;
+  --t-scrollbar-thumb-hover: #a0a0a0;
+  --t-terminal-bg: #ffffff;
+  color-scheme: light;
+}
+
+/* ── Base styles ────────────────────────────────────── */
+body {
+  @apply bg-surface text-text-primary antialiased;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* ── Scrollbar ──────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--t-scrollbar-thumb);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--t-scrollbar-thumb-hover);
+}
+
+/* ── Prompt editor placeholder ─────────────────────── */
+.prompt-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+
+/* ── Plan markdown styling ─────────────────────────── */
+.plan-markdown {
+  color: var(--color-text-primary);
+  line-height: 1.7;
+  font-size: 0.875rem;
+}
+.plan-markdown h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-top: 0;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+}
+.plan-markdown h2 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin-top: 1.75rem;
+  margin-bottom: 0.75rem;
+  color: var(--color-text-primary);
+}
+.plan-markdown h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  color: var(--color-text-primary);
+}
+.plan-markdown h4 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+  color: var(--color-text-secondary);
+}
+.plan-markdown p {
+  margin-bottom: 0.75rem;
+}
+.plan-markdown ul,
+.plan-markdown ol {
+  margin-bottom: 0.75rem;
+  padding-left: 1.5rem;
+}
+.plan-markdown ul {
+  list-style-type: disc;
+}
+.plan-markdown ol {
+  list-style-type: decimal;
+}
+.plan-markdown li {
+  margin-bottom: 0.25rem;
+}
+.plan-markdown li > ul,
+.plan-markdown li > ol {
+  margin-top: 0.25rem;
+  margin-bottom: 0;
+}
+.plan-markdown strong {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.plan-markdown em {
+  font-style: italic;
+  color: var(--color-text-secondary);
+}
+.plan-markdown a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.plan-markdown a:hover {
+  color: var(--color-primary-hover);
+}
+.plan-markdown code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  background: var(--color-surface-secondary);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  color: var(--color-accent);
+}
+.plan-markdown pre {
+  margin-bottom: 1rem;
+  border-radius: 8px;
+  background: var(--color-surface-secondary);
+  border: 1px solid var(--color-border);
+  overflow-x: auto;
+}
+.plan-markdown pre code {
+  display: block;
+  padding: 1rem;
+  background: none;
+  color: var(--color-text-primary);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+.plan-markdown blockquote {
+  border-left: 3px solid var(--color-primary);
+  padding-left: 1rem;
+  margin-bottom: 0.75rem;
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+.plan-markdown hr {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 1.5rem 0;
+}
+.plan-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+  font-size: 0.8rem;
+}
+.plan-markdown th,
+.plan-markdown td {
+  border: 1px solid var(--color-border);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+.plan-markdown th {
+  background: var(--color-surface-secondary);
+  font-weight: 600;
+}
+
+/* Tighter spacing for inline markdown in chat messages */
+.inline-markdown > *:last-child {
+  margin-bottom: 0;
+}
+.inline-markdown a {
+  word-break: break-all;
+}

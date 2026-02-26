@@ -1,0 +1,41 @@
+{
+  "name": "TypeScript + PostgreSQL",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/codeany",
+
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/go:1": {}
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-azuretools.vscode-docker",
+        "mtxr.sqltools",
+        "mtxr.sqltools-driver-pg"
+      ],
+      "settings": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.formatOnSave": true,
+        "typescript.tsdk": "node_modules/typescript/lib"
+      }
+    }
+  },
+
+  "forwardPorts": [5432, 5050],
+
+  "portsAttributes": {
+    "5432": { "label": "PostgreSQL" },
+    "5050": { "label": "pgAdmin" }
+  },
+
+  "remoteEnv": {
+    "DATABASE_URL": "postgresql://postgres:postgres@postgres:5432/devdb"
+  },
+
+  "postCreateCommand": "npm install || true"
+}

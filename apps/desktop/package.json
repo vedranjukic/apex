@@ -1,0 +1,9 @@
+{
+  "name": "@apex/desktop",
+  "productName": "Apex",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Apex Desktop — Claude Code in Daytona sandboxes",
+  "author": "Apex",
+  "main": "dist/main.js"
+}
