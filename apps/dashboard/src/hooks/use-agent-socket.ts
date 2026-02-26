@@ -49,7 +49,8 @@ export function useAgentSocket(projectId: string | undefined) {
             stopReason: msg.message.stop_reason,
           },
           createdAt: new Date().toISOString(),
-        });
+          _receivedAt: Date.now(),
+        } as any);
 
         const planStore = usePlanStore.getState();
         const activePlan = planStore.getPlanByChatId(data.chatId);
@@ -159,9 +160,17 @@ export function useAgentSocket(projectId: string | undefined) {
   const sendUserAnswer = useCallback(
     (chatId: string, toolUseId: string, answer: string) => {
       console.log('[ws] emit user_answer', chatId, toolUseId);
+      addMessage({
+        id: crypto.randomUUID(),
+        taskId: chatId,
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: toolUseId, content: answer }],
+        metadata: null,
+        createdAt: new Date().toISOString(),
+      });
       socketRef.current?.emit('user_answer', { chatId, toolUseId, answer });
     },
-    [],
+    [addMessage],
   );
 
   return { sendPrompt, executeChat, sendUserAnswer, socket: socketRef };

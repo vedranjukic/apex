@@ -68,24 +68,24 @@ export function PlanBlock({ filename, content, isComplete, wasBuilt, chatStatus 
             ? <><ChevronDown className="w-3 h-3" /> Collapse</>
             : <><ChevronRight className="w-3 h-3" /> Expand plan</>}
         </button>
-        {isComplete && (
-          <button
-            onClick={handleBuild}
-            disabled={buildDisabled}
-            className={[
-              'flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all',
-              buildDisabled
-                ? 'bg-surface text-text-muted border border-border cursor-not-allowed opacity-60'
-                : 'bg-primary text-white hover:bg-primary-hover cursor-pointer',
-            ].join(' ')}
-          >
-            {isRunning
-              ? <><Loader2 className="w-3 h-3 animate-spin" /> Building…</>
-              : wasBuilt
-                ? <><Check className="w-3 h-3" /> Built</>
-                : <><Play className="w-3 h-3" /> Build</>}
-          </button>
-        )}
+        <button
+          onClick={handleBuild}
+          disabled={buildDisabled}
+          className={[
+            'flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all',
+            buildDisabled
+              ? 'bg-surface text-text-muted border border-border cursor-not-allowed opacity-60'
+              : 'bg-primary text-white hover:bg-primary-hover cursor-pointer',
+          ].join(' ')}
+        >
+          {isRunning
+            ? <><Loader2 className="w-3 h-3 animate-spin" /> Building…</>
+            : wasBuilt
+              ? <><Check className="w-3 h-3" /> Built</>
+              : isComplete
+                ? <><Play className="w-3 h-3" /> Build</>
+                : <><Loader2 className="w-3 h-3 animate-spin" /> Preparing…</>}
+        </button>
       </div>
     </div>
   );

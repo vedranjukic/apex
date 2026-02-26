@@ -3,7 +3,7 @@ import { User, Bot, Terminal, Info, Clock } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Message, ContentBlock } from '../../api/client';
-import { ToolUseBlock } from './tool-use-block';
+import { ToolUseBlock, BashGroupBlock, TransientSearchBlock, type BashItem } from './tool-use-block';
 import { PlanBlock } from './plan-block';
 import { MarkdownBlock } from './markdown-block';
 import { usePlanStore, extractTitle, generateFilename, BUILD_PROMPT_PREFIX } from '../../stores/plan-store';
@@ -104,8 +104,16 @@ function isBuildPrompt(message: Message): boolean {
   return !!firstText && firstText.startsWith(BUILD_PROMPT_PREFIX);
 }
 
+/** User message that is only tool_result (AskUserQuestion answer) - shown in the question block */
+function isToolResultOnly(message: Message): boolean {
+  if (message.role !== 'user' || message.content.length !== 1) return false;
+  const b = message.content[0] as { type?: string };
+  return b.type === 'tool_result';
+}
+
 function UserBubble({ message }: { message: Message }) {
   if (isBuildPrompt(message)) return null;
+  if (isToolResultOnly(message)) return null;
 
   return (
     <div className="flex gap-3 px-4 py-3 bg-surface-chat">
@@ -131,7 +139,119 @@ function UserBubble({ message }: { message: Message }) {
 
 // ── Agent group (consecutive assistant messages merged) ──
 
-const DEDUP_TOOLS = new Set(['TodoWrite', 'AskUserQuestion']);
+const DEDUP_TOOLS = new Set(['TodoWrite', 'AskUserQuestion', 'mcp__terminal-server__ask_user']);
+
+/** Tools that are transient: only shown live, hide after 5s, not rendered on refresh */
+const TRANSIENT_TOOLS = new Set(['Bash', 'Glob', 'Grep']);
+
+type RenderItem =
+  | { kind: 'block'; block: ContentBlock }
+  | { kind: 'bash_group'; items: BashItem[]; receivedAt: number; hideAfter: number | null }
+  | { kind: 'transient_tool'; block: ContentBlock; receivedAt: number };
+
+/** Message with optional client-side received timestamp (socket only) */
+type MessageWithReceived = Message & { _receivedAt?: number };
+
+/**
+ * Get createdAt (ms) of the first message after the one(s) containing the given block ids.
+ * Returns null if Bash is in the last message (no next message yet).
+ */
+function getNextMessageTime(
+  messages: Message[],
+  blockIds: Set<string>,
+): number | null {
+  let lastIdx = -1;
+  for (let i = 0; i < messages.length; i++) {
+    for (const b of messages[i].content) {
+      const block = b as { id?: string; tool_use_id?: string };
+      const id = block.id ?? block.tool_use_id;
+      if (id && blockIds.has(id)) lastIdx = i;
+    }
+  }
+  if (lastIdx < 0 || lastIdx >= messages.length - 1) return null;
+  const next = messages[lastIdx + 1];
+  return new Date(next.createdAt).getTime();
+}
+
+/**
+ * Group consecutive Bash tool_use + tool_result pairs into a single panel.
+ * Only includes Bash from messages that have _receivedAt (live from socket).
+ * Excludes Bash from historical messages (API load / refresh).
+ * hideAfter: when to hide (next message time + 5s), or null if no next message yet.
+ */
+function groupConsecutiveBash(
+  blocks: ContentBlock[],
+  blockReceivedAt: Map<string, number>,
+  messages: Message[],
+): RenderItem[] {
+  const resultByToolUseId = new Map<string, ContentBlock>();
+  const toolUseById = new Map<string, ContentBlock>();
+  for (const b of blocks) {
+    if (b.type === 'tool_result' && b.tool_use_id) {
+      resultByToolUseId.set(b.tool_use_id, b);
+    }
+    if (b.type === 'tool_use' && b.id) {
+      toolUseById.set(b.id, b);
+    }
+  }
+
+  const BASH_HIDE_DELAY_MS = 5_000;
+  const out: RenderItem[] = [];
+  let bashGroup: BashItem[] = [];
+  let bashGroupReceivedAt = 0;
+  const consumedResultIds = new Set<string>();
+
+  const flushBashGroup = () => {
+    if (bashGroup.length > 0) {
+      const ids = new Set(bashGroup.flatMap((i) => [i.toolUse.id].filter(Boolean) as string[]));
+      const nextTime = getNextMessageTime(messages, ids);
+      const hideAfter = nextTime ? nextTime + BASH_HIDE_DELAY_MS : null;
+      out.push({ kind: 'bash_group', items: bashGroup, receivedAt: bashGroupReceivedAt, hideAfter });
+      bashGroup = [];
+      bashGroupReceivedAt = 0;
+    }
+  };
+
+  for (const block of blocks) {
+    if (block.type === 'tool_use' && TRANSIENT_TOOLS.has(block.name ?? '') && block.id) {
+      if (block.name !== 'Bash') {
+        const receivedAt = blockReceivedAt.get(block.id);
+        if (receivedAt == null) continue;
+        out.push({ kind: 'transient_tool', block, receivedAt });
+        continue;
+      }
+    }
+    if (block.type === 'tool_use' && block.name === 'Bash' && block.id) {
+      const receivedAt = blockReceivedAt.get(block.id);
+      if (receivedAt == null) continue; // Skip Bash from historical messages
+      const toolResult = resultByToolUseId.get(block.id);
+      if (toolResult) consumedResultIds.add(block.id);
+      bashGroup.push({ toolUse: block, toolResult });
+      bashGroupReceivedAt = Math.max(bashGroupReceivedAt, receivedAt);
+      continue;
+    }
+    if (block.type === 'tool_result' && block.tool_use_id) {
+      if (consumedResultIds.has(block.tool_use_id)) continue;
+      const toolUse = toolUseById.get(block.tool_use_id);
+      if (toolUse?.name === 'Bash') {
+        const receivedAt = blockReceivedAt.get(block.tool_use_id);
+        if (receivedAt == null) continue; // Skip Bash result from historical
+        consumedResultIds.add(block.tool_use_id);
+        const ids = new Set([block.tool_use_id]);
+        const nextTime = getNextMessageTime(messages, ids);
+        const hideAfter = nextTime ? nextTime + BASH_HIDE_DELAY_MS : null;
+        out.push({ kind: 'bash_group', items: [{ toolUse, toolResult: block }], receivedAt, hideAfter });
+        continue;
+      }
+    }
+
+    flushBashGroup();
+    out.push({ kind: 'block', block });
+  }
+
+  flushBashGroup();
+  return out;
+}
 
 /**
  * Deduplicate tool_use blocks whose tool emits repeated full-state updates
@@ -170,6 +290,62 @@ interface DerivedPlan {
 }
 
 const HEADING_RE = /^#{1,3}\s+/m;
+/** Plan-like section headers (match at line start; content may follow on same line) */
+const PLAN_INDICATORS = [
+  /(?:^|\n)\s*Plan\s*:/i,
+  /(?:^|\n)\s*Implementation\s+plan\s*:?/i,
+  /(?:^|\n)\s*File\s+structure\s*:?/i,
+  /(?:^|\n)\s*Structure\s*:?/i,
+  /(?:^|\n)\s*Stack\s*:?/i,
+  /(?:^|\n)\s*Styling\s*:?/i,
+  /(?:^|\n)\s*Storage\s*:?/i,
+  /(?:^|\n)\s*Features\s*:?/i,
+  /(?:^|\n)\s*Details\s*:?/i,
+  /(?:^|\n)\s*Here'?s\s+the\s+plan\b/i,
+  /(?:^|\n)\s*Here'?s\s+my\s+plan\b/i,
+  /(?:^|\n)\s*Here'?s\s+what\s+I'?ll\s+build\b/i,
+  /\bShall\s+I\s+proceed\b/i,
+];
+const MIN_PLAN_LENGTH = 150;
+
+/** True if text has plan-like structure (heading or plan section) */
+function hasPlanStructure(text: string): boolean {
+  if (HEADING_RE.test(text)) return true;
+  if (PLAN_INDICATORS.some((r) => r.test(text))) return true;
+  // Fallback: "Stack:" or "Features:" or "Shall I proceed" with substantial content
+  if (text.length >= MIN_PLAN_LENGTH) {
+    if (/\b(?:Stack|Features|Plan)\s*:\s*/i.test(text)) return true;
+    if (/\bShall\s+I\s+proceed\b/i.test(text)) return true;
+  }
+  return false;
+}
+
+/** Find start of plan body: first heading or plan section */
+function findPlanStart(text: string): number {
+  let idx = text.search(HEADING_RE);
+  for (const r of PLAN_INDICATORS) {
+    const m = text.match(r);
+    if (m && m.index !== undefined) {
+      const i = m.index;
+      idx = idx >= 0 ? Math.min(idx, i) : i;
+    }
+  }
+  if (idx < 0) {
+    const fallbacks = [
+      /\bHere'?s\s+what\s+I'?ll\s+build\b/i,
+      /\bPlan\s*:\s*/i,
+      /\bStack\s*:\s*/i,
+      /\bFeatures\s*:\s*/i,
+    ];
+    for (const r of fallbacks) {
+      const m = text.match(r);
+      if (m && m.index !== undefined) {
+        idx = idx >= 0 ? Math.min(idx, m.index) : m.index;
+      }
+    }
+  }
+  return idx;
+}
 
 function AgentGroup({
   messages,
@@ -198,9 +374,55 @@ function AgentGroup({
   const groupTime = new Date(messages[0]?.createdAt ?? 0).getTime();
   const isAfterBuild = wasBuilt && groupTime >= buildPromptTime;
 
-  const allBlocks = useMemo(() => {
-    const raw = messages.flatMap((m) => m.content);
-    return deduplicateBlocks(raw);
+  const { allBlocks, blockReceivedAt } = useMemo(() => {
+    const blockReceivedAt = new Map<string, number>();
+    const raw: ContentBlock[] = [];
+    const toolUseById = new Map<string, ContentBlock>();
+    const excludedBashIds = new Set<string>();
+
+    const excludedTransientIds = new Set<string>();
+    for (const m of messages) {
+      const receivedAt = (m as MessageWithReceived)._receivedAt;
+      for (const b of m.content) {
+        if (b.type === 'tool_use' && b.id && TRANSIENT_TOOLS.has(b.name ?? '')) {
+          toolUseById.set(b.id, b);
+          if (receivedAt == null) excludedTransientIds.add(b.id);
+          else blockReceivedAt.set(b.id, receivedAt);
+        } else if (b.type === 'tool_use' && b.id) {
+          toolUseById.set(b.id, b);
+        }
+      }
+    }
+    for (const m of messages) {
+      const receivedAt = (m as MessageWithReceived)._receivedAt;
+      for (const b of m.content) {
+        if (b.type === 'tool_result' && b.tool_use_id) {
+          const toolUse = toolUseById.get(b.tool_use_id);
+          if (toolUse && TRANSIENT_TOOLS.has(toolUse.name ?? '')) {
+            if (excludedTransientIds.has(b.tool_use_id)) continue;
+            if (receivedAt != null) blockReceivedAt.set(b.tool_use_id, Math.max(blockReceivedAt.get(b.tool_use_id) ?? 0, receivedAt));
+          }
+        }
+      }
+    }
+
+    for (const m of messages) {
+      const receivedAt = (m as MessageWithReceived)._receivedAt;
+      for (const b of m.content) {
+        if (b.type === 'tool_use' && TRANSIENT_TOOLS.has(b.name ?? '') && excludedTransientIds.has(b.id!)) continue;
+        if (b.type === 'tool_result' && b.tool_use_id) {
+          const toolUse = toolUseById.get(b.tool_use_id);
+          if (toolUse?.name === 'Bash' && excludedTransientIds.has(b.tool_use_id)) continue;
+          if (toolUse && (toolUse.name === 'Glob' || toolUse.name === 'Grep')) continue; // Never render Glob/Grep results
+        }
+        raw.push(b);
+      }
+    }
+
+    return {
+      allBlocks: deduplicateBlocks(raw),
+      blockReceivedAt,
+    };
   }, [messages]);
 
   const derivedPlan = useMemo((): DerivedPlan | null => {
@@ -214,15 +436,20 @@ function AgentGroup({
       };
     }
 
-    if (!isPlanModeChat) return null;
-
     const textBlocks = allBlocks
       .filter((b): b is ContentBlock & { text: string } => b.type === 'text' && !!b.text);
     if (textBlocks.length === 0) return null;
 
     const fullText = textBlocks.map((b) => b.text).join('\n\n');
-    const headingIdx = fullText.search(HEADING_RE);
-    const planBody = headingIdx >= 0 ? fullText.slice(headingIdx) : fullText;
+    if (fullText.length < MIN_PLAN_LENGTH) return null;
+
+    // Plan mode: require plan structure. Agent mode: also detect "Plan:" section
+    const hasStructure = hasPlanStructure(fullText);
+    if (!hasStructure && !isPlanModeChat) return null;
+    if (!hasStructure) return null;
+
+    const planStartIdx = findPlanStart(fullText);
+    const planBody = planStartIdx >= 0 ? fullText.slice(planStartIdx) : fullText;
     const title = extractTitle(planBody);
     const ts = new Date(messages[0].createdAt)
       .toISOString().replace(/[-:]/g, '').slice(0, 13);
@@ -233,7 +460,7 @@ function AgentGroup({
       content: planBody,
       isComplete: true,
     };
-  }, [storePlan, allBlocks, messages]);
+  }, [storePlan, allBlocks, messages, isPlanModeChat]);
 
   const planBlocks = useMemo(() => {
     if (!derivedPlan) return null;
@@ -242,8 +469,8 @@ function AgentGroup({
       | { kind: 'block'; block: ContentBlock }
       | { kind: 'plan' };
 
-    const hasHeading = allBlocks.some(
-      (b) => b.type === 'text' && b.text && HEADING_RE.test(b.text),
+    const hasPlanMarker = allBlocks.some(
+      (b) => b.type === 'text' && b.text && hasPlanStructure(b.text),
     );
 
     const items: PlanItem[] = [];
@@ -256,13 +483,13 @@ function AgentGroup({
       }
       if (planInserted) continue;
 
-      if (hasHeading) {
+      if (hasPlanMarker) {
         const text = block.text ?? '';
-        const headingIdx = text.search(HEADING_RE);
-        if (headingIdx < 0) {
+        const planStartIdx = findPlanStart(text);
+        if (planStartIdx < 0) {
           items.push({ kind: 'block', block });
         } else {
-          const preamble = text.slice(0, headingIdx).trim();
+          const preamble = text.slice(0, planStartIdx).trim();
           if (preamble) {
             items.push({ kind: 'block', block: { ...block, text: preamble } });
           }
@@ -310,9 +537,13 @@ function AgentGroup({
                 : <ContentBlockView key={i} block={item.block} />
             )
           ) : (
-            allBlocks.map((block, i) => (
-              <ContentBlockView key={i} block={block} />
-            ))
+            groupConsecutiveBash(allBlocks, blockReceivedAt, messages).map((item, i) =>
+              item.kind === 'bash_group'
+                ? <BashGroupBlock key={i} items={item.items} hideAfter={item.hideAfter} />
+                : item.kind === 'transient_tool'
+                  ? <TransientSearchBlock key={i} block={item.block} receivedAt={item.receivedAt} />
+                  : <ContentBlockView key={i} block={item.block} />
+            )
           )}
         </div>
       </div>

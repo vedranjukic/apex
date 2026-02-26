@@ -28,6 +28,9 @@ const claudeProcesses = new Map(); // chatId -> child_process
 // ── Terminal management ──────────────────────────────
 const terminals = new Map(); // terminalId -> { pty, scrollback[], name, cols, rows }
 
+// ── Pending ask-user requests (MCP tool waiting for user answer) ──
+const pendingAskUser = new Map(); // questionId -> { resolve(answer) }
+
 function createTerminalPty(terminalId, name, cols, rows, cwd, command) {
   if (terminals.has(terminalId)) {
     return { error: "Terminal already exists: " + terminalId };
@@ -332,6 +335,65 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // ── Ask User (MCP tool → bridge → orchestrator → frontend → answer back) ──
+  if (req.method === "POST" && req.url === "/internal/ask-user") {
+    let body = "";
+    req.on("data", (c) => body += c);
+    req.on("end", () => {
+      try {
+        const payload = JSON.parse(body);
+        const questionId = "ask-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+        // Resolve chatId from active Claude processes
+        const activeChatId = payload.chatId !== "default" ? payload.chatId
+          : (claudeProcesses.size > 0 ? Array.from(claudeProcesses.keys()).pop() : "default");
+
+        // Forward question to orchestrator via WebSocket
+        if (state.ws && state.ws.readyState === 1) {
+          state.ws.send(JSON.stringify({
+            type: "claude_message",
+            chatId: activeChatId,
+            data: {
+              type: "assistant",
+              message: {
+                role: "assistant",
+                content: [{
+                  type: "tool_use",
+                  id: questionId,
+                  name: "AskUserQuestion",
+                  input: payload.input || {},
+                }],
+                stop_reason: "tool_use",
+              },
+            },
+          }));
+        }
+
+        // Wait for user answer (max 5 min)
+        const ASK_TIMEOUT_MS = 300000;
+        const entry = { resolve: null, timer: null };
+        entry.timer = setTimeout(() => {
+          pendingAskUser.delete(questionId);
+          res.writeHead(408, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "User did not respond in time" }));
+        }, ASK_TIMEOUT_MS);
+
+        pendingAskUser.set(questionId, {
+          resolve: (answer) => {
+            clearTimeout(entry.timer);
+            pendingAskUser.delete(questionId);
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ answer }));
+          },
+        });
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
   // Default health check
   res.writeHead(200);
   res.end("bridge-ok");
@@ -369,16 +431,16 @@ wss.on("connection", (ws) => {
           "--input-format", "stream-json",
         ];
 
+        claudeArgs.push("--dangerously-skip-permissions");
+
         if (agentMode === "plan") {
-          claudeArgs.push("--dangerously-skip-permissions");
-          claudeArgs.push("--disallowedTools", "Edit", "Write", "MultiEdit");
+          claudeArgs.push("--disallowedTools", "AskUserQuestion,Edit,Write,MultiEdit");
           claudeArgs.push("--append-system-prompt", "You are in Plan mode. Analyze the request and produce a detailed plan. You CANNOT create or edit files. Only use read-only tools to explore the codebase, then present your plan as text.");
         } else if (agentMode === "ask") {
-          claudeArgs.push("--dangerously-skip-permissions");
-          claudeArgs.push("--disallowedTools", "Edit", "Write", "MultiEdit", "Bash");
+          claudeArgs.push("--disallowedTools", "AskUserQuestion,Edit,Write,MultiEdit,Bash");
           claudeArgs.push("--append-system-prompt", "You are in Ask mode. Only answer the question using read-only tools. You CANNOT create, edit, or write files, or run shell commands.");
         } else {
-          claudeArgs.push("--dangerously-skip-permissions");
+          claudeArgs.push("--disallowedTools", "AskUserQuestion");
         }
 
         if (model) {
@@ -449,18 +511,24 @@ wss.on("connection", (ws) => {
         }
 
       } else if (msg.type === "claude_user_answer") {
-        const proc = claudeProcesses.get(msg.chatId);
-        if (proc && proc.pid > 0) {
-          log("\\u{1F916}", "Piping user answer for chat " + msg.chatId + " tool=" + msg.toolUseId);
-          pipeToStdin(proc, {
-            type: "user",
-            message: {
-              role: "user",
-              content: [{ type: "tool_result", tool_use_id: msg.toolUseId, content: msg.answer }],
-            },
-          });
+        const pending = pendingAskUser.get(msg.toolUseId);
+        if (pending) {
+          log("\\u{1F916}", "Resolving MCP ask-user for tool=" + msg.toolUseId);
+          pending.resolve(msg.answer);
         } else {
-          ws.send(JSON.stringify({ type: "claude_error", chatId: msg.chatId, error: "No active Claude process to receive answer" }));
+          const proc = claudeProcesses.get(msg.chatId);
+          if (proc && proc.pid > 0) {
+            log("\\u{1F916}", "Piping user answer for chat " + msg.chatId + " tool=" + msg.toolUseId);
+            pipeToStdin(proc, {
+              type: "user",
+              message: {
+                role: "user",
+                content: [{ type: "tool_result", tool_use_id: msg.toolUseId, content: msg.answer }],
+              },
+            });
+          } else {
+            ws.send(JSON.stringify({ type: "claude_error", chatId: msg.chatId, error: "No active Claude process to receive answer" }));
+          }
         }
 
       } else if (msg.type === "claude_input") {

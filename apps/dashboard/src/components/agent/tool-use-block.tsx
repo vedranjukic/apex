@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   TerminalSquare,
   FileText,
@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import type { ContentBlock } from '../../api/client';
 import { useChatActions } from './chat-actions-context';
+import { useChatsStore } from '../../stores/tasks-store';
 
 type Input = Record<string, unknown>;
 
@@ -64,6 +65,7 @@ export function ToolUseBlock({ block }: { block: ContentBlock }) {
     case 'TodoWrite':
       return <TodoWriteBlock input={input} />;
     case 'AskUserQuestion':
+    case 'mcp__terminal-server__ask_user':
       return <AskQuestionBlock input={input} toolUseId={block.id} />;
     case 'WebSearch':
       return <WebSearchBlock input={input} />;
@@ -76,6 +78,60 @@ export function ToolUseBlock({ block }: { block: ContentBlock }) {
 }
 
 // ── Bash ─────────────────────────────────────────────
+
+export interface BashItem {
+  toolUse: ContentBlock;
+  toolResult?: ContentBlock;
+}
+
+export function BashGroupBlock({ items, hideAfter }: { items: BashItem[]; hideAfter?: number | null }) {
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    if (hideAfter == null) return; // Stay visible until next message arrives
+    const remaining = Math.max(0, hideAfter - Date.now());
+    const timer = setTimeout(() => setVisible(false), remaining);
+    return () => clearTimeout(timer);
+  }, [hideAfter]);
+
+  if (items.length === 0 || !visible) return null;
+
+  return (
+    <div className="rounded-lg overflow-hidden border border-border">
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs">
+        <TerminalSquare className="w-3.5 h-3.5" />
+        <span className="font-medium">Bash</span>
+        {items.length > 1 && (
+          <span className="text-text-muted">{items.length} commands</span>
+        )}
+      </div>
+      <div className="divide-y divide-border">
+        {items.map((item, i) => {
+          const input = (item.toolUse.input ?? {}) as Input;
+          const command = String(input.command ?? '');
+          const description = input.description ? String(input.description) : null;
+          const output = item.toolResult?.content ?? '';
+
+          return (
+            <div key={i} className="bg-surface-secondary">
+              <pre className="px-3 py-2 text-text-primary text-xs font-mono overflow-x-auto leading-relaxed">
+                <code>{command}</code>
+              </pre>
+              {description && (
+                <p className="px-3 pb-1 text-[10px] text-text-muted italic">{description}</p>
+              )}
+              {output && (
+                <pre className="px-3 py-2 border-t border-border text-text-muted text-xs font-mono overflow-x-auto leading-relaxed max-h-40 overflow-y-auto bg-surface">
+                  <code>{output}</code>
+                </pre>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function BashBlock({ input }: { input: Input }) {
   const command = String(input.command ?? '');
@@ -335,16 +391,60 @@ interface QuestionDef {
   multiSelect?: boolean;
 }
 
+/** Parse persisted answer into selections map. Answer format: "header: pick1, pick2\n..." */
+function parseAnswerToSelections(
+  answerText: string,
+  questions: QuestionDef[],
+): Map<number, Set<number>> {
+  const result = new Map<number, Set<number>>();
+  const lines = answerText.split('\n').filter(Boolean);
+  for (let qi = 0; qi < questions.length; qi++) {
+    const q = questions[qi];
+    const header = q.header || q.question || `Question ${qi + 1}`;
+    const line = lines.find((l) => l.startsWith(header + ':'));
+    if (!line) continue;
+    const picksStr = line.slice(header.length + 1).trim().split(',').map((s) => s.trim());
+    const picks = new Set(picksStr);
+    const selected = new Set<number>();
+    for (let oi = 0; oi < (q.options?.length ?? 0); oi++) {
+      const label = q.options?.[oi]?.label ?? '';
+      if (picks.has(label)) selected.add(oi);
+    }
+    if (selected.size > 0) result.set(qi, selected);
+  }
+  return result;
+}
+
 function AskQuestionBlock({ input, toolUseId }: { input: Input; toolUseId?: string }) {
   const { sendUserAnswer, sendPrompt } = useChatActions();
+  const messages = useChatsStore((s) => s.messages);
   const questions = Array.isArray(input.questions)
     ? (input.questions as QuestionDef[])
     : [];
 
-  const [selections, setSelections] = useState<Map<number, Set<number>>>(
-    () => new Map(),
-  );
+  const persistedAnswer = useMemo(() => {
+    if (!toolUseId) return null;
+    for (const m of messages) {
+      if (m.role !== 'user') continue;
+      const block = m.content.find(
+        (b: any) => b.type === 'tool_result' && b.tool_use_id === toolUseId,
+      );
+      if (block?.content) return block.content as string;
+    }
+    return null;
+  }, [messages, toolUseId]);
+
+  const [selections, setSelections] = useState<Map<number, Set<number>>>(() => new Map());
   const [submitted, setSubmitted] = useState(false);
+  const restoredRef = useRef(false);
+
+  useEffect(() => {
+    if (persistedAnswer && questions.length > 0 && !restoredRef.current) {
+      restoredRef.current = true;
+      setSelections(parseAnswerToSelections(persistedAnswer, questions));
+      setSubmitted(true);
+    }
+  }, [persistedAnswer, questions]);
 
   const toggleOption = useCallback(
     (qi: number, oi: number, multiSelect: boolean) => {
@@ -511,6 +611,8 @@ function WebSearchBlock({ input }: { input: Input }) {
 
 // ── Glob / Grep ──────────────────────────────────────
 
+const TRANSIENT_TOOL_VISIBLE_MS = 5_000;
+
 function SearchBlock({ name, input }: { name: string; input: Input }) {
   const pattern = String(input.pattern ?? input.glob_pattern ?? '');
   const path = input.path ? String(input.path) : null;
@@ -530,6 +632,27 @@ function SearchBlock({ name, input }: { name: string; input: Input }) {
       )}
     </div>
   );
+}
+
+export function TransientSearchBlock({
+  block,
+  receivedAt,
+}: {
+  block: ContentBlock;
+  receivedAt: number;
+}) {
+  const [visible, setVisible] = useState(true);
+  const input = (block.input ?? {}) as Input;
+
+  useEffect(() => {
+    const elapsed = Date.now() - receivedAt;
+    const remaining = Math.max(0, TRANSIENT_TOOL_VISIBLE_MS - elapsed);
+    const timer = setTimeout(() => setVisible(false), remaining);
+    return () => clearTimeout(timer);
+  }, [receivedAt]);
+
+  if (!visible) return null;
+  return <SearchBlock name={block.name ?? 'Tool'} input={input} />;
 }
 
 // ── Generic fallback ─────────────────────────────────
