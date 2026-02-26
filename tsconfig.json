@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compileOnSave": false,
+  "files": [],
+  "references": [
+    {
+      "path": "./apps/api-e2e"
+    },
+    {
+      "path": "./apps/api"
+    },
+    {
+      "path": "./apps/dashboard-e2e"
+    },
+    {
+      "path": "./apps/dashboard"
+    },
+    {
+      "path": "./libs/shared"
+    },
+    {
+      "path": "./libs/orchestrator"
+    }
+  ]
+}
