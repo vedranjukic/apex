@@ -1,5 +1,5 @@
 import { useEffect, useRef, useMemo, useCallback } from 'react';
-import { MessageSquare, Loader2, Sparkles, AlertCircle } from 'lucide-react';
+import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo } from 'lucide-react';
 import { useChatsStore } from '../../stores/tasks-store';
 import { groupMessages, MessageGroupView } from './message-bubble';
 import { PromptInput, type PromptInputHandle } from './prompt-input';
@@ -62,6 +62,24 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
   const activeChat = chats.find((c) => c.id === activeChatId);
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
+
+  const currentTask = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.role !== 'assistant') continue;
+      for (let j = msg.content.length - 1; j >= 0; j--) {
+        const block = msg.content[j];
+        if (block.type === 'tool_use' && block.name === 'TodoWrite' && block.input) {
+          const todos = (block.input as Record<string, unknown>).todos;
+          if (Array.isArray(todos)) {
+            const ip = todos.find((t: any) => t.status === 'in_progress');
+            if (ip && (ip as any).content) return (ip as any).content as string;
+          }
+        }
+      }
+    }
+    return null;
+  }, [messages]);
 
   useEffect(() => {
     restoredScrollRef.current = false;
@@ -156,17 +174,25 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
   return (
     <ChatActionsContext.Provider value={{ fillPrompt, sendPrompt, sendSilentPrompt, sendUserAnswer }}>
       <div className="flex-1 flex flex-col overflow-hidden bg-surface-chat">
-        {/* Chat header */}
-        <div className="px-4 py-3 border-b border-border bg-surface-chat flex items-center gap-3">
-          <h2 className="font-semibold text-sm truncate">{activeChat.title}</h2>
-          <span className={`text-xs capitalize ${isError ? 'text-red-400' : 'text-text-muted'}`}>
-            {activeChat.status === 'running' ? 'working' : activeChat.status}
-          </span>
+        {/* Chat header: title + current task inline, progress icon when running */}
+        <div className="px-4 py-3 border-b border-border bg-surface-chat flex items-center gap-2 min-h-[44px] min-w-0">
+          <h2 className="font-semibold text-sm truncate min-w-0">
+            {activeChat.title}
+            {currentTask && (
+              <>
+                <span className="font-normal text-text-muted mx-1.5">·</span>
+                <span className="inline-flex items-center gap-1 font-normal text-text-secondary">
+                  <ListTodo className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+                  {currentTask}
+                </span>
+              </>
+            )}
+          </h2>
           {isRunning && (
-            <Loader2 className="w-3.5 h-3.5 animate-spin text-yellow-500" />
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-yellow-500 shrink-0" />
           )}
           {isError && (
-            <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+            <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
           )}
         </div>
 

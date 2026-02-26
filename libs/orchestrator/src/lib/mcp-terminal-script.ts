@@ -178,6 +178,56 @@ const TOOLS = [
       required: ["port"],
     },
   },
+  {
+    name: "ask_user",
+    description: "Ask the user a question and wait for their answer. Use this when you need clarification, want to present options, or need the user to make a decision before proceeding. The tool will BLOCK until the user responds, so only use it when you genuinely need input. Each question can have multiple options for the user to choose from.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        questions: {
+          type: "array",
+          description: "Array of questions to present to the user",
+          items: {
+            type: "object",
+            properties: {
+              header: {
+                type: "string",
+                description: "Short header/title for the question",
+              },
+              question: {
+                type: "string",
+                description: "The question text to display",
+              },
+              options: {
+                type: "array",
+                description: "Available options for the user to choose from",
+                items: {
+                  type: "object",
+                  properties: {
+                    label: {
+                      type: "string",
+                      description: "Short label for the option",
+                    },
+                    description: {
+                      type: "string",
+                      description: "Longer description of what this option means",
+                    },
+                  },
+                  required: ["label"],
+                },
+              },
+              multiSelect: {
+                type: "boolean",
+                description: "If true, user can select multiple options. Default false.",
+              },
+            },
+            required: ["question"],
+          },
+        },
+      },
+      required: ["questions"],
+    },
+  },
 ];
 
 // ── Handle MCP requests ──────────────────────────────
@@ -300,6 +350,22 @@ async function handleRequest(request) {
         } else {
           sendResponse(id, {
             content: [{ type: "text", text: result.url }],
+          });
+        }
+
+      } else if (toolName === "ask_user") {
+        const result = await bridgeRequest("/internal/ask-user", {
+          chatId: "default",
+          input: { questions: args.questions },
+        });
+        if (result.error) {
+          sendResponse(id, {
+            content: [{ type: "text", text: "User did not respond: " + result.error }],
+            isError: true,
+          });
+        } else {
+          sendResponse(id, {
+            content: [{ type: "text", text: result.answer || "(no response)" }],
           });
         }
 

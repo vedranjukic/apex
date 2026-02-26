@@ -27,14 +27,52 @@ interface PlanState {
 
 const MIN_PLAN_LENGTH = 150;
 
+/** Plan-like section headers (match at line start; content may follow on same line) */
+const PLAN_INDICATORS = [
+  /(?:^|\n)\s*Plan\s*:/i,
+  /(?:^|\n)\s*Implementation\s+plan\s*:?/i,
+  /(?:^|\n)\s*File\s+structure\s*:?/i,
+  /(?:^|\n)\s*Structure\s*:?/i,
+  /(?:^|\n)\s*Stack\s*:?/i,
+  /(?:^|\n)\s*Styling\s*:?/i,
+  /(?:^|\n)\s*Storage\s*:?/i,
+  /(?:^|\n)\s*Features\s*:?/i,
+  /(?:^|\n)\s*Details\s*:?/i,
+  /(?:^|\n)\s*Here'?s\s+the\s+plan\b/i,
+  /(?:^|\n)\s*Here'?s\s+my\s+plan\b/i,
+  /(?:^|\n)\s*Here'?s\s+what\s+I'?ll\s+build\b/i,
+  /\bShall\s+I\s+proceed\b/i,
+];
+
 /**
  * Strip conversational preamble — return only the portion from the first
- * markdown heading onward.  If no heading is found but the text is long
- * enough, return the full text (some plans use plain-text formatting).
+ * markdown heading or plan section onward.  If neither is found but the
+ * text is long enough, return the full text (some plans use plain-text).
  * Returns null only when the content is too short to be a real plan.
  */
 function extractPlanBody(raw: string): string | null {
-  const idx = raw.search(/^#{1,3}\s+/m);
+  const headingIdx = raw.search(/^#{1,3}\s+/m);
+  let idx = headingIdx >= 0 ? headingIdx : -1;
+  for (const r of PLAN_INDICATORS) {
+    const m = raw.match(r);
+    if (m && m.index !== undefined) {
+      idx = idx >= 0 ? Math.min(idx, m.index) : m.index;
+    }
+  }
+  if (idx < 0) {
+    const fallbacks = [
+      /\bHere'?s\s+what\s+I'?ll\s+build\b/i,
+      /\bPlan\s*:\s*/i,
+      /\bStack\s*:\s*/i,
+      /\bFeatures\s*:\s*/i,
+    ];
+    for (const r of fallbacks) {
+      const m = raw.match(r);
+      if (m && m.index !== undefined) {
+        idx = idx >= 0 ? Math.min(idx, m.index) : m.index;
+      }
+    }
+  }
   if (idx >= 0) return raw.slice(idx);
   if (raw.length >= MIN_PLAN_LENGTH) return raw;
   return null;

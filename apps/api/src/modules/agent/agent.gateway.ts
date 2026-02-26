@@ -189,6 +189,19 @@ export class AgentGateway
       }
 
       await manager.sendUserAnswer(project.sandboxId, chatId, toolUseId, answer);
+
+      // Persist the user's answer so it survives refresh
+      await this.chatsService.addMessage(chatId, {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: toolUseId,
+            content: answer,
+          },
+        ],
+        metadata: null,
+      });
     } catch (err) {
       this.logger.error(`user_answer error: ${err}`);
       client.emit('agent_error', { chatId, error: String(err) });
