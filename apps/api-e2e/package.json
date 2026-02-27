@@ -13,7 +13,7 @@
           "{projectRoot}/test-output/jest/coverage"
         ],
         "options": {
-          "jestConfig": "apps/api-e2e/jest.config.cts",
+          "jestConfig": "apps/api-e2e/jest.config.js",
           "passWithNoTests": true
         },
         "dependsOn": [

@@ -208,6 +208,38 @@ export class AgentGateway
     }
   }
 
+  /** Test-only: deliberately crash the agent for e2e testing. Only when APEX_E2E_TEST=1 */
+  @SubscribeMessage('crash_agent')
+  async handleCrashAgent(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { chatId: string },
+  ) {
+    if (process.env.APEX_E2E_TEST !== '1') {
+      this.logger.warn('crash_agent ignored (APEX_E2E_TEST not set)');
+      return;
+    }
+    const { chatId } = payload;
+    this.logger.log(`crash_agent: chatId=${chatId} (e2e test)`);
+    try {
+      const chat = await this.chatsService.findById(chatId);
+      const project = await this.projectsService.findById(chat.projectId);
+      if (!project.sandboxId) {
+        client.emit('agent_error', { chatId, error: 'No sandbox for this project' });
+        return;
+      }
+      const manager = this.projectsService.getSandboxManager();
+      if (!manager) {
+        client.emit('agent_error', { chatId, error: 'Sandbox manager not available' });
+        return;
+      }
+      await manager.stopClaude(project.sandboxId, chatId);
+      this.logger.log(`crash_agent: stopped Claude for chat ${chatId}`);
+    } catch (err) {
+      this.logger.error(`crash_agent error: ${err}`);
+      client.emit('agent_error', { chatId, error: String(err) });
+    }
+  }
+
   @SubscribeMessage('subscribe_project')
   async handleSubscribe(
     @ConnectedSocket() client: Socket,
@@ -936,7 +968,11 @@ export class AgentGateway
   /** Active timeout handles so we can clear them on response / cleanup */
   private activeTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
-  private static readonly AGENT_INITIAL_TIMEOUT_MS = 90_000; // 90s for first response
+  /** Override in tests via APEX_TEST_AGENT_TIMEOUT_MS for faster runs */
+  private static readonly AGENT_INITIAL_TIMEOUT_MS =
+    process.env.APEX_TEST_AGENT_TIMEOUT_MS
+      ? parseInt(process.env.APEX_TEST_AGENT_TIMEOUT_MS, 10)
+      : 90_000; // 90s for first response
   private static readonly AGENT_ACTIVITY_TIMEOUT_MS = 300_000; // 5 min between messages
 
   private async executeAgainstSandbox(
@@ -989,6 +1025,7 @@ export class AgentGateway
 
     const stderrChunks: string[] = [];
     let receivedFirstMessage = false;
+    let retryCount = 0;
 
     const cleanupHandler = () => {
       manager.removeListener('message', messageHandler);
@@ -1003,6 +1040,43 @@ export class AgentGateway
 
       const timer = setTimeout(async () => {
         this.logger.error(`Agent timeout for chat ${chatId} (${timeoutMs}ms with no activity)`);
+
+        // Auto-retry once before giving up (restart agent if it crashed or hung)
+        if (retryCount < 1) {
+          retryCount++;
+          this.logger.log(`Agent timeout for chat ${chatId}: attempting auto-retry (${retryCount}/1)`);
+          this.emitToSubscribers(project.sandboxId!, 'agent_status', {
+            chatId,
+            status: 'retrying',
+          });
+          this.emitToSubscribers(project.sandboxId!, 'agent_message', {
+            chatId,
+            message: {
+              type: 'system',
+              subtype: 'retry',
+              text: 'Agent stopped responding. Restarting…',
+            },
+          });
+          try {
+            const freshChat = await this.chatsService.findById(chatId);
+            const resumePrompt = receivedFirstMessage
+              ? 'Continue from where you left off. You had stopped responding after a long pause.'
+              : prompt;
+            await manager.sendPrompt(
+              project.sandboxId!,
+              resumePrompt,
+              chatId,
+              freshChat.claudeSessionId ?? chat.claudeSessionId,
+              mode,
+              model,
+            );
+            resetTimeout(AgentGateway.AGENT_ACTIVITY_TIMEOUT_MS);
+            return;
+          } catch (retryErr) {
+            this.logger.error(`Agent retry failed for chat ${chatId}: ${retryErr}`);
+          }
+        }
+
         cleanupHandler();
 
         const stderrHint = stderrChunks.length
@@ -1111,6 +1185,42 @@ export class AgentGateway
       } else if (msg.type === 'claude_exit') {
         const status = msg.code === 0 ? 'completed' : 'error';
         this.logger.log(`Claude exited for chat ${chatId}: code=${msg.code}`);
+
+        // Auto-retry once on crash (non-zero exit) before giving up
+        if (status === 'error' && retryCount < 1) {
+          retryCount++;
+          this.logger.log(`Agent crash for chat ${chatId}: attempting auto-retry (${retryCount}/1)`);
+          this.emitToSubscribers(project.sandboxId!, 'agent_status', {
+            chatId,
+            status: 'retrying',
+          });
+          this.emitToSubscribers(project.sandboxId!, 'agent_message', {
+            chatId,
+            message: {
+              type: 'system',
+              subtype: 'retry',
+              text: 'Agent crashed. Restarting…',
+            },
+          });
+          try {
+            const freshChat = await this.chatsService.findById(chatId);
+            const resumePrompt = receivedFirstMessage
+              ? 'Continue from where you left off. You had crashed and were restarted.'
+              : prompt;
+            await manager.sendPrompt(
+              project.sandboxId!,
+              resumePrompt,
+              chatId,
+              freshChat.claudeSessionId ?? chat.claudeSessionId,
+              mode,
+              model,
+            );
+            resetTimeout(AgentGateway.AGENT_ACTIVITY_TIMEOUT_MS);
+            return;
+          } catch (retryErr) {
+            this.logger.error(`Agent retry failed for chat ${chatId}: ${retryErr}`);
+          }
+        }
 
         if (status === 'error' && stderrChunks.length) {
           const stderrHint = stderrChunks.join('').slice(0, 500);

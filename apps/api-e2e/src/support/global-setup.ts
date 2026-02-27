@@ -8,7 +8,8 @@ module.exports = async function() {
   console.log('\nSetting up...\n');
 
   const host = process.env.HOST ?? 'localhost';
-  const port = process.env.PORT ? Number(process.env.PORT) : 3000;
+  // Default 6000 to match project .env (dashboard proxies to 6000); API uses PORT from env
+  const port = process.env.PORT ? Number(process.env.PORT) : 6000;
   await waitForPortOpen(port, { host });
 
   // Hint: Use `globalThis` to pass variables to global teardown.
