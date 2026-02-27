@@ -1,5 +1,5 @@
 import { useEffect, useRef, useMemo, useCallback } from 'react';
-import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo } from 'lucide-react';
+import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo, RotateCcw } from 'lucide-react';
 import { useChatsStore } from '../../stores/tasks-store';
 import { groupMessages, MessageGroupView } from './message-bubble';
 import { PromptInput, type PromptInputHandle } from './prompt-input';
@@ -192,7 +192,17 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
             <Loader2 className="w-3.5 h-3.5 animate-spin text-yellow-500 shrink-0" />
           )}
           {isError && (
-            <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+            <div className="flex items-center gap-2 shrink-0">
+              <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+              <button
+                type="button"
+                onClick={() => onExecuteChat(activeChatId!)}
+                className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-border text-text-secondary hover:bg-surface-secondary hover:text-text-primary transition-colors"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Retry
+              </button>
+            </div>
           )}
         </div>
 

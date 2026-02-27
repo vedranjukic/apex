@@ -21,8 +21,12 @@ interface EditorState {
   activeView: 'chat' | 'editor';
   codeSelection: CodeSelection | null;
   dirtyFiles: Set<string>;
+  /** When set, CodeViewer will reveal this line after mount */
+  revealLineAt: { filePath: string; line: number } | null;
 
   openFile: (path: string, name: string) => void;
+  openFileAtLine: (path: string, name: string, line: number) => void;
+  clearRevealLineAt: () => void;
   closeFile: (path: string) => void;
   setActiveFile: (path: string) => void;
   setFileContent: (path: string, content: string) => void;
@@ -48,6 +52,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   activeView: 'chat',
   codeSelection: null,
   dirtyFiles: new Set<string>(),
+  revealLineAt: null,
 
   openFile: (path, name) => {
     const { openFiles } = get();
@@ -58,6 +63,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       activeView: 'editor',
     });
   },
+
+  openFileAtLine: (path, name, line) => {
+    const { openFiles } = get();
+    const alreadyOpen = openFiles.some((f) => f.path === path);
+    set({
+      openFiles: alreadyOpen ? openFiles : [...openFiles, { path, name }],
+      activeFilePath: path,
+      activeView: 'editor',
+      revealLineAt: { filePath: path, line },
+    });
+  },
+
+  clearRevealLineAt: () => set({ revealLineAt: null }),
 
   closeFile: (path) => {
     const { openFiles, activeFilePath } = get();
@@ -113,6 +131,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       activeView: 'chat',
       codeSelection: null,
       dirtyFiles: new Set<string>(),
+      revealLineAt: null,
     }),
 
   applyLayout: (data) =>
