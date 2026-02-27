@@ -22,6 +22,7 @@ import {
 import type { ContentBlock } from '../../api/client';
 import { useChatActions } from './chat-actions-context';
 import { useChatsStore } from '../../stores/tasks-store';
+import { useEditorStore } from '../../stores/editor-store';
 
 type Input = Record<string, unknown>;
 
@@ -69,6 +70,8 @@ export function ToolUseBlock({ block }: { block: ContentBlock }) {
       return <AskQuestionBlock input={input} toolUseId={block.id} />;
     case 'WebSearch':
       return <WebSearchBlock input={input} />;
+    case 'WebFetch':
+      return <WebFetchBlock input={input} />;
     case 'Glob':
     case 'Grep':
       return <SearchBlock name={block.name!} input={input} />;
@@ -251,10 +254,61 @@ function ReadBlock({ input }: { input: Input }) {
 
 // ── Edit / StrReplace ────────────────────────────────
 
+/** Renders code with line numbers; clicking a line opens the file at that position. */
+function DiffCodeBlock({
+  content,
+  filePath,
+  startLine,
+  variant,
+}: {
+  content: string;
+  filePath: string;
+  startLine: number;
+  variant: 'removed' | 'added';
+}) {
+  const lines = content.split('\n');
+  const openFileAtLine = useEditorStore((s) => s.openFileAtLine);
+  const fileName = basename(filePath);
+
+  const handleLineClick = (lineNum: number) => {
+    openFileAtLine(filePath, fileName, lineNum);
+  };
+
+  const bg = variant === 'removed' ? 'bg-red-950/10' : 'bg-green-950/10';
+  const text = variant === 'removed' ? 'text-red-300' : 'text-green-300';
+
+  return (
+    <div className={`${bg} overflow-x-auto`}>
+      {lines.map((line, i) => {
+        const lineNum = startLine + i;
+        return (
+          <div
+            key={i}
+            className="flex group hover:bg-white/5 min-w-0"
+          >
+            <button
+              type="button"
+              onClick={() => handleLineClick(lineNum)}
+              className="shrink-0 w-10 py-1 pr-2 text-right text-[10px] font-mono text-text-muted hover:text-text-secondary cursor-pointer select-none border-r border-border/50 hover:bg-white/5"
+              title={`Open ${fileName} at line ${lineNum}`}
+            >
+              {lineNum}
+            </button>
+            <pre className={`flex-1 px-3 py-1 ${text} text-xs font-mono leading-relaxed whitespace-pre`}>
+              <code>{line || ' '}</code>
+            </pre>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function EditBlock({ input }: { input: Input }) {
   const filePath = String(input.file_path ?? input.filePath ?? '');
   const oldStr = String(input.old_string ?? input.oldString ?? '');
   const newStr = String(input.new_string ?? input.newString ?? '');
+  const startLine = Number(input.start_line ?? input.startLine ?? 1);
 
   return (
     <div className="rounded-lg overflow-hidden border border-border">
@@ -269,9 +323,7 @@ function EditBlock({ input }: { input: Input }) {
               <Minus className="w-3 h-3" />
               Removed
             </div>
-            <pre className="px-3 py-2 bg-red-950/10 text-red-300 text-xs font-mono overflow-x-auto leading-relaxed">
-              <code>{oldStr}</code>
-            </pre>
+            <DiffCodeBlock content={oldStr} filePath={filePath} startLine={startLine} variant="removed" />
           </div>
         )}
         {newStr && (
@@ -280,9 +332,12 @@ function EditBlock({ input }: { input: Input }) {
               <Plus className="w-3 h-3" />
               Added
             </div>
-            <pre className="px-3 py-2 bg-green-950/10 text-green-300 text-xs font-mono overflow-x-auto leading-relaxed">
-              <code>{newStr}</code>
-            </pre>
+            <DiffCodeBlock
+              content={newStr}
+              filePath={filePath}
+              startLine={startLine}
+              variant="added"
+            />
           </div>
         )}
       </div>
@@ -311,17 +366,14 @@ function MultiEditBlock({ input }: { input: Input }) {
         {edits.map((edit, i) => {
           const oldStr = String(edit.old_string ?? edit.oldString ?? '');
           const newStr = String(edit.new_string ?? edit.newString ?? '');
+          const startLine = Number(edit.start_line ?? edit.startLine ?? 1);
           return (
             <div key={i} className="divide-y divide-border/50">
               {oldStr && (
-                <pre className="px-3 py-1.5 bg-red-950/10 text-red-300 text-xs font-mono overflow-x-auto leading-relaxed">
-                  <code>{oldStr}</code>
-                </pre>
+                <DiffCodeBlock content={oldStr} filePath={filePath} startLine={startLine} variant="removed" />
               )}
               {newStr && (
-                <pre className="px-3 py-1.5 bg-green-950/10 text-green-300 text-xs font-mono overflow-x-auto leading-relaxed">
-                  <code>{newStr}</code>
-                </pre>
+                <DiffCodeBlock content={newStr} filePath={filePath} startLine={startLine} variant="added" />
               )}
             </div>
           );
@@ -591,6 +643,41 @@ function AskQuestionBlock({ input, toolUseId }: { input: Input; toolUseId?: stri
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── WebFetch ─────────────────────────────────────────
+
+function WebFetchBlock({ input }: { input: Input }) {
+  const url = String(input.url ?? '');
+  const prompt = input.prompt ? String(input.prompt) : null;
+
+  return (
+    <div className="rounded-lg overflow-hidden border border-border">
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs">
+        <Globe className="w-3.5 h-3.5 text-cyan-500" />
+        <span className="font-medium">WebFetch</span>
+      </div>
+      <div className="divide-y divide-border bg-surface-secondary">
+        <div className="px-3 py-2">
+          <p className="text-[10px] text-text-muted uppercase tracking-wide mb-1">URL</p>
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs font-mono text-primary hover:underline break-all"
+          >
+            {url}
+          </a>
+        </div>
+        {prompt && (
+          <div className="px-3 py-2">
+            <p className="text-[10px] text-text-muted uppercase tracking-wide mb-1">Prompt</p>
+            <p className="text-xs text-text-primary leading-relaxed">{prompt}</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

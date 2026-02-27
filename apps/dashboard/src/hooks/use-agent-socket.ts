@@ -38,6 +38,18 @@ export function useAgentSocket(projectId: string | undefined) {
       if (!data.message) return;
       const msg = data.message;
 
+      if (msg.type === 'system' && msg.subtype === 'retry') {
+        addMessage({
+          id: crypto.randomUUID(),
+          taskId: data.chatId,
+          role: 'system',
+          content: [{ type: 'text', text: msg.text || 'Agent stopped responding. Restarting…' }],
+          metadata: null,
+          createdAt: new Date().toISOString(),
+        });
+        return;
+      }
+
       if (msg.type === 'assistant' && msg.message?.content) {
         addMessage({
           id: msg.uuid || crypto.randomUUID(),
@@ -101,7 +113,8 @@ export function useAgentSocket(projectId: string | undefined) {
 
     socket.on('agent_status', (data: any) => {
       console.log('[ws] agent_status:', data);
-      updateChatStatus(data.chatId, data.status);
+      // Treat 'retrying' as 'running' so the UI shows progress
+      updateChatStatus(data.chatId, data.status === 'retrying' ? 'running' : data.status);
     });
 
     socket.on('agent_error', (data: any) => {

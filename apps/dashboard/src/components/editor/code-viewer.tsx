@@ -81,6 +81,20 @@ export function CodeViewer({ filePath, content, onSave }: CodeViewerProps) {
           onSave(filePath, model.getValue());
         },
       });
+
+      // Reveal line when opened from diff/Edit block
+      const reveal = useEditorStore.getState().revealLineAt;
+      if (reveal && reveal.filePath === filePath) {
+        const line = Math.max(1, Math.min(reveal.line, editor.getModel()?.getLineCount() ?? 1));
+        editor.revealLineInCenter(line);
+        editor.setSelection({
+          startLineNumber: line,
+          startColumn: 1,
+          endLineNumber: line,
+          endColumn: 1,
+        });
+        useEditorStore.getState().clearRevealLineAt();
+      }
     },
     [filePath, onSave],
   );
