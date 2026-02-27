@@ -13,7 +13,9 @@
     "desktop:dev": "npx nx build @apex/api && npx nx build @apex/dashboard && npx tsc --project apps/desktop/tsconfig.json && npx @electron/rebuild -f -w better-sqlite3 && electron apps/desktop/dist/main.js",
     "desktop:package": "npm run desktop:build && electron-builder --mac && node scripts/restore-workspace-links.js",
     "desktop:restore-links": "node scripts/restore-workspace-links.js",
-    "postdesktop": "npm rebuild better-sqlite3 && node scripts/restore-workspace-links.js"
+    "postdesktop": "npm rebuild better-sqlite3 && node scripts/restore-workspace-links.js",
+    "test:agent-retry": "cd apps/api && APEX_TEST_AGENT_TIMEOUT_MS=100 npx vitest run",
+    "test:agent-retry-e2e": "APEX_E2E_TEST=1 npx nx e2e @apex/api-e2e --testPathPattern=agent-retry"
   },
   "private": true,
   "dependencies": {
@@ -69,6 +71,7 @@
     "@nx/web": "22.5.1",
     "@nx/webpack": "22.5.1",
     "@playwright/test": "^1.36.0",
+    "@swc/jest": "^0.2.38",
     "@swc-node/register": "~1.11.1",
     "@swc/core": "~1.15.5",
     "@swc/helpers": "~0.5.18",
@@ -83,6 +86,7 @@
     "@vitest/ui": "^4.0.0",
     "electron": "^40.6.1",
     "electron-builder": "^26.8.1",
+    "jest": "^30.0.2",
     "jiti": "2.4.2",
     "jsdom": "~22.1.0",
     "nx": "22.5.1",

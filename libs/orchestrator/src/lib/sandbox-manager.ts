@@ -350,6 +350,17 @@ export class SandboxManager extends EventEmitter {
     this.emit("status", sandboxId, "running");
   }
 
+  /** Stop (kill) the Claude process for a chat. Used for testing or manual cancellation. */
+  async stopClaude(sandboxId: string, chatId?: string): Promise<void> {
+    const session = await this.ensureConnected(sandboxId);
+    session.ws!.send(
+      JSON.stringify({
+        type: "stop_claude",
+        chatId: chatId || undefined,
+      }),
+    );
+  }
+
   /** Send a user's answer to an AskUserQuestion back to the running Claude process. */
   async sendUserAnswer(
     sandboxId: string,
