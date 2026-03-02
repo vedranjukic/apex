@@ -179,6 +179,14 @@ const TOOLS = [
     },
   },
   {
+    name: "get_plan_format_instructions",
+    description: "Get the exact format you MUST use when outputting an implementation plan in Plan mode. Call this before presenting your plan to ensure the UI can detect and display it. Required for Plan mode.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
     name: "ask_user",
     description: "Ask the user a question and wait for their answer. Use this when you need clarification, want to present options, or need the user to make a decision before proceeding. The tool will BLOCK until the user responds, so only use it when you genuinely need input. Each question can have multiple options for the user to choose from.",
     inputSchema: {
@@ -352,6 +360,12 @@ async function handleRequest(request) {
             content: [{ type: "text", text: result.url }],
           });
         }
+
+      } else if (toolName === "get_plan_format_instructions") {
+        const instruction = "When presenting your implementation plan, you MUST wrap the entire plan in fenced code blocks with the language tag \\"plan\\". Use this exact format:\\n\\n\\`\\`\\`plan\\n[Your plan content here — use markdown for structure, headings, lists, etc.]\\n\\`\\`\\`\\n\\nThe UI detects plans ONLY when they use this exact delimiter. Do not use \\`\\`\\`md or any other tag.";
+        sendResponse(id, {
+          content: [{ type: "text", text: instruction }],
+        });
 
       } else if (toolName === "ask_user") {
         const result = await bridgeRequest("/internal/ask-user", {

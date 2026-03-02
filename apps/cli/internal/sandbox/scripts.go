@@ -648,6 +648,11 @@ const TOOLS = [
       required: ["port"],
     },
   },
+  {
+    name: "get_plan_format_instructions",
+    description: "Get the exact format you MUST use when outputting an implementation plan in Plan mode. Call this before presenting your plan to ensure the UI can detect and display it. Required for Plan mode.",
+    inputSchema: { type: "object", properties: {} },
+  },
 ];
 
 async function handleRequest(request) {
@@ -705,6 +710,9 @@ async function handleRequest(request) {
         sendResponse(id, result.error
           ? { content: [{ type: "text", text: "Error: " + result.error }], isError: true }
           : { content: [{ type: "text", text: result.url }] });
+      } else if (toolName === "get_plan_format_instructions") {
+        const instruction = "When presenting your implementation plan, you MUST wrap the entire plan in fenced code blocks with the language tag \"plan\". Use this exact format:\n\n` + "`" + "`" + "`plan\n[Your plan content here — use markdown for structure, headings, lists, etc.]\n`" + "`" + "`" + "`\n\nThe UI detects plans ONLY when they use this exact delimiter. Do not use ` + "`" + "`" + "`md or any other tag.";
+        sendResponse(id, { content: [{ type: "text", text: instruction }] });
       } else {
         sendError(id, -32601, "Unknown tool: " + toolName);
       }

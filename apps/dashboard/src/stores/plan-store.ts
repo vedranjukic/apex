@@ -2,6 +2,13 @@ import { create } from 'zustand';
 
 export const BUILD_PROMPT_PREFIX = 'Execute the following plan:\n\n';
 
+/** Delimiter for plan blocks - agent in plan mode must wrap plans in these for 100% detection */
+export const PLAN_BLOCK_START = '```plan';
+export const PLAN_BLOCK_END = '```';
+
+/** Regex to extract plan content from fenced ```plan ... ``` blocks */
+export const PLAN_BLOCK_REGEX = /```plan\s*\n?([\s\S]*?)```/;
+
 export interface Plan {
   id: string;
   chatId: string;
@@ -25,56 +32,15 @@ interface PlanState {
   getPlanById: (planId: string) => Plan | undefined;
 }
 
-const MIN_PLAN_LENGTH = 150;
-
-/** Plan-like section headers (match at line start; content may follow on same line) */
-const PLAN_INDICATORS = [
-  /(?:^|\n)\s*Plan\s*:/i,
-  /(?:^|\n)\s*Implementation\s+plan\s*:?/i,
-  /(?:^|\n)\s*File\s+structure\s*:?/i,
-  /(?:^|\n)\s*Structure\s*:?/i,
-  /(?:^|\n)\s*Stack\s*:?/i,
-  /(?:^|\n)\s*Styling\s*:?/i,
-  /(?:^|\n)\s*Storage\s*:?/i,
-  /(?:^|\n)\s*Features\s*:?/i,
-  /(?:^|\n)\s*Details\s*:?/i,
-  /(?:^|\n)\s*Here'?s\s+the\s+plan\b/i,
-  /(?:^|\n)\s*Here'?s\s+my\s+plan\b/i,
-  /(?:^|\n)\s*Here'?s\s+what\s+I'?ll\s+build\b/i,
-  /\bShall\s+I\s+proceed\b/i,
-];
-
 /**
- * Strip conversational preamble — return only the portion from the first
- * markdown heading or plan section onward.  If neither is found but the
- * text is long enough, return the full text (some plans use plain-text).
- * Returns null only when the content is too short to be a real plan.
+ * Extract plan content from text. Uses the deterministic ```plan ... ``` delimiter.
+ * Returns null if no plan block is found.
  */
 function extractPlanBody(raw: string): string | null {
-  const headingIdx = raw.search(/^#{1,3}\s+/m);
-  let idx = headingIdx >= 0 ? headingIdx : -1;
-  for (const r of PLAN_INDICATORS) {
-    const m = raw.match(r);
-    if (m && m.index !== undefined) {
-      idx = idx >= 0 ? Math.min(idx, m.index) : m.index;
-    }
+  const match = raw.match(PLAN_BLOCK_REGEX);
+  if (match && match[1]) {
+    return match[1].trim();
   }
-  if (idx < 0) {
-    const fallbacks = [
-      /\bHere'?s\s+what\s+I'?ll\s+build\b/i,
-      /\bPlan\s*:\s*/i,
-      /\bStack\s*:\s*/i,
-      /\bFeatures\s*:\s*/i,
-    ];
-    for (const r of fallbacks) {
-      const m = raw.match(r);
-      if (m && m.index !== undefined) {
-        idx = idx >= 0 ? Math.min(idx, m.index) : m.index;
-      }
-    }
-  }
-  if (idx >= 0) return raw.slice(idx);
-  if (raw.length >= MIN_PLAN_LENGTH) return raw;
   return null;
 }
 
