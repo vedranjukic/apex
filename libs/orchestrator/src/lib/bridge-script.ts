@@ -435,7 +435,7 @@ wss.on("connection", (ws) => {
 
         if (agentMode === "plan") {
           claudeArgs.push("--disallowedTools", "AskUserQuestion,Edit,Write,MultiEdit");
-          claudeArgs.push("--append-system-prompt", "You are in Plan mode. Analyze the request and produce a detailed plan. You CANNOT create or edit files. Only use read-only tools to explore the codebase, then present your plan as text.");
+          claudeArgs.push("--append-system-prompt", "You are in Plan mode. Analyze the request and produce a detailed plan. You CANNOT create or edit files. Only use read-only tools to explore the codebase. When presenting your plan, you MUST wrap the entire plan in fenced code blocks with the language tag \\"plan\\". Use this exact format:\\n\\n\\`\\`\\`plan\\n[Your plan content — use markdown for structure]\\n\\`\\`\\`\\n\\nThe UI detects plans ONLY when they use this exact delimiter. You may call get_plan_format_instructions for the full specification.");
         } else if (agentMode === "ask") {
           claudeArgs.push("--disallowedTools", "AskUserQuestion,Edit,Write,MultiEdit,Bash");
           claudeArgs.push("--append-system-prompt", "You are in Ask mode. Only answer the question using read-only tools. You CANNOT create, edit, or write files, or run shell commands.");

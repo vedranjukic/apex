@@ -6,7 +6,7 @@ import type { Message, ContentBlock } from '../../api/client';
 import { ToolUseBlock, BashGroupBlock, TransientSearchBlock, type BashItem } from './tool-use-block';
 import { PlanBlock } from './plan-block';
 import { MarkdownBlock } from './markdown-block';
-import { usePlanStore, extractTitle, generateFilename, BUILD_PROMPT_PREFIX } from '../../stores/plan-store';
+import { usePlanStore, extractTitle, BUILD_PROMPT_PREFIX, PLAN_BLOCK_REGEX, PLAN_BLOCK_START } from '../../stores/plan-store';
 import { useChatsStore } from '../../stores/tasks-store';
 
 // ── Types for grouped rendering ─────────────────────
@@ -290,62 +290,18 @@ interface DerivedPlan {
 }
 
 const HEADING_RE = /^#{1,3}\s+/m;
-/** Plan-like section headers (match at line start; content may follow on same line) */
-const PLAN_INDICATORS = [
-  /(?:^|\n)\s*Plan\s*:/i,
-  /(?:^|\n)\s*Implementation\s+plan\s*:?/i,
-  /(?:^|\n)\s*File\s+structure\s*:?/i,
-  /(?:^|\n)\s*Structure\s*:?/i,
-  /(?:^|\n)\s*Stack\s*:?/i,
-  /(?:^|\n)\s*Styling\s*:?/i,
-  /(?:^|\n)\s*Storage\s*:?/i,
-  /(?:^|\n)\s*Features\s*:?/i,
-  /(?:^|\n)\s*Details\s*:?/i,
-  /(?:^|\n)\s*Here'?s\s+the\s+plan\b/i,
-  /(?:^|\n)\s*Here'?s\s+my\s+plan\b/i,
-  /(?:^|\n)\s*Here'?s\s+what\s+I'?ll\s+build\b/i,
-  /\bShall\s+I\s+proceed\b/i,
-];
-const MIN_PLAN_LENGTH = 150;
 
-/** True if text has plan-like structure (heading or plan section) */
-function hasPlanStructure(text: string): boolean {
-  if (HEADING_RE.test(text)) return true;
-  if (PLAN_INDICATORS.some((r) => r.test(text))) return true;
-  // Fallback: "Stack:" or "Features:" or "Shall I proceed" with substantial content
-  if (text.length >= MIN_PLAN_LENGTH) {
-    if (/\b(?:Stack|Features|Plan)\s*:\s*/i.test(text)) return true;
-    if (/\bShall\s+I\s+proceed\b/i.test(text)) return true;
-  }
-  return false;
+/** True if text contains the deterministic ```plan ... ``` block */
+function hasPlanBlock(text: string): boolean {
+  return PLAN_BLOCK_REGEX.test(text);
 }
 
-/** Find start of plan body: first heading or plan section */
-function findPlanStart(text: string): number {
-  let idx = text.search(HEADING_RE);
-  for (const r of PLAN_INDICATORS) {
-    const m = text.match(r);
-    if (m && m.index !== undefined) {
-      const i = m.index;
-      idx = idx >= 0 ? Math.min(idx, i) : i;
-    }
-  }
-  if (idx < 0) {
-    const fallbacks = [
-      /\bHere'?s\s+what\s+I'?ll\s+build\b/i,
-      /\bPlan\s*:\s*/i,
-      /\bStack\s*:\s*/i,
-      /\bFeatures\s*:\s*/i,
-    ];
-    for (const r of fallbacks) {
-      const m = text.match(r);
-      if (m && m.index !== undefined) {
-        idx = idx >= 0 ? Math.min(idx, m.index) : m.index;
-      }
-    }
-  }
-  return idx;
+/** Extract plan content from ```plan ... ``` block; returns null if not found */
+function extractPlanFromText(text: string): string | null {
+  const match = text.match(PLAN_BLOCK_REGEX);
+  return match && match[1] ? match[1].trim() : null;
 }
+
 
 function AgentGroup({
   messages,
@@ -360,7 +316,6 @@ function AgentGroup({
     (s) => chatId ? s.chats.find((c) => c.id === chatId) : undefined,
   );
   const chatStatus = chat?.status;
-  const isPlanModeChat = chat?.mode === 'plan' || !!storePlan;
   const buildPromptTime = useChatsStore((s) => {
     const msg = s.messages.find(
       (m) => m.role === 'user' && m.content.some(
@@ -441,15 +396,11 @@ function AgentGroup({
     if (textBlocks.length === 0) return null;
 
     const fullText = textBlocks.map((b) => b.text).join('\n\n');
-    if (fullText.length < MIN_PLAN_LENGTH) return null;
 
-    // Plan mode: require plan structure. Agent mode: also detect "Plan:" section
-    const hasStructure = hasPlanStructure(fullText);
-    if (!hasStructure && !isPlanModeChat) return null;
-    if (!hasStructure) return null;
+    // Only detect plan when it uses the deterministic ```plan ... ``` delimiter
+    const planBody = extractPlanFromText(fullText);
+    if (!planBody) return null;
 
-    const planStartIdx = findPlanStart(fullText);
-    const planBody = planStartIdx >= 0 ? fullText.slice(planStartIdx) : fullText;
     const title = extractTitle(planBody);
     const ts = new Date(messages[0].createdAt)
       .toISOString().replace(/[-:]/g, '').slice(0, 13);
@@ -460,7 +411,7 @@ function AgentGroup({
       content: planBody,
       isComplete: true,
     };
-  }, [storePlan, allBlocks, messages, isPlanModeChat]);
+  }, [storePlan, allBlocks, messages]);
 
   const planBlocks = useMemo(() => {
     if (!derivedPlan) return null;
@@ -470,7 +421,7 @@ function AgentGroup({
       | { kind: 'plan' };
 
     const hasPlanMarker = allBlocks.some(
-      (b) => b.type === 'text' && b.text && hasPlanStructure(b.text),
+      (b) => b.type === 'text' && b.text && hasPlanBlock(b.text),
     );
 
     const items: PlanItem[] = [];
@@ -485,7 +436,7 @@ function AgentGroup({
 
       if (hasPlanMarker) {
         const text = block.text ?? '';
-        const planStartIdx = findPlanStart(text);
+        const planStartIdx = text.indexOf(PLAN_BLOCK_START);
         if (planStartIdx < 0) {
           items.push({ kind: 'block', block });
         } else {
