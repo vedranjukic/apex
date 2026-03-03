@@ -25,14 +25,15 @@ interface SidePanelProps {
   readFile: (path: string) => void;
   socket: { current: Socket | null };
   sendPrompt: (chatId: string, prompt: string, mode?: string, model?: string) => void;
+  onAnalyzeGitignore?: (prompt: string) => Promise<void>;
 }
 
-export function SidePanel({ category, projectId, fileActions, gitActions, searchFiles, readFile, socket, sendPrompt }: SidePanelProps) {
+export function SidePanel({ category, projectId, fileActions, gitActions, searchFiles, readFile, socket, sendPrompt, onAnalyzeGitignore }: SidePanelProps) {
   return (
     <div className="w-60 bg-sidebar text-panel-text flex flex-col shrink-0 h-full border-r border-panel-border">
       <PanelHeader category={category} fileActions={fileActions} />
       <div className="flex-1 overflow-y-auto px-3 py-2 min-h-0">
-        <PanelContent category={category} projectId={projectId} fileActions={fileActions} gitActions={gitActions} searchFiles={searchFiles} readFile={readFile} socket={socket} sendPrompt={sendPrompt} />
+        <PanelContent category={category} projectId={projectId} fileActions={fileActions} gitActions={gitActions} searchFiles={searchFiles} readFile={readFile} socket={socket} sendPrompt={sendPrompt} onAnalyzeGitignore={onAnalyzeGitignore} />
       </div>
     </div>
   );
@@ -65,7 +66,7 @@ function PanelHeader({ category, fileActions }: { category: ActivityCategory; fi
   );
 }
 
-function PanelContent({ category, projectId, fileActions, gitActions, searchFiles, readFile, socket, sendPrompt }: {
+function PanelContent({ category, projectId, fileActions, gitActions, searchFiles, readFile, socket, sendPrompt, onAnalyzeGitignore }: {
   category: ActivityCategory;
   projectId: string;
   fileActions: FileTreeActions;
@@ -74,12 +75,13 @@ function PanelContent({ category, projectId, fileActions, gitActions, searchFile
   readFile: (path: string) => void;
   socket: SidePanelProps['socket'];
   sendPrompt: SidePanelProps['sendPrompt'];
+  onAnalyzeGitignore?: SidePanelProps['onAnalyzeGitignore'];
 }) {
   switch (category) {
     case 'explorer':
       return <FileTree projectId={projectId} actions={fileActions} />;
     case 'git':
-      return <SourceControlPanel gitActions={gitActions} projectId={projectId} socket={socket} sendPrompt={sendPrompt} />;
+      return <SourceControlPanel gitActions={gitActions} projectId={projectId} socket={socket} sendPrompt={sendPrompt} onAnalyzeGitignore={onAnalyzeGitignore} />;
     case 'search':
       return <SearchPanel projectId={projectId} onSearch={searchFiles} readFile={readFile} />;
     case 'forks':

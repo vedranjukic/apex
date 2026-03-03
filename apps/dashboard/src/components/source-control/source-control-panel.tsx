@@ -10,8 +10,10 @@ import {
   Check,
   Loader2,
   Sparkles,
+  AlertTriangle,
 } from 'lucide-react';
 import { cn } from '../../lib/cn';
+import { getGitFilesDisplayLimit } from '../../lib/git-source-control-config';
 import { useGitStore, type GitFileEntry } from '../../stores/git-store';
 import type { GitActions } from '../../hooks/use-git-socket';
 import { chatsApi, type Message } from '../../api/client';
@@ -21,9 +23,10 @@ interface SourceControlPanelProps {
   projectId: string;
   socket: { current: Socket | null };
   sendPrompt: (chatId: string, prompt: string, mode?: string, model?: string) => void;
+  onAnalyzeGitignore?: (prompt: string) => Promise<void>;
 }
 
-export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt }: SourceControlPanelProps) {
+export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt, onAnalyzeGitignore }: SourceControlPanelProps) {
   const branch = useGitStore((s) => s.branch);
   const staged = useGitStore((s) => s.staged);
   const unstaged = useGitStore((s) => s.unstaged);
@@ -169,6 +172,50 @@ export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt }
     }
   }, [generating, staged, projectId, socket, sendPrompt, setCommitMessage]);
 
+  const totalFileCount = staged.length + unstaged.length + untracked.length + conflicted.length;
+  const fileLimit = getGitFilesDisplayLimit();
+  const tooManyFiles = totalFileCount > fileLimit;
+
+  const handleAnalyzeGitignore = useCallback(async () => {
+    if (!onAnalyzeGitignore) return;
+    const allPaths = [...staged, ...unstaged, ...untracked].map((f) => f.path);
+    const seen = new Set<string>();
+    const samples: string[] = [];
+    for (const p of allPaths) {
+      if (samples.length >= 30) break;
+      const top = p.split('/')[0];
+      const prefix = p.includes('/') ? `${top}/...` : p;
+      if (!seen.has(prefix)) {
+        seen.add(prefix);
+        samples.push(prefix);
+      }
+    }
+    for (const p of allPaths) {
+      if (samples.length >= 30) break;
+      if (!seen.has(p)) {
+        seen.add(p);
+        samples.push(p);
+      }
+    }
+
+    const prompt = [
+      `There are ${totalFileCount} changed/untracked files in this git repo, which is too many to display. This usually means .gitignore is missing or incomplete (e.g. node_modules, build outputs).`,
+      '',
+      'Sample paths:',
+      ...samples.map((s) => `- ${s}`),
+      '',
+      'Please:',
+      '1. Read the current .gitignore if it exists',
+      '2. Analyze these paths and identify patterns that should be ignored',
+      '3. Create or update .gitignore with appropriate entries',
+      '4. Apply the changes',
+      '',
+      'Focus on common exclusions: node_modules, build outputs (dist, build, out), lock files, IDE folders (.idea, .vscode), logs, caches.',
+    ].join('\n');
+
+    await onAnalyzeGitignore(prompt);
+  }, [onAnalyzeGitignore, staged, unstaged, untracked, totalFileCount]);
+
   const hasStaged = staged.length > 0;
   const hasChanges = unstaged.length > 0 || untracked.length > 0;
   const isClean = !hasStaged && !hasChanges && conflicted.length === 0;
@@ -284,61 +331,133 @@ export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt }
         {getButtonLabel()}
       </button>
 
-      {conflicted.length > 0 && (
-        <FileSection
-          title="Merge Conflicts"
-          files={conflicted}
-          variant="conflicted"
-          actions={{
-            onStage: stageFiles,
-          }}
+      {tooManyFiles ? (
+        <TooManyFilesWarning
+          count={totalFileCount}
+          onAnalyzeGitignore={onAnalyzeGitignore ? handleAnalyzeGitignore : undefined}
         />
-      )}
+      ) : (
+        <>
+          {conflicted.length > 0 && (
+            <FileSection
+              title="Merge Conflicts"
+              files={conflicted}
+              variant="conflicted"
+              actions={{
+                onStage: stageFiles,
+              }}
+            />
+          )}
 
-      {staged.length > 0 && (
-        <FileSection
-          title="Staged Changes"
-          files={staged}
-          variant="staged"
-          actions={{
-            onUnstage: unstageFiles,
-            onUnstageAll: () => unstageFiles(staged.map((f) => f.path)),
-          }}
-        />
-      )}
+          {staged.length > 0 && (
+            <FileSection
+              title="Staged Changes"
+              files={staged}
+              variant="staged"
+              actions={{
+                onUnstage: unstageFiles,
+                onUnstageAll: () => unstageFiles(staged.map((f) => f.path)),
+              }}
+            />
+          )}
 
-      {unstaged.length > 0 && (
-        <FileSection
-          title="Changes"
-          files={unstaged}
-          variant="unstaged"
-          actions={{
-            onStage: stageFiles,
-            onDiscard: discardFiles,
-            onStageAll: () => stageFiles(unstaged.map((f) => f.path)),
-            onDiscardAll: () => discardFiles(unstaged.map((f) => f.path)),
-          }}
-        />
-      )}
+          {unstaged.length > 0 && (
+            <FileSection
+              title="Changes"
+              files={unstaged}
+              variant="unstaged"
+              actions={{
+                onStage: stageFiles,
+                onDiscard: discardFiles,
+                onStageAll: () => stageFiles(unstaged.map((f) => f.path)),
+                onDiscardAll: () => discardFiles(unstaged.map((f) => f.path)),
+              }}
+            />
+          )}
 
-      {untracked.length > 0 && (
-        <FileSection
-          title="Untracked"
-          files={untracked}
-          variant="untracked"
-          actions={{
-            onStage: stageFiles,
-            onDiscard: discardFiles,
-            onStageAll: () => stageFiles(untracked.map((f) => f.path)),
-            onDiscardAll: () => discardFiles(untracked.map((f) => f.path)),
-          }}
-        />
-      )}
+          {untracked.length > 0 && (
+            <FileSection
+              title="Untracked"
+              files={untracked}
+              variant="untracked"
+              actions={{
+                onStage: stageFiles,
+                onDiscard: discardFiles,
+                onStageAll: () => stageFiles(untracked.map((f) => f.path)),
+                onDiscardAll: () => discardFiles(untracked.map((f) => f.path)),
+              }}
+            />
+          )}
 
-      {isClean && !hasSyncable && (
-        <div className="text-xs text-text-muted text-center py-4 opacity-60">
-          Working tree clean
+          {isClean && !hasSyncable && (
+            <div className="text-xs text-text-muted text-center py-4 opacity-60">
+              Working tree clean
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Too Many Files Warning ──────────────────────────────
+
+const MIN_LOADING_DISPLAY_MS = 1500;
+
+function TooManyFilesWarning({
+  count,
+  onAnalyzeGitignore,
+}: {
+  count: number;
+  onAnalyzeGitignore?: () => Promise<void>;
+}) {
+  const [generating, setGenerating] = useState(false);
+
+  const handleClick = useCallback(async () => {
+    if (!onAnalyzeGitignore) return;
+    setGenerating(true);
+    const start = Date.now();
+    try {
+      await onAnalyzeGitignore();
+    } finally {
+      const elapsed = Date.now() - start;
+      const remaining = Math.max(0, MIN_LOADING_DISPLAY_MS - elapsed);
+      setTimeout(() => setGenerating(false), remaining);
+    }
+  }, [onAnalyzeGitignore]);
+
+  return (
+    <div className="rounded bg-sidebar-hover p-3 flex flex-col gap-3">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="w-4 h-4 text-yellow-500 shrink-0 mt-0.5" />
+        <div className="min-w-0">
+          <p className="text-xs text-text-primary font-medium">
+            Too many changed files ({count.toLocaleString()}) to display
+          </p>
+          <p className="text-[11px] text-text-muted mt-1">
+            This often indicates missing .gitignore entries (e.g. node_modules, build outputs).
+          </p>
         </div>
+      </div>
+      {onAnalyzeGitignore && (
+        <button
+          onClick={handleClick}
+          disabled={generating}
+          aria-busy={generating}
+          className={cn(
+            'w-full py-1.5 px-2 rounded text-xs font-medium flex items-center justify-center gap-1.5 transition-colors',
+            generating
+              ? 'bg-sidebar-active text-text-muted cursor-wait'
+              : 'bg-primary hover:bg-primary-hover text-white',
+          )}
+        >
+          {generating ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" aria-hidden />
+          ) : (
+            <Sparkles className="w-3.5 h-3.5 shrink-0" />
+          )}
+          {generating ? 'Generating…' : 'Analyze .gitignore with AI'}
+        </button>
       )}
     </div>
   );
