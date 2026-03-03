@@ -53,7 +53,7 @@ Dashboard code checks `window.apex?.isElectron` to switch behavior:
 | Open fork | `window.open()` (named tab) | `apex.openWindow()` (new window via IPC) |
 | External URLs (ports) | `window.open()` (new tab) | `shell.openExternal()` (system browser) |
 | Open in IDE | code-server in new tab | Native Cursor/VS Code via SSH if detected, else code-server in browser |
-| Projects button in activity bar | Hidden | Shown (navigates to `/`) |
+| Projects button in activity bar | Shown (opens/focuses tab at `/`) | Shown (focuses window at `/` or creates) |
 | Window dragging | N/A | Top bar has `-webkit-app-region: drag` |
 
 See `workdocs/open-in-ide.md` for full details on the IDE detection and SSH remote connection flow.

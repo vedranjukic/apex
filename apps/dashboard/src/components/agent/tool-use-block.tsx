@@ -20,6 +20,7 @@ import {
   Send,
 } from 'lucide-react';
 import type { ContentBlock } from '../../api/client';
+import { cn } from '../../lib/cn';
 import { useChatActions } from './chat-actions-context';
 import { useChatsStore } from '../../stores/tasks-store';
 import { useEditorStore } from '../../stores/editor-store';
@@ -87,17 +88,82 @@ export interface BashItem {
   toolResult?: ContentBlock;
 }
 
-export function BashGroupBlock({ items, hideAfter }: { items: BashItem[]; hideAfter?: number | null }) {
-  const [visible, setVisible] = useState(true);
+/** Extract display text from tool_result content (string or Anthropic array format). */
+export function getToolResultText(block: ContentBlock | undefined): string {
+  if (!block) return '';
+  const c: unknown = block.content;
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) {
+    return (c as Array<{ type?: string; text?: string }>)
+      .filter((part) => part != null && typeof part === 'object')
+      .map((part) => (part.type === 'text' && typeof part.text === 'string' ? part.text : ''))
+      .join('');
+  }
+  return '';
+}
 
-  useEffect(() => {
-    if (hideAfter == null) return; // Stay visible until next message arrives
-    const remaining = Math.max(0, hideAfter - Date.now());
-    const timer = setTimeout(() => setVisible(false), remaining);
-    return () => clearTimeout(timer);
-  }, [hideAfter]);
+function BashItemBlock({
+  command,
+  description,
+  output,
+}: {
+  command: string;
+  description: string | null;
+  output: string;
+}) {
+  const [outputExpanded, setOutputExpanded] = useState(false);
+  const hasOutput = output.length > 0;
 
-  if (items.length === 0 || !visible) return null;
+  const lines = output.split('\n');
+  const last3Lines = lines.slice(-3).join('\n');
+
+  return (
+    <div className="bg-surface-secondary">
+      {/* 1. Description on top */}
+      {description && (
+        <p className="px-3 py-2 text-xs text-text-muted italic">{description}</p>
+      )}
+      {description && <div className="border-t border-border" />}
+
+      {/* 2. Command */}
+      <pre className="px-3 py-2 text-text-primary text-xs font-mono overflow-x-auto leading-relaxed">
+        <code>{command}</code>
+      </pre>
+
+      {/* 3. Separator, collapsible output, toggle */}
+      {hasOutput && (
+        <>
+          <div className="border-t border-border" />
+          {outputExpanded ? (
+            <div
+              className={cn(
+                'overflow-hidden transition-[max-height] duration-200',
+              )}
+            >
+              <pre className="px-3 py-2 text-text-muted text-xs font-mono overflow-x-auto leading-relaxed overflow-y-auto bg-surface max-h-[12.5rem]">
+                <code>{output}</code>
+              </pre>
+            </div>
+          ) : (
+            <pre className="px-3 py-2 text-text-muted text-xs font-mono overflow-x-auto leading-relaxed bg-surface">
+              <code>{last3Lines}</code>
+            </pre>
+          )}
+          <button
+            type="button"
+            onClick={() => setOutputExpanded(!outputExpanded)}
+            className="w-full flex items-center justify-center px-3 py-1.5 bg-surface text-text-secondary text-xs hover:text-text-primary transition-colors border-t border-border"
+          >
+            {outputExpanded ? '△' : '▽'}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+export function BashGroupBlock({ items }: { items: BashItem[] }) {
+  if (items.length === 0) return null;
 
   return (
     <div className="rounded-lg overflow-hidden border border-border">
@@ -113,22 +179,15 @@ export function BashGroupBlock({ items, hideAfter }: { items: BashItem[]; hideAf
           const input = (item.toolUse.input ?? {}) as Input;
           const command = String(input.command ?? '');
           const description = input.description ? String(input.description) : null;
-          const output = item.toolResult?.content ?? '';
+          const output = getToolResultText(item.toolResult);
 
           return (
-            <div key={i} className="bg-surface-secondary">
-              <pre className="px-3 py-2 text-text-primary text-xs font-mono overflow-x-auto leading-relaxed">
-                <code>{command}</code>
-              </pre>
-              {description && (
-                <p className="px-3 pb-1 text-[10px] text-text-muted italic">{description}</p>
-              )}
-              {output && (
-                <pre className="px-3 py-2 border-t border-border text-text-muted text-xs font-mono overflow-x-auto leading-relaxed max-h-40 overflow-y-auto bg-surface">
-                  <code>{output}</code>
-                </pre>
-              )}
-            </div>
+            <BashItemBlock
+              key={i}
+              command={command}
+              description={description}
+              output={output}
+            />
           );
         })}
       </div>
@@ -145,16 +204,19 @@ function BashBlock({ input }: { input: Input }) {
       <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs">
         <TerminalSquare className="w-3.5 h-3.5" />
         <span className="font-medium">Bash</span>
-        {description && (
-          <>
-            <span className="text-text-muted">—</span>
-            <span className="text-text-muted truncate">{description}</span>
-          </>
-        )}
       </div>
-      <pre className="px-3 py-2.5 bg-surface-secondary text-text-primary text-xs font-mono overflow-x-auto leading-relaxed">
-        <code>{command}</code>
-      </pre>
+      <div className="bg-surface-secondary">
+        {/* Description on top */}
+        {description && (
+          <p className="px-3 py-2 text-xs text-text-muted italic">{description}</p>
+        )}
+        {description && <div className="border-t border-border" />}
+
+        {/* Command */}
+        <pre className="px-3 py-2.5 text-text-primary text-xs font-mono overflow-x-auto leading-relaxed">
+          <code>{command}</code>
+        </pre>
+      </div>
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { ScrollText, ChevronDown, ChevronRight, Play, Loader2, Check } from 'luc
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useChatActions } from './chat-actions-context';
+import { useAgentSettingsStore } from '../../stores/agent-settings-store';
 import { BUILD_PROMPT_PREFIX } from '../../stores/plan-store';
 
 interface PlanBlockProps {
@@ -21,6 +22,7 @@ export function PlanBlock({ filename, content, isComplete, wasBuilt, chatStatus 
 
   const handleBuild = useCallback(() => {
     if (!buildDisabled) {
+      useAgentSettingsStore.getState().setMode('agent');
       sendSilentPrompt(`${BUILD_PROMPT_PREFIX}${content}`, 'agent');
     }
   }, [content, buildDisabled, sendSilentPrompt]);

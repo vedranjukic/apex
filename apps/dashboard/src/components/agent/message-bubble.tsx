@@ -1,13 +1,48 @@
-import { useMemo } from 'react';
-import { User, Bot, Terminal, Info, Clock } from 'lucide-react';
+import { useMemo, createContext, useContext, useRef, useEffect } from 'react';
+import { User, Bot, Info, Clock } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Message, ContentBlock } from '../../api/client';
 import { ToolUseBlock, BashGroupBlock, TransientSearchBlock, type BashItem } from './tool-use-block';
 import { PlanBlock } from './plan-block';
 import { MarkdownBlock } from './markdown-block';
-import { usePlanStore, extractTitle, BUILD_PROMPT_PREFIX, PLAN_BLOCK_REGEX, PLAN_BLOCK_START } from '../../stores/plan-store';
+import { usePlanStore, extractTitle, extractPlanBody, BUILD_PROMPT_PREFIX, PLAN_BLOCK_REGEX, PLAN_BLOCK_START } from '../../stores/plan-store';
 import { useChatsStore } from '../../stores/tasks-store';
+
+// ── Plan deduplication (only first agent group shows the plan) ──
+
+const PlanShownContext = createContext<() => boolean>(() => true);
+
+export function PlanShownProvider({
+  chatId,
+  children,
+}: {
+  chatId: string | null;
+  children: React.ReactNode;
+}) {
+  const planShownRef = useRef(false);
+  const prevChatIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevChatIdRef.current !== chatId) {
+      prevChatIdRef.current = chatId;
+      planShownRef.current = false;
+    }
+  }, [chatId]);
+
+  const shouldShowPlanAndMark = useMemo(
+    () => () => {
+      if (planShownRef.current) return false;
+      planShownRef.current = true;
+      return true;
+    },
+    [],
+  );
+  return (
+    <PlanShownContext.Provider value={shouldShowPlanAndMark}>
+      {children}
+    </PlanShownContext.Provider>
+  );
+}
 
 // ── Types for grouped rendering ─────────────────────
 
@@ -29,11 +64,19 @@ export function groupMessages(messages: Message[]): MessageGroup[] {
       groups.push({ type: 'user', message: msg });
       i++;
     } else if (msg.role === 'assistant') {
-      // Collect consecutive assistant messages
+      // Collect consecutive assistant messages plus interleaved tool_result-only user messages
       const agentMsgs: Message[] = [];
-      while (i < messages.length && messages[i].role === 'assistant') {
-        agentMsgs.push(messages[i]);
-        i++;
+      while (i < messages.length) {
+        const m = messages[i];
+        if (m.role === 'assistant') {
+          agentMsgs.push(m);
+          i++;
+        } else if (m.role === 'user' && isToolResultOnly(m)) {
+          agentMsgs.push(m);
+          i++;
+        } else {
+          break;
+        }
       }
 
       // Calculate thinking time: diff between previous message and first agent msg
@@ -104,11 +147,10 @@ function isBuildPrompt(message: Message): boolean {
   return !!firstText && firstText.startsWith(BUILD_PROMPT_PREFIX);
 }
 
-/** User message that is only tool_result (AskUserQuestion answer) - shown in the question block */
+/** User message that only contains tool_result blocks (no user text). Includes AskUserQuestion answers and CLI tool outputs (Bash, etc.). */
 function isToolResultOnly(message: Message): boolean {
-  if (message.role !== 'user' || message.content.length !== 1) return false;
-  const b = message.content[0] as { type?: string };
-  return b.type === 'tool_result';
+  if (message.role !== 'user' || message.content.length === 0) return false;
+  return message.content.every((b) => (b as { type?: string }).type === 'tool_result');
 }
 
 function UserBubble({ message }: { message: Message }) {
@@ -141,43 +183,20 @@ function UserBubble({ message }: { message: Message }) {
 
 const DEDUP_TOOLS = new Set(['TodoWrite', 'AskUserQuestion', 'mcp__terminal-server__ask_user']);
 
-/** Tools that are transient: only shown live, hide after 5s, not rendered on refresh */
-const TRANSIENT_TOOLS = new Set(['Bash', 'Glob', 'Grep']);
+/** Tools that are transient: only shown live, not rendered on refresh (Bash is always rendered) */
+const TRANSIENT_TOOLS = new Set(['Glob', 'Grep']);
 
 type RenderItem =
   | { kind: 'block'; block: ContentBlock }
-  | { kind: 'bash_group'; items: BashItem[]; receivedAt: number; hideAfter: number | null }
+  | { kind: 'bash_group'; items: BashItem[]; receivedAt: number }
   | { kind: 'transient_tool'; block: ContentBlock; receivedAt: number };
 
 /** Message with optional client-side received timestamp (socket only) */
 type MessageWithReceived = Message & { _receivedAt?: number };
 
 /**
- * Get createdAt (ms) of the first message after the one(s) containing the given block ids.
- * Returns null if Bash is in the last message (no next message yet).
- */
-function getNextMessageTime(
-  messages: Message[],
-  blockIds: Set<string>,
-): number | null {
-  let lastIdx = -1;
-  for (let i = 0; i < messages.length; i++) {
-    for (const b of messages[i].content) {
-      const block = b as { id?: string; tool_use_id?: string };
-      const id = block.id ?? block.tool_use_id;
-      if (id && blockIds.has(id)) lastIdx = i;
-    }
-  }
-  if (lastIdx < 0 || lastIdx >= messages.length - 1) return null;
-  const next = messages[lastIdx + 1];
-  return new Date(next.createdAt).getTime();
-}
-
-/**
  * Group consecutive Bash tool_use + tool_result pairs into a single panel.
- * Only includes Bash from messages that have _receivedAt (live from socket).
- * Excludes Bash from historical messages (API load / refresh).
- * hideAfter: when to hide (next message time + 5s), or null if no next message yet.
+ * Includes Bash from both live socket messages and historical (API load / refresh).
  */
 function groupConsecutiveBash(
   blocks: ContentBlock[],
@@ -195,7 +214,6 @@ function groupConsecutiveBash(
     }
   }
 
-  const BASH_HIDE_DELAY_MS = 5_000;
   const out: RenderItem[] = [];
   let bashGroup: BashItem[] = [];
   let bashGroupReceivedAt = 0;
@@ -203,10 +221,7 @@ function groupConsecutiveBash(
 
   const flushBashGroup = () => {
     if (bashGroup.length > 0) {
-      const ids = new Set(bashGroup.flatMap((i) => [i.toolUse.id].filter(Boolean) as string[]));
-      const nextTime = getNextMessageTime(messages, ids);
-      const hideAfter = nextTime ? nextTime + BASH_HIDE_DELAY_MS : null;
-      out.push({ kind: 'bash_group', items: bashGroup, receivedAt: bashGroupReceivedAt, hideAfter });
+      out.push({ kind: 'bash_group', items: bashGroup, receivedAt: bashGroupReceivedAt });
       bashGroup = [];
       bashGroupReceivedAt = 0;
     }
@@ -222,8 +237,7 @@ function groupConsecutiveBash(
       }
     }
     if (block.type === 'tool_use' && block.name === 'Bash' && block.id) {
-      const receivedAt = blockReceivedAt.get(block.id);
-      if (receivedAt == null) continue; // Skip Bash from historical messages
+      const receivedAt = blockReceivedAt.get(block.id) ?? 0;
       const toolResult = resultByToolUseId.get(block.id);
       if (toolResult) consumedResultIds.add(block.id);
       bashGroup.push({ toolUse: block, toolResult });
@@ -234,13 +248,9 @@ function groupConsecutiveBash(
       if (consumedResultIds.has(block.tool_use_id)) continue;
       const toolUse = toolUseById.get(block.tool_use_id);
       if (toolUse?.name === 'Bash') {
-        const receivedAt = blockReceivedAt.get(block.tool_use_id);
-        if (receivedAt == null) continue; // Skip Bash result from historical
+        const receivedAt = blockReceivedAt.get(block.tool_use_id) ?? 0;
         consumedResultIds.add(block.tool_use_id);
-        const ids = new Set([block.tool_use_id]);
-        const nextTime = getNextMessageTime(messages, ids);
-        const hideAfter = nextTime ? nextTime + BASH_HIDE_DELAY_MS : null;
-        out.push({ kind: 'bash_group', items: [{ toolUse, toolResult: block }], receivedAt, hideAfter });
+        out.push({ kind: 'bash_group', items: [{ toolUse, toolResult: block }], receivedAt });
         continue;
       }
     }
@@ -291,15 +301,38 @@ interface DerivedPlan {
 
 const HEADING_RE = /^#{1,3}\s+/m;
 
-/** True if text contains the deterministic ```plan ... ``` block */
+const PLAN_STRUCTURE_INDICATORS = /^#{1,3}\s+(Stack|File Structure|Project Structure|Implementation Steps|Features|Structure|Details)\b/gm;
+
+/** True if text contains ```plan ... ``` block or plan-like structure (Stack, File Structure, etc.) */
 function hasPlanBlock(text: string): boolean {
-  return PLAN_BLOCK_REGEX.test(text);
+  if (PLAN_BLOCK_REGEX.test(text)) return true;
+  const indicators = text.match(PLAN_STRUCTURE_INDICATORS);
+  return (indicators?.length ?? 0) >= 2 && text.length >= 150;
 }
 
-/** Extract plan content from ```plan ... ``` block; returns null if not found */
+/** Extract plan content: prefers ```plan ... ``` (handles nested blocks), fallback to structure-based */
 function extractPlanFromText(text: string): string | null {
-  const match = text.match(PLAN_BLOCK_REGEX);
-  return match && match[1] ? match[1].trim() : null;
+  const fromFence = extractPlanBody(text);
+  if (fromFence) {
+    if (import.meta.env.DEV && fromFence.includes('Project Structure')) {
+      const hasTreeContent = /Project Structure[\s\S]{10,}/.test(fromFence);
+      console.debug('[plan] extracted', fromFence.length, 'chars, Project Structure has content:', hasTreeContent);
+    }
+    return fromFence;
+  }
+
+  // Fallback: detect plan by structure (Stack, File Structure, Project Structure, etc.)
+  const structureMatches = text.match(PLAN_STRUCTURE_INDICATORS);
+  if ((structureMatches?.length ?? 0) < 2 || text.length < 150) return null;
+  const firstHeading = text.search(/(?:^|\n)#{1,3}\s+/m);
+  const start = firstHeading >= 0 ? firstHeading : 0;
+  const preamble = text.slice(0, start).trim();
+  const body = text.slice(start).trim();
+  // Skip short preambles like "Got it. Here's the plan:"
+  if (preamble && preamble.length < 80 && !preamble.includes('\n')) {
+    return body;
+  }
+  return body || text.trim();
 }
 
 
@@ -310,6 +343,7 @@ function AgentGroup({
   messages: Message[];
   thinkingSec: number | null;
 }) {
+  const shouldShowPlanAndMark = useContext(PlanShownContext);
   const chatId = messages[0]?.taskId;
   const storePlan = usePlanStore((s) => chatId ? s.getPlanByChatId(chatId) : undefined);
   const chat = useChatsStore(
@@ -397,7 +431,6 @@ function AgentGroup({
 
     const fullText = textBlocks.map((b) => b.text).join('\n\n');
 
-    // Only detect plan when it uses the deterministic ```plan ... ``` delimiter
     const planBody = extractPlanFromText(fullText);
     if (!planBody) return null;
 
@@ -415,14 +448,17 @@ function AgentGroup({
 
   const planBlocks = useMemo(() => {
     if (!derivedPlan) return null;
+    if (!shouldShowPlanAndMark()) return null; // Dedupe: only first agent group shows plan
 
     type PlanItem =
       | { kind: 'block'; block: ContentBlock }
       | { kind: 'plan' };
 
-    const hasPlanMarker = allBlocks.some(
-      (b) => b.type === 'text' && b.text && hasPlanBlock(b.text),
-    );
+    const fullText = allBlocks
+      .filter((b): b is ContentBlock & { text: string } => b.type === 'text' && !!b.text)
+      .map((b) => b.text)
+      .join('\n\n');
+    const hasPlanMarker = hasPlanBlock(fullText);
 
     const items: PlanItem[] = [];
     let planInserted = false;
@@ -437,25 +473,29 @@ function AgentGroup({
       if (hasPlanMarker) {
         const text = block.text ?? '';
         const planStartIdx = text.indexOf(PLAN_BLOCK_START);
-        if (planStartIdx < 0) {
-          items.push({ kind: 'block', block });
-        } else {
+        if (planStartIdx >= 0) {
           const preamble = text.slice(0, planStartIdx).trim();
           if (preamble) {
             items.push({ kind: 'block', block: { ...block, text: preamble } });
           }
           items.push({ kind: 'plan' });
           planInserted = true;
+        } else if (hasPlanBlock(text)) {
+          // Structure-based plan: skip this block, add plan once
+          items.push({ kind: 'plan' });
+          planInserted = true;
+        } else {
+          items.push({ kind: 'block', block });
         }
       }
     }
 
-    if (!planInserted) {
+    if (!planInserted && hasPlanMarker) {
       items.push({ kind: 'plan' });
     }
 
     return items;
-  }, [derivedPlan, allBlocks]);
+  }, [derivedPlan, allBlocks, shouldShowPlanAndMark]);
 
   return (
     <div className="bg-surface-chat/60">
@@ -488,13 +528,44 @@ function AgentGroup({
                 : <ContentBlockView key={i} block={item.block} />
             )
           ) : (
-            groupConsecutiveBash(allBlocks, blockReceivedAt, messages).map((item, i) =>
-              item.kind === 'bash_group'
-                ? <BashGroupBlock key={i} items={item.items} hideAfter={item.hideAfter} />
-                : item.kind === 'transient_tool'
-                  ? <TransientSearchBlock key={i} block={item.block} receivedAt={item.receivedAt} />
-                  : <ContentBlockView key={i} block={item.block} />
-            )
+            (() => {
+              const fullText = allBlocks
+                .filter((b): b is ContentBlock & { text: string } => b.type === 'text' && !!b.text)
+                .map((b) => b.text)
+                .join('\n\n');
+              const fallbackPlanBody = hasPlanBlock(fullText) ? extractPlanFromText(fullText) : null;
+
+              let planRendered = false;
+              return groupConsecutiveBash(allBlocks, blockReceivedAt, messages).map((item, i) => {
+                if (item.kind === 'bash_group') {
+                  return <BashGroupBlock key={i} items={item.items} />;
+                }
+                if (item.kind === 'transient_tool') {
+                  return <TransientSearchBlock key={i} block={item.block} receivedAt={item.receivedAt} />;
+                }
+                const block = item.block;
+                if (block.type === 'text' && block.text && hasPlanBlock(block.text)) {
+                  if (planRendered) return null; // skip duplicate plan blocks
+                  if (fallbackPlanBody) {
+                    planRendered = true;
+                    const title = extractTitle(fallbackPlanBody);
+                    const ts = new Date(messages[0]?.createdAt ?? 0).toISOString().replace(/[-:]/g, '').slice(0, 13);
+                    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
+                    return (
+                      <PlanBlock
+                        key={i}
+                        filename={`${slug}_${ts}.md`}
+                        content={fallbackPlanBody}
+                        isComplete={true}
+                        wasBuilt={wasBuilt}
+                        chatStatus={chatStatus}
+                      />
+                    );
+                  }
+                }
+                return <ContentBlockView key={i} block={block} />;
+              });
+            })()
           )}
         </div>
       </div>
@@ -581,19 +652,7 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
   }
 
   if (block.type === 'tool_result') {
-    return (
-      <div className="border border-border rounded-lg p-3 bg-surface text-sm">
-        <div className="flex items-center gap-2 text-xs font-medium text-text-secondary mb-1">
-          <Terminal className="w-3.5 h-3.5" />
-          Tool Result
-        </div>
-        {block.content && (
-          <pre className="text-xs text-text-muted overflow-x-auto mt-1 max-h-40 overflow-y-auto">
-            {block.content}
-          </pre>
-        )}
-      </div>
-    );
+    return null;
   }
 
   return null;

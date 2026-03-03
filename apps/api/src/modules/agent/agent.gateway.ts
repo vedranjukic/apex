@@ -1148,6 +1148,20 @@ export class AgentGateway
           });
         }
 
+        // Persist tool results (Bash output, etc.) from CLI stream so they survive refresh and are available on all devices
+        if (data.type === 'user' && data.message?.content?.length) {
+          const hasToolResult = data.message.content.some(
+            (b: { type?: string }) => b?.type === 'tool_result',
+          );
+          if (hasToolResult) {
+            await this.chatsService.addMessage(chatId, {
+              role: 'user',
+              content: data.message.content,
+              metadata: null,
+            });
+          }
+        }
+
         if (data.type === 'result') {
           this.logger.log(
             `Agent completed chat ${chatId}: ${data.is_error ? 'error' : 'success'}`,

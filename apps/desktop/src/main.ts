@@ -264,13 +264,17 @@ ipcMain.on('open-window', (_event, urlPath: string) => {
 });
 
 ipcMain.on('focus-or-open-window', (_event, urlPath: string) => {
-  const origin = `http://127.0.0.1:${serverPort}`;
-  const targetUrl = `${origin}${urlPath}`;
+  const targetPath = urlPath.startsWith('/') ? urlPath : `/${urlPath}`;
   for (const win of BrowserWindow.getAllWindows()) {
-    if (win.webContents.getURL().startsWith(targetUrl)) {
-      if (win.isMinimized()) win.restore();
-      win.focus();
-      return;
+    try {
+      const winPath = new URL(win.webContents.getURL()).pathname;
+      if (winPath === targetPath) {
+        if (win.isMinimized()) win.restore();
+        win.focus();
+        return;
+      }
+    } catch {
+      // ignore malformed URLs
     }
   }
   createWindow(urlPath);

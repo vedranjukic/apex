@@ -6,7 +6,10 @@ export const BUILD_PROMPT_PREFIX = 'Execute the following plan:\n\n';
 export const PLAN_BLOCK_START = '```plan';
 export const PLAN_BLOCK_END = '```';
 
-/** Regex to extract plan content from fenced ```plan ... ``` blocks */
+/** Regex to extract plan content from fenced ```plan ... ``` blocks.
+ * Note: The standard *? non-greedy match stops at the first ```, which truncates
+ * content when the plan has nested code blocks (e.g. Project Structure directory tree).
+ * extractPlanBody uses a custom parser to handle nesting. */
 export const PLAN_BLOCK_REGEX = /```plan\s*\n?([\s\S]*?)```/;
 
 export interface Plan {
@@ -34,14 +37,19 @@ interface PlanState {
 
 /**
  * Extract plan content from text. Uses the deterministic ```plan ... ``` delimiter.
+ * Handles nested code blocks (e.g. Project Structure directory tree in ```) by
+ * using the LAST ``` as the closing delimiter; the regex *? would truncate at the first.
  * Returns null if no plan block is found.
  */
-function extractPlanBody(raw: string): string | null {
-  const match = raw.match(PLAN_BLOCK_REGEX);
-  if (match && match[1]) {
-    return match[1].trim();
-  }
-  return null;
+export function extractPlanBody(raw: string): string | null {
+  const startMarker = '```plan';
+  const idx = raw.indexOf(startMarker);
+  if (idx < 0) return null;
+
+  const afterStart = raw.slice(idx + startMarker.length).replace(/^\s*\n?/, '');
+  const lastFence = afterStart.lastIndexOf('```');
+  const content = lastFence >= 0 ? afterStart.slice(0, lastFence) : afterStart;
+  return content.trim() || null;
 }
 
 export function extractTitle(markdown: string): string {
