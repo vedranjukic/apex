@@ -362,7 +362,7 @@ async function handleRequest(request) {
         }
 
       } else if (toolName === "get_plan_format_instructions") {
-        const instruction = "When presenting your implementation plan, you MUST wrap the entire plan in fenced code blocks with the language tag \\"plan\\". Use this exact format:\\n\\n\\`\\`\\`plan\\n[Your plan content here — use markdown for structure, headings, lists, etc.]\\n\\`\\`\\`\\n\\nThe UI detects plans ONLY when they use this exact delimiter. Do not use \\`\\`\\`md or any other tag.";
+        const instruction = "When presenting your implementation plan, you MUST wrap the entire plan in fenced code blocks with the language tag \\"plan\\". Use this exact format:\\n\\n" + String.fromCharCode(96,96,96) + "plan\\n[Your plan content here - use markdown for structure, headings, lists, etc. Include a File Structure section with the actual directory tree or list of files to create - do not leave it empty.]\\n" + String.fromCharCode(96,96,96) + "\\n\\nThe UI detects plans ONLY when they use this exact delimiter. Do not use " + String.fromCharCode(96,96,96) + "md or any other tag.";
         sendResponse(id, {
           content: [{ type: "text", text: instruction }],
         });

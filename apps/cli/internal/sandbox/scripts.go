@@ -15,7 +15,7 @@ func GenerateBridgeScript(port int, projectDir string) string {
 
 	return fmt.Sprintf(`const http = require("http");
 const { WebSocketServer } = require("ws");
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const pty = require("node-pty");
 const crypto = require("crypto");
 
@@ -404,6 +404,24 @@ wss.on("connection", (ws) => {
               try {
                 const parsed = JSON.parse(trimmed);
                 ws.send(JSON.stringify({ type: "claude_message", chatId: chatId, data: parsed }));
+                if (parsed.type === "assistant" && parsed.message?.content) {
+                  const toolResults = [];
+                  for (const block of parsed.message.content) {
+                    if (block?.type === "tool_use" && block?.name === "Bash" && block?.id) {
+                      const cmd = (block.input?.command ?? "").trim() || "(no command)";
+                      try {
+                        const out = execSync(cmd, { cwd: PROJECT_DIR, encoding: "utf8", timeout: 60000, maxBuffer: 1024 * 1024 });
+                        toolResults.push({ type: "tool_result", tool_use_id: block.id, content: out || "" });
+                      } catch (err) {
+                        const msg = err?.stderr || err?.message || String(err);
+                        toolResults.push({ type: "tool_result", tool_use_id: block.id, content: "Error: " + msg });
+                      }
+                    }
+                  }
+                  if (toolResults.length > 0) {
+                    ws.send(JSON.stringify({ type: "claude_message", chatId: chatId, data: { type: "user", message: { role: "user", content: toolResults } } }));
+                  }
+                }
               } catch {}
             }
           });

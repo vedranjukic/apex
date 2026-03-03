@@ -1,7 +1,7 @@
 import { useEffect, useRef, useMemo, useCallback } from 'react';
 import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo, RotateCcw } from 'lucide-react';
 import { useChatsStore } from '../../stores/tasks-store';
-import { groupMessages, MessageGroupView } from './message-bubble';
+import { groupMessages, MessageGroupView, PlanShownProvider } from './message-bubble';
 import { PromptInput, type PromptInputHandle } from './prompt-input';
 import { ChatActionsContext } from './chat-actions-context';
 import type { CodeSelection } from '../../stores/editor-store';
@@ -213,11 +213,13 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
               No messages yet
             </div>
           ) : (
-            <div className="divide-y divide-border">
-              {groups.map((group, i) => (
-                <MessageGroupView key={i} group={group} />
-              ))}
-            </div>
+            <PlanShownProvider chatId={activeChatId}>
+              <div className="divide-y divide-border">
+                {groups.map((group, i) => (
+                  <MessageGroupView key={i} group={group} />
+                ))}
+              </div>
+            </PlanShownProvider>
           )}
         </div>
 

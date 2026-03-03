@@ -31,6 +31,7 @@ export interface FileTreeActions {
   moveFile: (sourcePath: string, destPath: string) => void;
   readFile: (path: string) => void;
   writeFile: (path: string, content: string) => void;
+  refreshAll: () => void;
 }
 
 interface FileTreeProps {

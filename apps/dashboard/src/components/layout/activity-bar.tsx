@@ -1,4 +1,3 @@
-import { useNavigate } from 'react-router-dom';
 import { FolderOpen, GitBranch, GitFork, Search, Settings, LayoutGrid, type LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/cn';
 
@@ -8,8 +7,6 @@ interface ActivityBarProps {
   active: ActivityCategory | null;
   onChange: (category: ActivityCategory) => void;
 }
-
-const isElectron = !!(window as any).apex?.isElectron;
 
 interface ActivityItem {
   id: ActivityCategory;
@@ -43,7 +40,7 @@ export function ActivityBar({ active, onChange }: ActivityBarProps) {
       </div>
 
       <div className="mt-auto flex flex-col items-center gap-1">
-        {isElectron && <ProjectsButton />}
+        <ProjectsButton />
         {bottomItems.map((item) => (
           <ActivityButton
             key={item.id}
@@ -87,10 +84,17 @@ function ActivityButton({
 }
 
 function ProjectsButton() {
-  const navigate = useNavigate();
+  const handleClick = () => {
+    const apex = (window as any).apex;
+    if (apex?.focusOrOpenWindow) {
+      apex.focusOrOpenWindow('/');
+    } else {
+      window.open('/', 'project-list');
+    }
+  };
   return (
     <button
-      onClick={() => navigate('/')}
+      onClick={handleClick}
       title="Projects"
       className="relative w-10 h-10 flex items-center justify-center rounded-lg transition-colors text-gray-500 hover:text-gray-300 hover:bg-activity-bar-hover"
     >

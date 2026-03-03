@@ -34,7 +34,24 @@ export function useAgentSocket(projectId: string | undefined) {
     });
 
     socket.on('agent_message', (data: any) => {
-      console.log('[ws] agent_message:', data.message?.type);
+      if (import.meta.env.DEV) {
+        const msg = data.message;
+        console.log('[ws] agent_message:', msg?.type, { chatId: data.chatId, ...msg });
+        const content = msg?.message?.content ?? msg?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block?.type === 'text' && block.text) {
+              console.log('[ws]   text:', block.text.slice(0, 300) + (block.text.length > 300 ? '...' : ''));
+            }
+            if (block?.type === 'tool_use') {
+              console.log('[ws]   tool_use:', block.name, block.input);
+            }
+            if (block?.type === 'tool_result') {
+              console.log('[ws]   tool_result:', block.tool_use_id, String(block.content ?? '').slice(0, 150));
+            }
+          }
+        }
+      }
       if (!data.message) return;
       const msg = data.message;
 
@@ -48,6 +65,23 @@ export function useAgentSocket(projectId: string | undefined) {
           createdAt: new Date().toISOString(),
         });
         return;
+      }
+
+      if (msg.type === 'user' && msg.message?.content?.length) {
+        const hasToolResult = msg.message.content.some(
+          (b: { type?: string }) => b?.type === 'tool_result',
+        );
+        if (hasToolResult) {
+          addMessage({
+            id: msg.uuid || crypto.randomUUID(),
+            taskId: data.chatId,
+            role: 'user',
+            content: msg.message.content,
+            metadata: null,
+            createdAt: new Date().toISOString(),
+            _receivedAt: Date.now(),
+          } as any);
+        }
       }
 
       if (msg.type === 'assistant' && msg.message?.content) {

@@ -1,4 +1,4 @@
-import { Settings, Palette, Check } from 'lucide-react';
+import { Settings, Palette, Check, RefreshCw } from 'lucide-react';
 import type { Socket } from 'socket.io-client';
 import type { ActivityCategory } from './activity-bar';
 import { FileTree, type FileTreeActions } from '../explorer/file-tree';
@@ -30,7 +30,7 @@ interface SidePanelProps {
 export function SidePanel({ category, projectId, fileActions, gitActions, searchFiles, readFile, socket, sendPrompt }: SidePanelProps) {
   return (
     <div className="w-60 bg-sidebar text-panel-text flex flex-col shrink-0 h-full border-r border-panel-border">
-      <PanelHeader category={category} />
+      <PanelHeader category={category} fileActions={fileActions} />
       <div className="flex-1 overflow-y-auto px-3 py-2 min-h-0">
         <PanelContent category={category} projectId={projectId} fileActions={fileActions} gitActions={gitActions} searchFiles={searchFiles} readFile={readFile} socket={socket} sendPrompt={sendPrompt} />
       </div>
@@ -38,7 +38,7 @@ export function SidePanel({ category, projectId, fileActions, gitActions, search
   );
 }
 
-function PanelHeader({ category }: { category: ActivityCategory }) {
+function PanelHeader({ category, fileActions }: { category: ActivityCategory; fileActions: FileTreeActions }) {
   const titles: Record<ActivityCategory, string> = {
     explorer: 'Explorer',
     git: 'Source Control',
@@ -48,8 +48,19 @@ function PanelHeader({ category }: { category: ActivityCategory }) {
   };
 
   return (
-    <div className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-panel-text-muted select-none">
-      {titles[category]}
+    <div className="flex items-center px-4 py-3 select-none">
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-panel-text-muted flex-1">
+        {titles[category]}
+      </span>
+      {category === 'explorer' && (
+        <button
+          onClick={() => fileActions.refreshAll()}
+          className="w-5 h-5 flex items-center justify-center rounded text-panel-text-muted hover:text-panel-text hover:bg-sidebar-hover transition-colors"
+          title="Refresh Explorer"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+        </button>
+      )}
     </div>
   );
 }

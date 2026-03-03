@@ -3,6 +3,9 @@ import type { Socket } from 'socket.io-client';
 import { useFileTreeStore, type FileEntry } from '../stores/file-tree-store';
 import { useEditorStore } from '../stores/editor-store';
 
+/** How often to re-fetch the root listing as a safety net (ms) */
+const ROOT_POLL_INTERVAL_MS = 30_000;
+
 export function useFileTreeSocket(
   projectId: string | undefined,
   socketRef: { current: Socket | null },
@@ -177,5 +180,30 @@ export function useFileTreeSocket(
     [socketRef],
   );
 
-  return { requestListing, createFile, renameFile, deleteFile, moveFile, readFile, writeFile };
+  const refreshAll = useCallback(() => {
+    const socket = socketRef.current;
+    if (!socket?.connected || !boundProjectId.current) return;
+    const { cache, rootPath } = useFileTreeStore.getState();
+    const dirs = rootPath ? [rootPath, ...Object.keys(cache)] : Object.keys(cache);
+    const seen = new Set<string>();
+    for (const dir of dirs) {
+      if (seen.has(dir)) continue;
+      seen.add(dir);
+      invalidate(dir);
+      socket.emit('file_list', { projectId: boundProjectId.current, path: dir });
+    }
+  }, [socketRef, invalidate]);
+
+  // Periodic root-directory poll as a safety net
+  useEffect(() => {
+    const id = setInterval(() => {
+      const socket = socketRef.current;
+      const root = useFileTreeStore.getState().rootPath;
+      if (!socket?.connected || !boundProjectId.current || !root) return;
+      socket.emit('file_list', { projectId: boundProjectId.current, path: root });
+    }, ROOT_POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [socketRef]);
+
+  return { requestListing, createFile, renameFile, deleteFile, moveFile, readFile, writeFile, refreshAll };
 }

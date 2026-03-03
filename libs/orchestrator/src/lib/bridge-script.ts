@@ -8,7 +8,7 @@ export function getBridgeScript(port: number, projectDir?: string): string {
   const safeProjDir = projectDir ? projectDir.replace(/"/g, '\\"') : '';
   return `const http = require("http");
 const { WebSocketServer } = require("ws");
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const pty = require("node-pty");
 const crypto = require("crypto");
 
@@ -106,9 +106,12 @@ const path = require("path");
 let inotifyProc = null;
 const changedDirs = new Set();
 let debounceTimer = null;
+let watcherRestartDelay = 1000;
+const WATCHER_MAX_RESTART_DELAY = 30000;
+let watcherFatalError = false;
 
 function startFileWatcher() {
-  if (inotifyProc) return;
+  if (inotifyProc || watcherFatalError) return;
   try {
     inotifyProc = spawn("inotifywait", [
       "-mr", "--format", "%w", "-e", "create,delete,move,modify",
@@ -136,18 +139,25 @@ function startFileWatcher() {
     });
 
     inotifyProc.on("exit", (code) => {
-      log("\\u{1F441}", "inotifywait exited with code " + code);
+      log("\\u{1F441}", "inotifywait exited with code " + code + ", restarting in " + watcherRestartDelay + "ms");
       inotifyProc = null;
+      setTimeout(() => {
+        watcherRestartDelay = Math.min(watcherRestartDelay * 2, WATCHER_MAX_RESTART_DELAY);
+        startFileWatcher();
+      }, watcherRestartDelay);
     });
 
     inotifyProc.on("error", (err) => {
       log("\\u{274C}", "File watcher error: " + err.message + " — inotify-tools not installed, file watching disabled");
       inotifyProc = null;
+      watcherFatalError = true;
     });
 
+    watcherRestartDelay = 1000;
     log("\\u{1F441}", "File watcher (inotifywait) started for " + PROJECT_DIR);
   } catch (e) {
     log("\\u{274C}", "File watcher failed: " + e.message + " — is inotify-tools installed?");
+    watcherFatalError = true;
   }
 }
 
@@ -435,7 +445,7 @@ wss.on("connection", (ws) => {
 
         if (agentMode === "plan") {
           claudeArgs.push("--disallowedTools", "AskUserQuestion,Edit,Write,MultiEdit");
-          claudeArgs.push("--append-system-prompt", "You are in Plan mode. Analyze the request and produce a detailed plan. You CANNOT create or edit files. Only use read-only tools to explore the codebase. When presenting your plan, you MUST wrap the entire plan in fenced code blocks with the language tag \\"plan\\". Use this exact format:\\n\\n\\`\\`\\`plan\\n[Your plan content — use markdown for structure]\\n\\`\\`\\`\\n\\nThe UI detects plans ONLY when they use this exact delimiter. You may call get_plan_format_instructions for the full specification.");
+          claudeArgs.push("--append-system-prompt", "You are in Plan mode. Analyze the request and produce a detailed plan. You CANNOT create or edit files. Only use read-only tools to explore the codebase. When presenting your plan, you MUST wrap the entire plan in fenced code blocks with the language tag \\"plan\\". Use this exact format:\\n\\n" + String.fromCharCode(96,96,96) + "plan\\n[Your plan content - use markdown. Include a File Structure section with the actual directory tree or list of files to create - do not leave it empty.]\\n" + String.fromCharCode(96,96,96) + "\\n\\nThe UI detects plans ONLY when they use this exact delimiter. You may call get_plan_format_instructions for the full specification.");
         } else if (agentMode === "ask") {
           claudeArgs.push("--disallowedTools", "AskUserQuestion,Edit,Write,MultiEdit,Bash");
           claudeArgs.push("--append-system-prompt", "You are in Ask mode. Only answer the question using read-only tools. You CANNOT create, edit, or write files, or run shell commands.");
@@ -474,6 +484,24 @@ wss.on("connection", (ws) => {
               try {
                 const parsed = JSON.parse(trimmed);
                 ws.send(JSON.stringify({ type: "claude_message", chatId: chatId, data: parsed }));
+                if (parsed.type === "assistant" && parsed.message?.content) {
+                  const toolResults = [];
+                  for (const block of parsed.message.content) {
+                    if (block?.type === "tool_use" && block?.name === "Bash" && block?.id) {
+                      const cmd = (block.input?.command ?? "").trim() || "(no command)";
+                      try {
+                        const out = execSync(cmd, { cwd: PROJECT_DIR, encoding: "utf8", timeout: 60000, maxBuffer: 1024 * 1024 });
+                        toolResults.push({ type: "tool_result", tool_use_id: block.id, content: out || "" });
+                      } catch (err) {
+                        const msg = err?.stderr || err?.message || String(err);
+                        toolResults.push({ type: "tool_result", tool_use_id: block.id, content: "Error: " + msg });
+                      }
+                    }
+                  }
+                  if (toolResults.length > 0) {
+                    ws.send(JSON.stringify({ type: "claude_message", chatId: chatId, data: { type: "user", message: { role: "user", content: toolResults } } }));
+                  }
+                }
               } catch {}
             }
           });
