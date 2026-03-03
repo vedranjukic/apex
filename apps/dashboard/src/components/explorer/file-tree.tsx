@@ -242,10 +242,10 @@ export function FileTree({ projectId, actions }: FileTreeProps) {
 
   return (
     <>
+      <div className="flex-1 min-h-full" onContextMenu={handleContainerContext}>
       <div
         {...tree.getContainerProps()}
-        className="text-[13px] select-none outline-none min-h-[200px]"
-        onContextMenu={handleContainerContext}
+        className="text-[13px] select-none outline-none"
       >
         {tree.getItems().map((item) => {
           const data = item.getItemData();
@@ -339,6 +339,7 @@ export function FileTree({ projectId, actions }: FileTreeProps) {
             />
           </div>
         )}
+      </div>
       </div>
 
       {contextMenu && (
