@@ -20,9 +20,10 @@ interface LeftSidebarProps {
   readFile: (path: string) => void;
   socket: { current: Socket | null };
   sendPrompt: (chatId: string, prompt: string, mode?: string, model?: string) => void;
+  onAnalyzeGitignore?: (prompt: string) => Promise<void>;
 }
 
-export function LeftSidebar({ projectId, fileActions, gitActions, searchFiles, readFile, socket, sendPrompt }: LeftSidebarProps) {
+export function LeftSidebar({ projectId, fileActions, gitActions, searchFiles, readFile, socket, sendPrompt, onAnalyzeGitignore }: LeftSidebarProps) {
   const active = usePanelsStore((s) => s.activeCategory);
   const panelOpen = usePanelsStore((s) => s.leftSidebarOpen);
   const setPanelOpen = usePanelsStore((s) => s.setLeftSidebar);
@@ -44,7 +45,7 @@ export function LeftSidebar({ projectId, fileActions, gitActions, searchFiles, r
     <div className="flex h-full shrink-0">
       <ActivityBar active={panelOpen ? active : null} onChange={handleSelect} />
       {panelOpen && (
-        <SidePanel category={active} projectId={projectId} fileActions={fileActions} gitActions={gitActions} searchFiles={searchFiles} readFile={readFile} socket={socket} sendPrompt={sendPrompt} />
+        <SidePanel category={active} projectId={projectId} fileActions={fileActions} gitActions={gitActions} searchFiles={searchFiles} readFile={readFile} socket={socket} sendPrompt={sendPrompt} onAnalyzeGitignore={onAnalyzeGitignore} />
       )}
     </div>
   );

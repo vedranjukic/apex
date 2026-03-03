@@ -34,6 +34,7 @@ export function ProjectPage() {
   const gitActions = useGitSocket(projectId, socket);
   const { requestPreviewUrl } = usePortsSocket(projectId, socket);
   const addMessage = useChatsStore((s) => s.addMessage);
+  const createChat = useChatsStore((s) => s.createChat);
   const resetEditor = useEditorStore((s) => s.reset);
   const pollRef = useRef<ReturnType<typeof setInterval>>();
   const [provisionMsg, setProvisionMsg] = useState<string | null>(null);
@@ -129,6 +130,15 @@ export function ProjectPage() {
     [executeChat],
   );
 
+  const handleAnalyzeGitignore = useCallback(
+    async (prompt: string) => {
+      if (!projectId) return;
+      const chat = await createChat(projectId, { prompt });
+      executeChat(chat.id, 'agent');
+    },
+    [projectId, createChat, executeChat],
+  );
+
   if (loading) {
     return (
       <AppShell>
@@ -154,7 +164,7 @@ export function ProjectPage() {
   return (
     <AppShell
       projectName={project.name}
-      leftSidebar={<LeftSidebar projectId={projectId} fileActions={fileActions} gitActions={gitActions} searchFiles={searchFiles} readFile={fileActions.readFile} socket={socket} sendPrompt={sendPrompt} />}
+      leftSidebar={<LeftSidebar projectId={projectId} fileActions={fileActions} gitActions={gitActions} searchFiles={searchFiles} readFile={fileActions.readFile} socket={socket} sendPrompt={sendPrompt} onAnalyzeGitignore={handleAnalyzeGitignore} />}
       sidebar={<Sidebar projectId={projectId} />}
       terminalPanel={
         <TerminalPanel

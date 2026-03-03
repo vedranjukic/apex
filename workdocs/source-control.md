@@ -13,7 +13,8 @@
 | **Gateway** | `apps/api/src/modules/agent/agent.gateway.ts` | Socket.io handlers for `git_status`, `git_stage`, `git_unstage`, `git_discard`, `git_commit`, `git_push`, `git_pull`, `git_branches`, `git_create_branch`, `git_checkout` |
 | **Zustand store** | `apps/dashboard/src/stores/git-store.ts` | `useGitStore` — branch, staged/unstaged/untracked/conflicted arrays, branches list, optimistic actions, stable merge |
 | **Socket hook** | `apps/dashboard/src/hooks/use-git-socket.ts` | `useGitSocket` — polls `git_status` every 5s, exposes action callbacks including branch operations |
-| **UI component** | `apps/dashboard/src/components/source-control/source-control-panel.tsx` | Full panel: commit input, action button, file sections, AI generate button |
+| **Config** | `apps/dashboard/src/lib/git-source-control-config.ts` | `getGitFilesDisplayLimit()` — max files to display (default 100, overridable via `localStorage.git_files_display_limit`) |
+| **UI component** | `apps/dashboard/src/components/source-control/source-control-panel.tsx` | Full panel: commit input, action button, file sections, AI generate button, too-many-files warning |
 | **Branch picker** | `apps/dashboard/src/components/layout/branch-picker.tsx` | Dropdown from status bar: branch commands (create, create from, checkout detached) + scrollable branch list |
 | **Status bar** | `apps/dashboard/src/components/layout/project-status-bar.tsx` | Bottom bar: project name, clickable git branch (opens branch picker), sync status (refresh + ahead/behind counts), sandbox status, VS Code button |
 | **Wiring** | `apps/dashboard/src/pages/project-page.tsx` | Creates `useGitSocket` hook, passes actions to status bar + left sidebar |
@@ -115,9 +116,7 @@ The `SourceControlPanel` renders (top to bottom):
    - "Commit All" when only unstaged/untracked changes (uses `stageAll` flag on backend)
    - "Sync Changes N↑ M↓" when clean with ahead/behind
    - Disabled "No Changes" when tree is clean
-4. **Collapsible file sections** — Merge Conflicts, Staged Changes, Changes, Untracked
-   - Section headers have bulk action buttons (stage all, unstage all, discard all)
-   - Per-file rows show: filename, relative path, status badge (M/A/D/R/U/C), hover action buttons (+/-/undo)
+4. **File sections or Too-Many-Files warning** — When total changed files (staged + unstaged + untracked + conflicted) exceed the display limit (default 100), the panel shows a warning instead of the file list to prevent UI freezes. The warning offers "Analyze .gitignore with AI" to create a new agent chat that analyzes sample paths and creates/updates `.gitignore` (e.g. when `node_modules` is not ignored). The limit is configurable via `localStorage.git_files_display_limit`. When under the limit, collapsible file sections render (Merge Conflicts, Staged Changes, Changes, Untracked) with bulk actions and per-file rows (filename, path, status badge, hover actions).
 
 ---
 
@@ -144,6 +143,20 @@ Next to the branch name in the status bar, a sync button shows (VS Code-style):
 The `ahead`/`behind` counts come from `useGitStore` (updated every 5s by `git_status` polling). Clicking the button triggers pull (if behind), push (if ahead), or pull (if fully synced, to check for updates).
 
 The branch label in the status bar reads from `useGitStore.branch` as the primary source (stable across polling cycles), falling back to `info.gitBranch` from `useProjectInfoSocket`, then `project.gitRepo`. This prevents flicker caused by `useProjectInfoSocket` resetting `gitBranch` to `null` during effect cleanup.
+
+---
+
+## Large File Count Handling
+
+When the total number of changed files exceeds `getGitFilesDisplayLimit()` (default 100), the panel does not render the file list to avoid freezes. Instead it shows a `TooManyFilesWarning` with:
+
+- Count of changed files
+- Explanation that missing `.gitignore` entries are a common cause (e.g. `node_modules`, build outputs)
+- "Analyze .gitignore with AI" button
+
+Clicking the button builds a prompt from sample path prefixes (up to 30 unique top-level patterns), creates a new chat via `createChat`, and executes it in agent mode. The agent reads `.gitignore` if present, identifies patterns to ignore from the sample paths, and creates/updates `.gitignore` with common exclusions.
+
+**Config**: `apps/dashboard/src/lib/git-source-control-config.ts` exports `getGitFilesDisplayLimit()`. Users can override via `localStorage.setItem('git_files_display_limit', '200')` (or any positive number).
 
 ---
 
