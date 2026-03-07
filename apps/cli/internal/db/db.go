@@ -224,6 +224,15 @@ func (d *DB) UpdateChatSessionID(id, sessionID string) error {
 	return err
 }
 
+func (d *DB) UpdateChatTitle(id, title string) error {
+	if len(title) > 100 {
+		title = title[:100] + "…"
+	}
+	now := nowISO()
+	_, err := d.db.Exec(`UPDATE tasks SET title = ?, updatedAt = ? WHERE id = ?`, title, now, id)
+	return err
+}
+
 func (d *DB) DeleteChat(id string) error {
 	_, err := d.db.Exec(`DELETE FROM tasks WHERE id = ?`, id)
 	return err

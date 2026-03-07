@@ -134,11 +134,12 @@ func (m *Manager) Connect(ctx context.Context, sandboxID string) error {
 }
 
 // SendPrompt sends a prompt to the Claude process in the sandbox.
-func (m *Manager) SendPrompt(chatID, prompt, sessionID string) error {
+// mode is "agent", "plan", or "ask"; empty defaults to "agent".
+func (m *Manager) SendPrompt(chatID, prompt, sessionID, mode string) error {
 	if m.bridge == nil {
 		return fmt.Errorf("not connected to bridge")
 	}
-	return m.bridge.sendPrompt(chatID, prompt, sessionID)
+	return m.bridge.sendPrompt(chatID, prompt, sessionID, mode)
 }
 
 // Messages returns the channel of incoming bridge messages.

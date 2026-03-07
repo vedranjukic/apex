@@ -20,6 +20,9 @@
     },
     {
       "path": "./libs/orchestrator"
+    },
+    {
+      "path": "./apps/cli-e2e"
     }
   ]
 }

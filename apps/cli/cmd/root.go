@@ -36,9 +36,11 @@ Quick start:
   apex create my-project --git-repo URL       Create from a git repo
   apex cmd my-project 8d300c0a "add tests"    Send prompt to existing chat
   apex cmd my-project 8d300c0a /status        Run a slash command
-  apex project list                           List all projects`,
+  apex project list                           List all projects
+  apex dashboard                              Interactive projects & chats overview`,
 	Version: Version,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		config.LoadDotEnv()
 		dbPath := config.ResolveDBPath(cfgDBPath)
 
 		database, err := db.Open(dbPath)
@@ -56,7 +58,7 @@ Quick start:
 		settings, _ := database.GetAllSettings()
 		cfg = config.FromSettings(dbPath, settings)
 
-		if cmd.Name() == "configure" {
+		if cmd.Name() == "configure" || cmd.Name() == "dashboard" {
 			return nil
 		}
 
