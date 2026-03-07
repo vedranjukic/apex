@@ -1,7 +1,12 @@
 /* eslint-disable */
-import axios from 'axios';
+const path = require('path');
+const { config } = require('dotenv');
+const axios = require('axios');
 
-module.exports = async function() {
+// Load .env from workspace root for DAYTONA_API_KEY, ANTHROPIC_API_KEY, etc.
+config({ path: path.join(process.cwd(), '.env') });
+
+module.exports = async function () {
   // Configure axios for tests to use.
   const host = process.env.HOST ?? 'localhost';
   const port = process.env.PORT ?? '6000';

@@ -21,7 +21,8 @@
       "settings": {
         "editor.defaultFormatter": "esbenp.prettier-vscode",
         "editor.formatOnSave": true,
-        "typescript.tsdk": "node_modules/typescript/lib"
+        "typescript.tsdk": "node_modules/typescript/lib",
+        "remote.containers.copyGitConfig": false
       }
     }
   },
@@ -34,8 +35,9 @@
   },
 
   "remoteEnv": {
-    "DATABASE_URL": "postgresql://postgres:postgres@postgres:5432/devdb"
+    "DATABASE_URL": "postgresql://postgres:postgres@postgres:5432/devdb",
+    "PATH": "/workspaces/codeany/apps/cli/bin:${containerEnv:PATH}"
   },
 
-  "postCreateCommand": "npm install || true"
+  "postCreateCommand": "npm install || true && (cd /workspaces/codeany/apps/cli && go build -o bin/apex .) || true"
 }

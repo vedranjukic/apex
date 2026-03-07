@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/joho/godotenv"
 )
 
 const (
@@ -18,6 +20,27 @@ type Config struct {
 	DaytonaKey   string
 	DaytonaURL   string
 	Snapshot     string
+}
+
+// LoadDotEnv loads .env from the workspace root (walks up from CWD).
+// Only sets variables that are not already set. No-op if .env not found.
+func LoadDotEnv() {
+	dir, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	for {
+		envPath := filepath.Join(dir, ".env")
+		if _, err := os.Stat(envPath); err == nil {
+			_ = godotenv.Load(envPath)
+			return
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return
+		}
+		dir = parent
+	}
 }
 
 // ResolveDBPath determines the SQLite database path with priority:

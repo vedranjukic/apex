@@ -99,7 +99,8 @@ func (b *bridgeConn) send(v interface{}) error {
 }
 
 // sendPrompt sends a start_claude message to the bridge.
-func (b *bridgeConn) sendPrompt(chatID, prompt, sessionID string) error {
+// mode is "agent", "plan", or "ask"; empty defaults to "agent".
+func (b *bridgeConn) sendPrompt(chatID, prompt, sessionID, mode string) error {
 	msg := map[string]interface{}{
 		"type":   "start_claude",
 		"prompt": prompt,
@@ -107,6 +108,9 @@ func (b *bridgeConn) sendPrompt(chatID, prompt, sessionID string) error {
 	}
 	if sessionID != "" {
 		msg["sessionId"] = sessionID
+	}
+	if mode != "" {
+		msg["mode"] = mode
 	}
 	return b.send(msg)
 }

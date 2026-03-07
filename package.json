@@ -4,6 +4,7 @@
   "license": "SEE LICENSE IN LICENSE",
   "scripts": {
     "build": "npx nx run-many --target=build --all",
+    "build:cli": "cd apps/cli && go build -o bin/apex .",
     "build:api": "npx nx build @apex/api",
     "build:dashboard": "npx nx build @apex/dashboard",
     "serve": "npx nx run-many --target=serve --projects=@apex/api,@apex/dashboard --parallel=2",
@@ -15,7 +16,8 @@
     "desktop:restore-links": "node scripts/restore-workspace-links.js",
     "postdesktop": "npm rebuild better-sqlite3 && node scripts/restore-workspace-links.js",
     "test:agent-retry": "cd apps/api && APEX_TEST_AGENT_TIMEOUT_MS=100 npx vitest run",
-    "test:agent-retry-e2e": "APEX_E2E_TEST=1 npx nx e2e @apex/api-e2e --testPathPattern=agent-retry"
+    "test:agent-retry-e2e": "APEX_E2E_TEST=1 npx nx e2e @apex/api-e2e --testPathPattern=agent-retry",
+    "test:create-project-e2e": "npx nx e2e @apex/cli-e2e --testPathPattern=create-project"
   },
   "private": true,
   "dependencies": {

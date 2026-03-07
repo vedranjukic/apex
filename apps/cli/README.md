@@ -217,6 +217,8 @@ apex project delete my-app -f
 
 ## Environment variables
 
+In development, the CLI loads `.env` from the workspace root (walks up from CWD) before reading config. Place `ANTHROPIC_API_KEY`, `DAYTONA_API_KEY`, etc. in a `.env` file to avoid interactive `apex configure`.
+
 These override database settings when set:
 
 | Variable | Description |

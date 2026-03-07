@@ -534,7 +534,7 @@ func (r *REPL) showHistory() {
 		return
 	}
 
-	msgs := rowsToMessages(rows)
+	msgs := RowsToMessages(rows)
 	RenderChatHistory(msgs)
 }
 
@@ -577,7 +577,7 @@ func (r *REPL) handleUserInput(input string) {
 
 	r.spin.Start()
 
-	if err := r.manager.SendPrompt(chatID, input, sessionID); err != nil {
+	if err := r.manager.SendPrompt(chatID, input, sessionID, ""); err != nil {
 		r.spin.Stop()
 		errorStyle.Fprintf(ProgressOut, "  Failed to send prompt: %v\n", err)
 		r.mu.Lock()
@@ -752,7 +752,7 @@ func historyFile() string {
 	return dir + "/history"
 }
 
-func rowsToMessages(rows []db.MessageRow) []types.Message {
+func RowsToMessages(rows []db.MessageRow) []types.Message {
 	msgs := make([]types.Message, 0, len(rows))
 	for _, row := range rows {
 		var content []types.ContentBlock
