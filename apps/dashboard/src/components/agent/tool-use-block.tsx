@@ -536,6 +536,8 @@ function AskQuestionBlock({ input, toolUseId }: { input: Input; toolUseId?: stri
     ? (input.questions as QuestionDef[])
     : [];
 
+  const hasFreeText = questions.some((q) => !q.options || q.options.length === 0);
+
   const persistedAnswer = useMemo(() => {
     if (!toolUseId) return null;
     for (const m of messages) {
@@ -549,16 +551,29 @@ function AskQuestionBlock({ input, toolUseId }: { input: Input; toolUseId?: stri
   }, [messages, toolUseId]);
 
   const [selections, setSelections] = useState<Map<number, Set<number>>>(() => new Map());
+  const [freeTextValues, setFreeTextValues] = useState<Map<number, string>>(() => new Map());
   const [submitted, setSubmitted] = useState(false);
   const restoredRef = useRef(false);
 
   useEffect(() => {
     if (persistedAnswer && questions.length > 0 && !restoredRef.current) {
       restoredRef.current = true;
+      if (hasFreeText) {
+        const restored = new Map<number, string>();
+        const lines = persistedAnswer.split('\n').filter(Boolean);
+        for (let qi = 0; qi < questions.length; qi++) {
+          const q = questions[qi];
+          if (q.options && q.options.length > 0) continue;
+          const header = q.header || q.question || `Question ${qi + 1}`;
+          const line = lines.find((l) => l.startsWith(header + ':'));
+          if (line) restored.set(qi, line.slice(header.length + 1).trim());
+        }
+        setFreeTextValues(restored);
+      }
       setSelections(parseAnswerToSelections(persistedAnswer, questions));
       setSubmitted(true);
     }
-  }, [persistedAnswer, questions]);
+  }, [persistedAnswer, questions, hasFreeText]);
 
   const toggleOption = useCallback(
     (qi: number, oi: number, multiSelect: boolean) => {
@@ -580,22 +595,41 @@ function AskQuestionBlock({ input, toolUseId }: { input: Input; toolUseId?: stri
     [submitted],
   );
 
+  const setFreeText = useCallback(
+    (qi: number, value: string) => {
+      if (submitted) return;
+      setFreeTextValues((prev) => {
+        const next = new Map(prev);
+        next.set(qi, value);
+        return next;
+      });
+    },
+    [submitted],
+  );
+
   const totalSelected = Array.from(selections.values()).reduce(
     (sum, s) => sum + s.size, 0,
   );
+  const totalFreeText = Array.from(freeTextValues.values()).filter((v) => v.trim().length > 0).length;
+  const canSubmit = totalSelected > 0 || totalFreeText > 0;
 
   const handleSubmit = () => {
-    if (totalSelected === 0) return;
+    if (!canSubmit) return;
     const lines: string[] = [];
     for (let qi = 0; qi < questions.length; qi++) {
       const q = questions[qi];
-      const sel = selections.get(qi);
-      if (!sel || sel.size === 0) continue;
       const header = q.header || q.question || `Question ${qi + 1}`;
-      const picks = Array.from(sel)
-        .sort()
-        .map((oi) => q.options?.[oi]?.label ?? `Option ${oi + 1}`);
-      lines.push(`${header}: ${picks.join(', ')}`);
+      if (q.options && q.options.length > 0) {
+        const sel = selections.get(qi);
+        if (!sel || sel.size === 0) continue;
+        const picks = Array.from(sel)
+          .sort()
+          .map((oi) => q.options?.[oi]?.label ?? `Option ${oi + 1}`);
+        lines.push(`${header}: ${picks.join(', ')}`);
+      } else {
+        const text = freeTextValues.get(qi)?.trim();
+        if (text) lines.push(`${header}: ${text}`);
+      }
     }
     const message = lines.join('\n');
     setSubmitted(true);
@@ -624,6 +658,7 @@ function AskQuestionBlock({ input, toolUseId }: { input: Input; toolUseId?: stri
       <div className="px-3 py-2.5 space-y-4">
         {questions.map((q, qi) => {
           const sel = selections.get(qi) ?? new Set<number>();
+          const isFreeText = !q.options || q.options.length === 0;
           return (
             <div key={qi}>
               {q.header && (
@@ -632,9 +667,29 @@ function AskQuestionBlock({ input, toolUseId }: { input: Input; toolUseId?: stri
               {q.question && (
                 <p className="text-sm text-text-primary mb-2">{q.question}</p>
               )}
-              {q.options && (
+              {isFreeText ? (
+                <input
+                  type="text"
+                  value={freeTextValues.get(qi) ?? ''}
+                  onChange={(e) => setFreeText(qi, e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey && canSubmit) {
+                      e.preventDefault();
+                      handleSubmit();
+                    }
+                  }}
+                  disabled={submitted}
+                  placeholder="Type your answer..."
+                  className={cn(
+                    'w-full rounded-md border px-2.5 py-2 text-sm bg-surface text-text-primary placeholder:text-text-muted outline-none transition-colors',
+                    submitted
+                      ? 'border-border opacity-70 cursor-default'
+                      : 'border-border focus:border-primary',
+                  )}
+                />
+              ) : (
                 <ul className="space-y-1.5">
-                  {q.options.map((opt, oi) => {
+                  {q.options!.map((opt, oi) => {
                     const isSelected = sel.has(oi);
                     return (
                       <li
@@ -697,7 +752,7 @@ function AskQuestionBlock({ input, toolUseId }: { input: Input; toolUseId?: stri
         <div className="px-3 py-2.5 border-t border-border bg-surface-secondary">
           <button
             onClick={handleSubmit}
-            disabled={totalSelected === 0}
+            disabled={!canSubmit}
             className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Send className="w-3.5 h-3.5" />
