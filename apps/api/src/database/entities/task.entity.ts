@@ -22,7 +22,7 @@ export class TaskEntity {
   @Column()
   title: string;
 
-  @Column({ default: 'idle' })
+  @Column({ default: 'completed' })
   status: string; // TaskStatus enum
 
   @Column({ type: 'text', nullable: true, default: null })

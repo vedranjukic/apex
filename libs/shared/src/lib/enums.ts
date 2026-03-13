@@ -15,7 +15,6 @@ export enum AgentType {
 
 // ── Task ─────────────────────────────────────────────
 export enum TaskStatus {
-  Idle = 'idle',
   Running = 'running',
   WaitingForInput = 'waiting_for_input',
   Completed = 'completed',

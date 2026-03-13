@@ -20,6 +20,8 @@ interface EditorState {
   fileScrollOffsets: Record<string, number>;
   activeView: 'chat' | 'editor';
   codeSelection: CodeSelection | null;
+  /** Plain text that was on the clipboard when codeSelection was set */
+  codeSelectionText: string | null;
   dirtyFiles: Set<string>;
   /** When set, CodeViewer will reveal this line after mount */
   revealLineAt: { filePath: string; line: number } | null;
@@ -31,7 +33,7 @@ interface EditorState {
   setActiveFile: (path: string) => void;
   setFileContent: (path: string, content: string) => void;
   setFileScrollOffset: (path: string, offset: number) => void;
-  setCodeSelection: (sel: CodeSelection | null) => void;
+  setCodeSelection: (sel: CodeSelection | null, text?: string | null) => void;
   markDirty: (path: string) => void;
   markClean: (path: string) => void;
   showChat: () => void;
@@ -51,6 +53,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   fileScrollOffsets: {},
   activeView: 'chat',
   codeSelection: null,
+  codeSelectionText: null,
   dirtyFiles: new Set<string>(),
   revealLineAt: null,
 
@@ -102,7 +105,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       fileScrollOffsets: { ...state.fileScrollOffsets, [path]: offset },
     })),
 
-  setCodeSelection: (sel) => set({ codeSelection: sel }),
+  setCodeSelection: (sel, text) => set({ codeSelection: sel, codeSelectionText: text ?? null }),
 
   markDirty: (path) =>
     set((state) => {
@@ -130,6 +133,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       fileScrollOffsets: {},
       activeView: 'chat',
       codeSelection: null,
+      codeSelectionText: null,
       dirtyFiles: new Set<string>(),
       revealLineAt: null,
     }),

@@ -1,17 +1,26 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TaskEntity } from '../../database/entities/task.entity';
 import { MessageEntity } from '../../database/entities/message.entity';
 
 @Injectable()
-export class ChatsService {
+export class ChatsService implements OnModuleInit {
   constructor(
     @InjectRepository(TaskEntity)
     private readonly chatRepo: Repository<TaskEntity>,
     @InjectRepository(MessageEntity)
     private readonly messageRepo: Repository<MessageEntity>,
   ) {}
+
+  async onModuleInit() {
+    await this.chatRepo
+      .createQueryBuilder()
+      .update()
+      .set({ status: 'completed' })
+      .where('status = :status', { status: 'idle' })
+      .execute();
+  }
 
   async findByProject(projectId: string): Promise<TaskEntity[]> {
     return this.chatRepo.find({
@@ -47,7 +56,7 @@ export class ChatsService {
     const chat = this.chatRepo.create({
       projectId,
       title,
-      status: 'idle',
+      status: 'completed',
     });
     const saved = await this.chatRepo.save(chat);
 

@@ -76,20 +76,9 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
           : chatsApi.get(chatId),
         chatsApi.messages(chatId),
       ]);
-      let chats = chat && !get().chats.find((c) => c.id === chatId)
+      const chats = chat && !get().chats.find((c) => c.id === chatId)
         ? [chat, ...get().chats]
         : get().chats;
-
-      const opened = chats.find((c) => c.id === chatId);
-      if (opened?.status === 'completed') {
-        const completedAge = Date.now() - new Date(opened.updatedAt).getTime();
-        if (completedAge > 60 * 60 * 1000) {
-          chats = chats.map((c) =>
-            c.id === chatId ? { ...c, status: 'idle' } : c,
-          );
-          chatsApi.updateStatus(chatId, 'idle').catch(() => {});
-        }
-      }
 
       set({ chats, messages, loading: false });
     } catch (err) {
