@@ -128,6 +128,14 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
       }
     }, [autoFocus]);
 
+    useEffect(() => {
+      const handleDocCopy = () => {
+        useEditorStore.getState().setCodeSelection(null);
+      };
+      document.addEventListener('copy', handleDocCopy);
+      return () => document.removeEventListener('copy', handleDocCopy);
+    }, []);
+
     const updateEmpty = useCallback(() => {
       if (editorRef.current) {
         setEmpty(isEditorEmpty(editorRef.current));
@@ -233,8 +241,13 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
         if (snippetJson) {
           try { snippet = JSON.parse(snippetJson); } catch { /* ignore */ }
         }
+
         if (!snippet) {
-          snippet = useEditorStore.getState().codeSelection;
+          const store = useEditorStore.getState();
+          const clipText = e.clipboardData.getData('text/plain');
+          if (store.codeSelection && store.codeSelectionText && clipText === store.codeSelectionText) {
+            snippet = store.codeSelection;
+          }
         }
 
         if (snippet) {

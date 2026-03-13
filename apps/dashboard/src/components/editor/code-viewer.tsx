@@ -66,7 +66,7 @@ export function CodeViewer({ filePath, content, onSave }: CodeViewerProps) {
               navigator.clipboard.writeText(selectedText);
             });
 
-          useEditorStore.getState().setCodeSelection(snippet);
+          useEditorStore.getState().setCodeSelection(snippet, selectedText);
         },
       });
 
