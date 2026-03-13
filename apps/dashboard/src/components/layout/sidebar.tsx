@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react';
-import { Search, Plus, Loader2, CheckCircle2, AlertCircle, Circle, X, FileText, ChevronDown, ChevronRight } from 'lucide-react';
+import { Search, Plus, Loader2, CheckCircle2, AlertCircle, Circle, MessageCircleQuestion, X, FileText, ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { useChatsStore } from '../../stores/tasks-store';
 import { useEditorStore } from '../../stores/editor-store';
@@ -206,6 +206,8 @@ function StatusIcon({ status }: { status: string }) {
   switch (status) {
     case 'running':
       return <Loader2 className="w-4 h-4 shrink-0 animate-spin text-yellow-400" />;
+    case 'waiting_for_input':
+      return <MessageCircleQuestion className="w-4 h-4 shrink-0 animate-pulse text-yellow-400" />;
     case 'completed':
       return <CheckCircle2 className="w-4 h-4 shrink-0 text-accent animate-pulse" />;
     case 'error':

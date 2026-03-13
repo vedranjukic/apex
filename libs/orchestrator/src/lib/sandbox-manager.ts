@@ -103,8 +103,10 @@ export class SandboxManager extends EventEmitter {
     this.config = {
       anthropicApiKey:
         config.anthropicApiKey || process.env["ANTHROPIC_API_KEY"] || "",
+      openaiApiKey:
+        config.openaiApiKey || process.env["OPENAI_API_KEY"] || "",
       snapshot:
-        config.snapshot || process.env["DAYTONA_SNAPSHOT"] || "daytona-apex-2",
+        config.snapshot || process.env["DAYTONA_SNAPSHOT"] || "daytona-apex-3",
       timeoutMs: config.timeoutMs || 600000,
     };
   }
@@ -123,6 +125,7 @@ export class SandboxManager extends EventEmitter {
     snapshot?: string,
     projectName?: string,
     gitRepo?: string,
+    agentType?: string,
   ): Promise<string> {
     if (!this.daytona) throw new Error("SandboxManager not initialized");
 
@@ -152,8 +155,7 @@ export class SandboxManager extends EventEmitter {
     };
     this.sessions.set(sandbox.id, session);
 
-    // Upload and start bridge
-    await this.installBridge(session, gitRepo);
+    await this.installBridge(session, gitRepo, agentType);
 
     return sandbox.id;
   }
@@ -240,7 +242,7 @@ export class SandboxManager extends EventEmitter {
         sandbox.getPreviewLink(BRIDGE_PORT),
         sandbox.fs
           .uploadFile(
-            Buffer.from(getBridgeScript(BRIDGE_PORT, session.projectDir)),
+            Buffer.from(getBridgeScript(BRIDGE_PORT, session.projectDir, undefined)),
             `${BRIDGE_DIR}/bridge.js`,
           )
           .catch(() => {
@@ -334,6 +336,7 @@ export class SandboxManager extends EventEmitter {
     sessionId?: string | null,
     mode?: string,
     model?: string,
+    agentType?: string,
   ): Promise<void> {
     const session = await this.ensureConnected(sandboxId);
     session.ws!.send(
@@ -344,6 +347,7 @@ export class SandboxManager extends EventEmitter {
         sessionId: sessionId || undefined,
         mode: mode || undefined,
         model: model || undefined,
+        agentType: agentType || undefined,
       }),
     );
     session.status = "running";
@@ -1364,12 +1368,10 @@ export class SandboxManager extends EventEmitter {
   private async restartBridge(session: InternalSession): Promise<void> {
     const { sandbox, projectDir } = session;
 
-    // Kill any existing bridge process and start a new one
     await sandbox.process.executeCommand(
       'pkill -f "node bridge.js" 2>/dev/null; sleep 0.3',
     );
 
-    // Re-upload the bridge script so reconnected sandboxes get the latest code
     const bridgeCode = getBridgeScript(BRIDGE_PORT, projectDir);
     await sandbox.fs.uploadFile(
       Buffer.from(bridgeCode),
@@ -1382,14 +1384,22 @@ export class SandboxManager extends EventEmitter {
     const daytonaApiKeyR = process.env["DAYTONA_API_KEY"] || "";
     const daytonaApiUrlR =
       process.env["DAYTONA_API_URL"] || "https://app.daytona.io/api";
+    const envParts = [
+      `ANTHROPIC_API_KEY="${this.config.anthropicApiKey}"`,
+      `OPENAI_API_KEY="${this.config.openaiApiKey}"`,
+      `DAYTONA_API_KEY="${daytonaApiKeyR}"`,
+      `DAYTONA_API_URL="${daytonaApiUrlR}"`,
+      `DAYTONA_SANDBOX_ID="${sandbox.id}"`,
+      `HOME="/home/daytona"`,
+      `PATH="/home/daytona/.opencode/bin:$PATH"`,
+    ];
     await sandbox.process.executeSessionCommand(bridgeSessionId, {
-      command: `cd ${BRIDGE_DIR} && ANTHROPIC_API_KEY="${this.config.anthropicApiKey}" DAYTONA_API_KEY="${daytonaApiKeyR}" DAYTONA_API_URL="${daytonaApiUrlR}" DAYTONA_SANDBOX_ID="${sandbox.id}" node bridge.js > ${BRIDGE_DIR}/bridge.log 2>&1`,
+      command: `cd ${BRIDGE_DIR} && ${envParts.join(" ")} node bridge.js > ${BRIDGE_DIR}/bridge.log 2>&1`,
       async: true,
     });
 
     await this.waitForBridge(sandbox, session.sandboxId);
 
-    // Refresh preview URL
     const previewInfo = await sandbox.getPreviewLink(BRIDGE_PORT);
     session.previewUrl = (previewInfo as any).url;
     session.previewToken = (previewInfo as any).token;
@@ -1398,11 +1408,13 @@ export class SandboxManager extends EventEmitter {
   private async installBridge(
     session: InternalSession,
     gitRepo?: string,
+    agentType?: string,
   ): Promise<void> {
     session.status = "starting_bridge";
     this.emit("status", session.sandboxId, "starting_bridge");
 
     const { sandbox, projectDir } = session;
+    const effectiveAgentType = agentType || "claude_code";
 
     await sandbox.fs.createFolder(BRIDGE_DIR, "755");
 
@@ -1420,7 +1432,7 @@ export class SandboxManager extends EventEmitter {
       await sandbox.process.executeCommand("git init", projectDir);
     }
 
-    const bridgeCode = getBridgeScript(BRIDGE_PORT, projectDir);
+    const bridgeCode = getBridgeScript(BRIDGE_PORT, projectDir, effectiveAgentType);
     await sandbox.fs.uploadFile(
       Buffer.from(bridgeCode),
       `${BRIDGE_DIR}/bridge.js`,
@@ -1432,23 +1444,8 @@ export class SandboxManager extends EventEmitter {
       `${BRIDGE_DIR}/mcp-terminal-server.js`,
     );
 
-    const mcpConfig = JSON.stringify({
-      mcpServers: {
-        "terminal-server": {
-          type: "stdio",
-          command: "node",
-          args: [`${BRIDGE_DIR}/mcp-terminal-server.js`],
-          env: {},
-        },
-      },
-    });
-    await sandbox.fs.createFolder("/home/daytona/.claude", "755");
-    await sandbox.fs.uploadFile(
-      Buffer.from(mcpConfig),
-      `${HOME_DIR}/.claude.json`,
-    );
-
-    const claudeMd = [
+    // Per-agent MCP and instructions setup
+    const sandboxInstructions = [
       "# Sandbox Environment",
       "",
       `Your working directory is \`${projectDir}\`. This IS the project root.`,
@@ -1472,11 +1469,81 @@ export class SandboxManager extends EventEmitter {
       "NEVER share localhost or 127.0.0.1 URLs with the user. ALWAYS call get_preview_url",
       "and share the returned public URL instead.",
       "",
+      "## Asking the User Questions",
+      "",
+      "When you need to ask the user a question, present options, or get clarification",
+      "before proceeding, you MUST use the `ask_user` MCP tool.",
+      "",
+      "This tool is available as `mcp__terminal-server__ask_user`.",
+      "It blocks until the user responds, so the user sees a clear prompt in the UI.",
+      "",
+      "Do NOT ask questions as plain text — the UI cannot detect them.",
+      "ALWAYS use the `ask_user` tool so the system knows you are waiting for input.",
+      "",
     ].join("\n");
-    await sandbox.fs.uploadFile(
-      Buffer.from(claudeMd),
-      "/home/daytona/.claude/CLAUDE.md",
-    );
+
+    if (effectiveAgentType === "claude_code") {
+      const mcpConfig = JSON.stringify({
+        mcpServers: {
+          "terminal-server": {
+            type: "stdio",
+            command: "node",
+            args: [`${BRIDGE_DIR}/mcp-terminal-server.js`],
+            env: {},
+          },
+        },
+      });
+      await sandbox.fs.createFolder("/home/daytona/.claude", "755");
+      await sandbox.fs.uploadFile(
+        Buffer.from(mcpConfig),
+        `${HOME_DIR}/.claude.json`,
+      );
+      await sandbox.fs.uploadFile(
+        Buffer.from(sandboxInstructions),
+        "/home/daytona/.claude/CLAUDE.md",
+      );
+    } else if (effectiveAgentType === "codex") {
+      // Codex uses codex login for auth and codex mcp for MCP servers
+      if (this.config.openaiApiKey) {
+        await sandbox.process.executeCommand(
+          `echo "${this.config.openaiApiKey}" | codex login --with-api-key 2>/dev/null || true`,
+        );
+      }
+      // Register MCP terminal server so Codex can use ask_user, terminals, etc.
+      await sandbox.process.executeCommand(
+        `codex mcp add terminal-server -- node ${BRIDGE_DIR}/mcp-terminal-server.js 2>/dev/null || true`,
+      );
+      // Write AGENTS.md for Codex instructions
+      await sandbox.fs.uploadFile(
+        Buffer.from(sandboxInstructions),
+        `${projectDir}/AGENTS.md`,
+      );
+    } else if (effectiveAgentType === "open_code") {
+      // Pre-warm: trigger the one-time DB migration before the bridge spawns `opencode run`.
+      // The migration happens on any opencode invocation. Use `session list` in project dir
+      // to trigger it without starting the TUI or requiring a prompt.
+      // Also add opencode to PATH for the bridge process.
+      await sandbox.process.executeCommand(
+        `cd ${projectDir} && HOME=/home/daytona /home/daytona/.opencode/bin/opencode session list 2>&1; echo "opencode pre-warm done"`,
+      );
+      // Write OpenCode config with MCP terminal server
+      const openCodeConfig = JSON.stringify({
+        mcp: {
+          "terminal-server": {
+            type: "local",
+            command: ["node", `${BRIDGE_DIR}/mcp-terminal-server.js`],
+          },
+        },
+      });
+      await sandbox.fs.uploadFile(
+        Buffer.from(openCodeConfig),
+        `${projectDir}/opencode.json`,
+      );
+      await sandbox.fs.uploadFile(
+        Buffer.from(sandboxInstructions),
+        `${projectDir}/AGENTS.md`,
+      );
+    }
 
     await sandbox.process.executeCommand("npm init -y", BRIDGE_DIR);
     const npmResult = await sandbox.process.executeCommand(
@@ -1502,8 +1569,18 @@ export class SandboxManager extends EventEmitter {
     const daytonaApiUrl =
       process.env["DAYTONA_API_URL"] || "https://app.daytona.io/api";
 
+    const envParts = [
+      `ANTHROPIC_API_KEY="${this.config.anthropicApiKey}"`,
+      `OPENAI_API_KEY="${this.config.openaiApiKey}"`,
+      `DAYTONA_API_KEY="${daytonaApiKey}"`,
+      `DAYTONA_API_URL="${daytonaApiUrl}"`,
+      `DAYTONA_SANDBOX_ID="${sandbox.id}"`,
+      `HOME="/home/daytona"`,
+      `PATH="/home/daytona/.opencode/bin:$PATH"`,
+    ];
+
     await sandbox.process.executeSessionCommand(bridgeSessionId, {
-      command: `cd ${BRIDGE_DIR} && ANTHROPIC_API_KEY="${this.config.anthropicApiKey}" DAYTONA_API_KEY="${daytonaApiKey}" DAYTONA_API_URL="${daytonaApiUrl}" DAYTONA_SANDBOX_ID="${sandbox.id}" node bridge.js > ${BRIDGE_DIR}/bridge.log 2>&1`,
+      command: `cd ${BRIDGE_DIR} && ${envParts.join(" ")} node bridge.js > ${BRIDGE_DIR}/bridge.log 2>&1`,
       async: true,
     });
 
@@ -1605,6 +1682,10 @@ export class SandboxManager extends EventEmitter {
             this.emit("file_changed", session.sandboxId, msg.dirs);
           } else if (msg.type === "ports_update") {
             this.emit("ports_update", session.sandboxId, msg);
+          } else if (msg.type === "ask_user_pending") {
+            session.status = "waiting_for_input";
+          } else if (msg.type === "ask_user_resolved") {
+            session.status = "running";
           } else if (msg.type === "claude_error") {
             session.status = "error";
             session.error = msg.error;

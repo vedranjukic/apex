@@ -21,8 +21,7 @@
       "settings": {
         "editor.defaultFormatter": "esbenp.prettier-vscode",
         "editor.formatOnSave": true,
-        "typescript.tsdk": "node_modules/typescript/lib",
-        "remote.containers.copyGitConfig": false
+        "typescript.tsdk": "node_modules/typescript/lib"
       }
     }
   },

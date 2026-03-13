@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FolderOpen, Trash2, ExternalLink, Loader2, CheckCircle2, GitBranch, ChevronDown, ChevronRight, Settings } from 'lucide-react';
+import { Plus, FolderOpen, Trash2, ExternalLink, Loader2, CheckCircle2, MessageCircleQuestion, GitBranch, ChevronDown, ChevronRight, Settings } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { useProjectsStore } from '../../stores/projects-store';
 import { useProjectsSocket } from '../../hooks/use-projects-socket';
@@ -8,9 +8,10 @@ import { CreateProjectDialog } from './create-project-dialog';
 import { settingsApi } from '../../api/client';
 import type { Project } from '../../api/client';
 
-function chatActivity(project: Project): 'working' | 'completed' | null {
+function chatActivity(project: Project): 'working' | 'attention' | 'completed' | null {
   const chats = project.chats;
   if (!chats || chats.length === 0) return null;
+  if (chats.some((c) => c.status === 'waiting_for_input')) return 'attention';
   if (chats.some((c) => c.status === 'running')) return 'working';
   if (chats.some((c) => c.status === 'completed')) return 'completed';
   return null;
@@ -232,6 +233,9 @@ function ForkRow({
           >
             {project.status}
           </span>
+          {activity === 'attention' && (
+            <MessageCircleQuestion className="w-3 h-3 animate-pulse text-yellow-400" />
+          )}
           {activity === 'working' && (
             <Loader2 className="w-3 h-3 animate-spin text-yellow-600" />
           )}
@@ -301,6 +305,12 @@ function ProjectCard({
             >
               {project.status}
             </span>
+            {activity === 'attention' && (
+              <span className="flex items-center gap-1 text-xs text-yellow-400">
+                <MessageCircleQuestion className="w-3 h-3 animate-pulse" />
+                Needs your response
+              </span>
+            )}
             {activity === 'working' && (
               <span className="flex items-center gap-1 text-xs text-yellow-600">
                 <Loader2 className="w-3 h-3 animate-spin" />
@@ -320,7 +330,7 @@ function ProjectCard({
             </p>
           )}
           <div className="flex items-center gap-3 mt-2 text-xs text-text-muted">
-            <span>{project.agentType === 'claude_code' ? 'Claude Code' : 'OpenCode'}</span>
+            <span>{{ claude_code: 'Claude Code', open_code: 'OpenCode', codex: 'Codex' }[project.agentType] || project.agentType}</span>
             <span>·</span>
             <span>{new Date(project.createdAt).toLocaleDateString()}</span>
           </div>

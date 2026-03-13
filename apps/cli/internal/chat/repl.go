@@ -577,7 +577,7 @@ func (r *REPL) handleUserInput(input string) {
 
 	r.spin.Start()
 
-	if err := r.manager.SendPrompt(chatID, input, sessionID, ""); err != nil {
+	if err := r.manager.SendPrompt(chatID, input, sessionID, "", r.project.AgentType); err != nil {
 		r.spin.Stop()
 		errorStyle.Fprintf(ProgressOut, "  Failed to send prompt: %v\n", err)
 		r.mu.Lock()
@@ -636,6 +636,14 @@ func (r *REPL) processBridgeMessages(chatID string) {
 
 			case "claude_stderr":
 				continue
+
+			case "ask_user_pending":
+				r.spin.Stop()
+				r.database.UpdateChatStatus(chatID, "waiting_for_input")
+				r.promptForAnswer(chatID, msg.QuestionID)
+
+			case "ask_user_resolved":
+				r.database.UpdateChatStatus(chatID, "running")
 			}
 
 		case <-done:
@@ -670,6 +678,9 @@ func (r *REPL) handleClaudeMessage(chatID string, raw json.RawMessage) {
 	case "assistant":
 		r.spin.Stop()
 		if output.Message != nil {
+			if isSyntheticAskUserMessage(output.Message.Content) {
+				return
+			}
 			if output.Message.Model != "" {
 				r.activeModel = output.Message.Model
 			}
@@ -727,12 +738,70 @@ func (r *REPL) handleClaudeMessage(chatID string, raw json.RawMessage) {
 	}
 }
 
+func (r *REPL) renderAskUserQuestion(block types.ContentBlock) {
+	questions, _ := block.Input["questions"].([]interface{})
+
+	for _, q := range questions {
+		qm, ok := q.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		question, _ := qm["question"].(string)
+		header, _ := qm["header"].(string)
+		options, _ := qm["options"].([]interface{})
+		label := question
+		if label == "" {
+			label = header
+		}
+
+		if len(options) > 0 {
+			if label != "" {
+				fmt.Fprintf(ProgressOut, "\n  %s\n", color.New(color.FgCyan).Sprint(label))
+			}
+			for i, opt := range options {
+				om, ok := opt.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				optLabel, _ := om["label"].(string)
+				desc, _ := om["description"].(string)
+				if desc != "" {
+					fmt.Fprintf(ProgressOut, "    %d) %s — %s\n", i+1, optLabel, desc)
+				} else {
+					fmt.Fprintf(ProgressOut, "    %d) %s\n", i+1, optLabel)
+				}
+			}
+		} else if label != "" {
+			fmt.Fprintf(ProgressOut, "\n  %s\n", color.New(color.FgCyan).Sprint(label))
+		}
+	}
+}
+
+func (r *REPL) promptForAnswer(chatID string, questionID string) {
+	fmt.Fprintln(ProgressOut)
+	r.rl.SetPrompt(color.New(color.FgCyan).Sprint("  answer> "))
+	answer, err := r.rl.Readline()
+	r.rl.SetPrompt(r.prompt())
+	if err != nil || strings.TrimSpace(answer) == "" {
+		return
+	}
+
+	if err := r.manager.SendUserAnswer(chatID, questionID, strings.TrimSpace(answer)); err != nil {
+		errorStyle.Fprintf(ProgressOut, "  Failed to send answer: %v\n", err)
+		return
+	}
+
+	r.spin.Start()
+}
+
 // ── Helpers ─────────────────────────────────────────────
 
 func statusIndicator(status string) string {
 	switch status {
 	case "running":
 		return color.New(color.FgYellow).Sprint("●")
+	case "waiting_for_input":
+		return color.New(color.FgYellow).Sprint("?")
 	case "completed":
 		return color.New(color.FgGreen).Sprint("●")
 	case "error":

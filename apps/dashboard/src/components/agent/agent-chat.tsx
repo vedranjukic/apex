@@ -1,5 +1,5 @@
 import { useEffect, useRef, useMemo, useCallback } from 'react';
-import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo, RotateCcw } from 'lucide-react';
+import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo, RotateCcw, MessageCircleQuestion } from 'lucide-react';
 import { useChatsStore } from '../../stores/tasks-store';
 import { groupMessages, MessageGroupView, PlanShownProvider } from './message-bubble';
 import { PromptInput, type PromptInputHandle } from './prompt-input';
@@ -170,6 +170,7 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
 
   const isRunning = activeChat.status === 'running';
   const isError = activeChat.status === 'error';
+  const isWaitingForInput = activeChat.status === 'waiting_for_input';
 
   return (
     <ChatActionsContext.Provider value={{ fillPrompt, sendPrompt, sendSilentPrompt, sendUserAnswer }}>
@@ -203,6 +204,12 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
                 Retry
               </button>
             </div>
+          )}
+          {isWaitingForInput && (
+            <span className="flex items-center gap-1 text-xs text-yellow-400 shrink-0 animate-pulse">
+              <MessageCircleQuestion className="w-3.5 h-3.5" />
+              Waiting for your response
+            </span>
           )}
         </div>
 

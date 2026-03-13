@@ -57,6 +57,8 @@ Additional docs live in `workdocs/`. Read these only when working on the relevan
 - `workdocs/dashboard-frontend.md` -- frontend component structure and patterns
 - `workdocs/prompt-file-references.md` -- prompt input, @ file references, code snippet references, FilePicker, tag system
 - `workdocs/claude-sandbox-installation.md` -- sandbox provisioning and bridge setup
+- `workdocs/multi-agent-bridge.md` -- multi-agent adapter pattern (Claude Code, OpenCode, Codex), protocols, testing
+- `workdocs/multi-agent-bridge.md` -- multi-agent adapter pattern (Claude Code, OpenCode, Codex), protocols, testing
 - `workdocs/search-in-files.md` -- search panel, grep backend, socket protocol, default excludes
 - `workdocs/source-control.md` -- git source control panel, staging, committing, optimistic UI, AI commit messages
 - `workdocs/ports-panel.md` -- port scanning, preview URLs, bottom panel ports tab, status bar indicator

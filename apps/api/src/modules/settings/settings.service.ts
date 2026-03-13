@@ -5,6 +5,7 @@ import { SettingEntity } from './setting.entity';
 
 const ALLOWED_KEYS = new Set([
   'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
   'DAYTONA_API_KEY',
   'DAYTONA_API_URL',
   'DAYTONA_SNAPSHOT',

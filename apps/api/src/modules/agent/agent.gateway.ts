@@ -1069,6 +1069,7 @@ export class AgentGateway
               freshChat.claudeSessionId ?? chat.claudeSessionId,
               mode,
               model,
+              project.agentType,
             );
             resetTimeout(AgentGateway.AGENT_ACTIVITY_TIMEOUT_MS);
             return;
@@ -1183,13 +1184,19 @@ export class AgentGateway
               outputTokens: data.usage?.output_tokens,
             },
           });
-          const finalStatus = data.is_error ? 'error' : 'completed';
-          await this.updateChatStatusAndNotify(chatId, finalStatus);
-          this.emitToSubscribers(project.sandboxId!, 'agent_status', {
-            chatId,
-            status: finalStatus,
-          });
-          cleanupHandler();
+
+          // Don't override waiting_for_input with completed -- the bridge
+          // manages the status transition via ask_user_resolved.
+          const currentChat = await this.chatsService.findById(chatId);
+          if (currentChat.status !== 'waiting_for_input') {
+            const finalStatus = data.is_error ? 'error' : 'completed';
+            await this.updateChatStatusAndNotify(chatId, finalStatus);
+            this.emitToSubscribers(project.sandboxId!, 'agent_status', {
+              chatId,
+              status: finalStatus,
+            });
+            cleanupHandler();
+          }
         }
 
         this.emitToSubscribers(project.sandboxId!, 'agent_message', {
@@ -1228,6 +1235,7 @@ export class AgentGateway
               freshChat.claudeSessionId ?? chat.claudeSessionId,
               mode,
               model,
+              project.agentType,
             );
             resetTimeout(AgentGateway.AGENT_ACTIVITY_TIMEOUT_MS);
             return;
@@ -1244,12 +1252,29 @@ export class AgentGateway
           });
         }
 
-        await this.updateChatStatusAndNotify(chatId, status);
+        const exitChat = await this.chatsService.findById(chatId);
+        if (exitChat.status !== 'waiting_for_input') {
+          await this.updateChatStatusAndNotify(chatId, status);
+          this.emitToSubscribers(project.sandboxId!, 'agent_status', {
+            chatId,
+            status,
+          });
+          cleanupHandler();
+        }
+      } else if (msg.type === 'ask_user_pending') {
+        this.logger.log(`Agent waiting for user input on chat ${chatId}`);
+        await this.updateChatStatusAndNotify(chatId, 'waiting_for_input');
         this.emitToSubscribers(project.sandboxId!, 'agent_status', {
           chatId,
-          status,
+          status: 'waiting_for_input',
         });
-        cleanupHandler();
+      } else if (msg.type === 'ask_user_resolved') {
+        this.logger.log(`User answered question on chat ${chatId}`);
+        await this.updateChatStatusAndNotify(chatId, 'running');
+        this.emitToSubscribers(project.sandboxId!, 'agent_status', {
+          chatId,
+          status: 'running',
+        });
       } else if (msg.type === 'claude_error') {
         this.logger.error(`Claude error for chat ${chatId}: ${msg.error}`);
         await this.updateChatStatusAndNotify(chatId, 'error');
@@ -1269,7 +1294,7 @@ export class AgentGateway
         (chat.claudeSessionId ? ` (resuming session ${chat.claudeSessionId})` : ' (new session)'),
     );
     try {
-      await manager.sendPrompt(project.sandboxId, prompt, chatId, chat.claudeSessionId, mode, model);
+      await manager.sendPrompt(project.sandboxId, prompt, chatId, chat.claudeSessionId, mode, model, project.agentType);
       this.logger.log(`Prompt sent successfully for chat ${chatId}`);
       client.emit('prompt_accepted', { chatId });
     } catch (err) {

@@ -133,13 +133,22 @@ func (m *Manager) Connect(ctx context.Context, sandboxID string) error {
 	return nil
 }
 
-// SendPrompt sends a prompt to the Claude process in the sandbox.
+// SendPrompt sends a prompt to the agent process in the sandbox.
 // mode is "agent", "plan", or "ask"; empty defaults to "agent".
-func (m *Manager) SendPrompt(chatID, prompt, sessionID, mode string) error {
+// agentType is "claude_code", "open_code", or "codex"; empty uses the bridge default.
+func (m *Manager) SendPrompt(chatID, prompt, sessionID, mode, agentType string) error {
 	if m.bridge == nil {
 		return fmt.Errorf("not connected to bridge")
 	}
-	return m.bridge.sendPrompt(chatID, prompt, sessionID, mode)
+	return m.bridge.sendPrompt(chatID, prompt, sessionID, mode, agentType)
+}
+
+// SendUserAnswer sends a user answer for an AskUserQuestion back to the bridge.
+func (m *Manager) SendUserAnswer(chatID, toolUseID, answer string) error {
+	if m.bridge == nil {
+		return fmt.Errorf("not connected to bridge")
+	}
+	return m.bridge.sendUserAnswer(chatID, toolUseID, answer)
 }
 
 // Messages returns the channel of incoming bridge messages.
@@ -196,7 +205,7 @@ func (m *Manager) installBridge(ctx context.Context, sandbox *daytona.Sandbox, p
 		exec(ctx, sandbox, fmt.Sprintf("cd %s && git init 2>&1 || true", projectDir))
 	}
 
-	bridgeJS := GenerateBridgeScript(bridgePort, projectDir)
+	bridgeJS := GenerateBridgeScript(bridgePort, projectDir, "")
 	if err := sandbox.FileSystem.UploadFile(ctx, []byte(bridgeJS), bridgeDir+"/bridge.js"); err != nil {
 		return fmt.Errorf("upload bridge.js: %w", err)
 	}
@@ -244,6 +253,17 @@ Call it with the port number, e.g.: get_preview_url({ port: 3000 })
 
 NEVER share localhost or 127.0.0.1 URLs with the user. ALWAYS call get_preview_url
 and share the returned public URL instead.
+
+## Asking the User Questions
+
+When you need to ask the user a question, present options, or get clarification
+before proceeding, you MUST use the `+"`ask_user`"+` MCP tool.
+
+This tool is available as `+"`mcp__terminal-server__ask_user`"+`.
+It blocks until the user responds, so the user sees a clear prompt in the UI.
+
+Do NOT ask questions as plain text — the UI cannot detect them.
+ALWAYS use the `+"`ask_user`"+` tool so the system knows you are waiting for input.
 `, projectDir)
 	if err := sandbox.FileSystem.UploadFile(ctx, []byte(claudeMd), "/home/daytona/.claude/CLAUDE.md"); err != nil {
 		return fmt.Errorf("upload CLAUDE.md: %w", err)

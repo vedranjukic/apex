@@ -124,6 +124,18 @@ export interface BridgeClaudeUserAnswer {
   answer: string;
 }
 
+export interface BridgeAskUserPending {
+  type: 'ask_user_pending';
+  chatId: string;
+  questionId: string;
+}
+
+export interface BridgeAskUserResolved {
+  type: 'ask_user_resolved';
+  chatId: string;
+  questionId: string;
+}
+
 // ── Terminal bridge messages ─────────────────────────
 
 export interface BridgeTerminalCreated {
@@ -264,6 +276,8 @@ export type BridgeMessage =
   | BridgeClaudeExit
   | BridgeClaudeError
   | BridgeClaudeUserAnswer
+  | BridgeAskUserPending
+  | BridgeAskUserResolved
   | BridgeTerminalCreated
   | BridgeTerminalOutput
   | BridgeTerminalExit
@@ -281,6 +295,7 @@ export type SandboxSessionStatus =
   | 'starting_bridge'
   | 'connecting'
   | 'running'
+  | 'waiting_for_input'
   | 'completed'
   | 'error';
 
@@ -301,6 +316,7 @@ export interface SandboxSession {
 
 export interface OrchestratorConfig {
   anthropicApiKey?: string;
+  openaiApiKey?: string;
   snapshot?: string;
   timeoutMs?: number;
 }

@@ -8,10 +8,14 @@ import (
 const bridgePort = 8080
 
 // GenerateBridgeScript returns the JavaScript source for bridge.js
-// that runs inside a Daytona sandbox. Identical to the TypeScript
+// that runs inside a Daytona sandbox. Mirrors the TypeScript
 // getBridgeScript() in libs/orchestrator/src/lib/bridge-script.ts.
-func GenerateBridgeScript(port int, projectDir string) string {
+// agentType is "claude_code", "open_code", or "codex"; empty defaults to "claude_code".
+func GenerateBridgeScript(port int, projectDir string, agentType string) string {
 	safeProjDir := strings.ReplaceAll(projectDir, `"`, `\"`)
+	if agentType == "" {
+		agentType = "claude_code"
+	}
 
 	return fmt.Sprintf(`const http = require("http");
 const { WebSocketServer } = require("ws");
@@ -31,6 +35,7 @@ const urlMod = require("url");
 
 let state = { ws: null };
 const claudeProcesses = new Map();
+const pendingAskUser = new Map();
 
 const terminals = new Map();
 
@@ -330,6 +335,45 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/internal/ask-user") {
+    let body = "";
+    req.on("data", (c) => body += c);
+    req.on("end", () => {
+      try {
+        const payload = JSON.parse(body);
+        const questionId = "ask-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+        const activeChatId = payload.chatId !== "default" ? payload.chatId : (claudeProcesses.size > 0 ? Array.from(claudeProcesses.keys()).pop() : "default");
+        if (state.ws && state.ws.readyState === 1) {
+          state.ws.send(JSON.stringify({ type: "claude_message", chatId: activeChatId, data: { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: questionId, name: "AskUserQuestion", input: payload.input || {} }], stop_reason: "tool_use" } } }));
+          state.ws.send(JSON.stringify({ type: "ask_user_pending", chatId: activeChatId, questionId: questionId }));
+        }
+        const ASK_TIMEOUT_MS = 300000;
+        const entry = { resolve: null, timer: null };
+        entry.timer = setTimeout(() => {
+          pendingAskUser.delete(questionId);
+          if (state.ws && state.ws.readyState === 1) {
+            state.ws.send(JSON.stringify({ type: "ask_user_resolved", chatId: activeChatId, questionId: questionId }));
+          }
+          res.writeHead(408, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "User did not respond in time" }));
+        }, ASK_TIMEOUT_MS);
+        pendingAskUser.set(questionId, { resolve: (answer) => {
+          clearTimeout(entry.timer);
+          pendingAskUser.delete(questionId);
+          if (state.ws && state.ws.readyState === 1) {
+            state.ws.send(JSON.stringify({ type: "ask_user_resolved", chatId: activeChatId, questionId: questionId }));
+          }
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ answer }));
+        } });
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
   res.writeHead(200);
   res.end("bridge-ok");
 });
@@ -363,14 +407,15 @@ wss.on("connection", (ws) => {
 
         if (agentMode === "plan") {
           claudeArgs.push("--dangerously-skip-permissions");
-          claudeArgs.push("--disallowedTools", "Edit", "Write", "MultiEdit");
+          claudeArgs.push("--disallowedTools", "AskUserQuestion,Edit,Write,MultiEdit");
           claudeArgs.push("--append-system-prompt", "You are in Plan mode. Analyze the request and produce a detailed plan. You CANNOT create or edit files. Only use read-only tools to explore the codebase, then present your plan as text.");
         } else if (agentMode === "ask") {
           claudeArgs.push("--dangerously-skip-permissions");
-          claudeArgs.push("--disallowedTools", "Edit", "Write", "MultiEdit", "Bash");
+          claudeArgs.push("--disallowedTools", "AskUserQuestion,Edit,Write,MultiEdit,Bash");
           claudeArgs.push("--append-system-prompt", "You are in Ask mode. Only answer the question using read-only tools. You CANNOT create, edit, or write files, or run shell commands.");
         } else {
           claudeArgs.push("--dangerously-skip-permissions");
+          claudeArgs.push("--disallowedTools", "AskUserQuestion");
         }
 
         if (model) {
@@ -459,18 +504,23 @@ wss.on("connection", (ws) => {
         }
 
       } else if (msg.type === "claude_user_answer") {
-        const proc = claudeProcesses.get(msg.chatId);
-        if (proc && proc.pid > 0) {
-          log("\u{1F916}", "Piping user answer for chat " + msg.chatId + " tool=" + msg.toolUseId);
-          pipeToStdin(proc, {
-            type: "user",
-            message: {
-              role: "user",
-              content: [{ type: "tool_result", tool_use_id: msg.toolUseId, content: msg.answer }],
-            },
-          });
+        const pending = pendingAskUser.get(msg.toolUseId);
+        if (pending) {
+          pending.resolve(msg.answer);
         } else {
-          ws.send(JSON.stringify({ type: "claude_error", chatId: msg.chatId, error: "No active Claude process to receive answer" }));
+          const proc = claudeProcesses.get(msg.chatId);
+          if (proc && proc.pid > 0) {
+            log("\u{1F916}", "Piping user answer for chat " + msg.chatId + " tool=" + msg.toolUseId);
+            pipeToStdin(proc, {
+              type: "user",
+              message: {
+                role: "user",
+                content: [{ type: "tool_result", tool_use_id: msg.toolUseId, content: msg.answer }],
+              },
+            });
+          } else {
+            ws.send(JSON.stringify({ type: "claude_error", chatId: msg.chatId, error: "No active Claude process to receive answer" }));
+          }
         }
 
       } else if (msg.type === "claude_input") {
@@ -671,6 +721,41 @@ const TOOLS = [
     description: "Get the exact format you MUST use when outputting an implementation plan in Plan mode. Call this before presenting your plan to ensure the UI can detect and display it. Required for Plan mode.",
     inputSchema: { type: "object", properties: {} },
   },
+  {
+    name: "ask_user",
+    description: "Ask the user a question and wait for their answer. Use this when you need clarification, want to present options, or need the user to make a decision before proceeding. The tool will BLOCK until the user responds, so only use it when you genuinely need input.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        questions: {
+          type: "array",
+          description: "Array of questions to present to the user",
+          items: {
+            type: "object",
+            properties: {
+              header: { type: "string", description: "Short header/title for the question" },
+              question: { type: "string", description: "The question text to display" },
+              options: {
+                type: "array",
+                description: "Available options for the user to choose from",
+                items: {
+                  type: "object",
+                  properties: {
+                    label: { type: "string", description: "Short label for the option" },
+                    description: { type: "string", description: "Longer description of what this option means" },
+                  },
+                  required: ["label"],
+                },
+              },
+              multiSelect: { type: "boolean", description: "Whether the user can select multiple options" },
+            },
+            required: ["question"],
+          },
+        },
+      },
+      required: ["questions"],
+    },
+  },
 ];
 
 async function handleRequest(request) {
@@ -731,6 +816,21 @@ async function handleRequest(request) {
       } else if (toolName === "get_plan_format_instructions") {
         const instruction = "When presenting your implementation plan, you MUST wrap the entire plan in fenced code blocks with the language tag \"plan\". Use this exact format:\n\n` + "```" + `plan\n[Your plan content here — use markdown for structure, headings, lists, etc.]\n` + "```" + `\n\nThe UI detects plans ONLY when they use this exact delimiter. Do not use ` + "```" + `md or any other tag.";
         sendResponse(id, { content: [{ type: "text", text: instruction }] });
+      } else if (toolName === "ask_user") {
+        const result = await bridgeRequest("/internal/ask-user", {
+          chatId: "default",
+          input: { questions: args.questions },
+        });
+        if (result.error) {
+          sendResponse(id, {
+            content: [{ type: "text", text: "User did not respond: " + result.error }],
+            isError: true,
+          });
+        } else {
+          sendResponse(id, {
+            content: [{ type: "text", text: result.answer || "(no answer)" }],
+          });
+        }
       } else {
         sendError(id, -32601, "Unknown tool: " + toolName);
       }

@@ -13,12 +13,13 @@ import (
 
 // BridgeMessage represents a message from the bridge running inside the sandbox.
 type BridgeMessage struct {
-	Type   string          `json:"type"`
-	ChatID string          `json:"chatId,omitempty"`
-	Data   json.RawMessage `json:"data,omitempty"`
-	Code   *int            `json:"code,omitempty"`
-	Error  string          `json:"error,omitempty"`
-	Port   int             `json:"port,omitempty"`
+	Type       string          `json:"type"`
+	ChatID     string          `json:"chatId,omitempty"`
+	Data       json.RawMessage `json:"data,omitempty"`
+	Code       *int            `json:"code,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	Port       int             `json:"port,omitempty"`
+	QuestionID string          `json:"questionId,omitempty"`
 }
 
 // bridgeConn manages the WebSocket connection to the bridge.
@@ -100,7 +101,8 @@ func (b *bridgeConn) send(v interface{}) error {
 
 // sendPrompt sends a start_claude message to the bridge.
 // mode is "agent", "plan", or "ask"; empty defaults to "agent".
-func (b *bridgeConn) sendPrompt(chatID, prompt, sessionID, mode string) error {
+// agentType is "claude_code", "open_code", or "codex"; empty uses the bridge default.
+func (b *bridgeConn) sendPrompt(chatID, prompt, sessionID, mode, agentType string) error {
 	msg := map[string]interface{}{
 		"type":   "start_claude",
 		"prompt": prompt,
@@ -111,6 +113,9 @@ func (b *bridgeConn) sendPrompt(chatID, prompt, sessionID, mode string) error {
 	}
 	if mode != "" {
 		msg["mode"] = mode
+	}
+	if agentType != "" {
+		msg["agentType"] = agentType
 	}
 	return b.send(msg)
 }

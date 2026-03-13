@@ -3,8 +3,12 @@
 ## Stack
 - **API**: NestJS + TypeORM + SQLite (`apps/api`) on port 6000
 - **Dashboard**: React + Zustand + Tailwind (`apps/dashboard`) on port 4200 (Vite)
-- **Orchestrator lib**: `libs/orchestrator` – manages Daytona sandboxes + WebSocket bridge to Claude CLI
-- **Sandbox bridge**: Node.js script uploaded into each Daytona sandbox, manages a long-lived `claude --output-format stream-json --input-format stream-json` process with bidirectional stdin/stdout pipes over WebSocket + manages PTY terminal sessions
+- **Orchestrator lib**: `libs/orchestrator` – manages Daytona sandboxes + WebSocket bridge to agent CLIs
+- **Sandbox bridge**: Node.js script uploaded into each Daytona sandbox. Uses an adapter pattern to support three agent backends:
+  - **Claude Code**: long-lived `claude --output-format stream-json --input-format stream-json` process with bidirectional stdin/stdout pipes
+  - **OpenCode**: per-prompt `opencode run --format json` processes with `--session` for context continuity
+  - **Codex**: long-lived `codex app-server --listen stdio://` process with JSON-RPC 2.0 protocol (thread/turn lifecycle)
+  All adapters normalize output into the same event format (`system`/`assistant`/`result` with content blocks) so the gateway and dashboard stay agent-agnostic. Terminal PTY sessions are shared across all agent types.
 
 ## Data Model
 - **Project** → has a Daytona sandbox (provisioned async on creation). Optional `gitRepo` URL for cloning a repository.
@@ -35,12 +39,18 @@ Each chat maintains a long-lived Claude Code process. The first prompt spawns th
 1. User sends another message → dashboard emits `send_prompt { chatId, prompt }`
 2. Gateway stores user message in DB, sends `start_claude` to bridge → bridge detects an existing process for that chatId and pipes the prompt to stdin as `{"type":"user","message":{"role":"user","content":"..."}}`
 
-### AskUserQuestion
-When Claude calls the `AskUserQuestion` tool, the bridge forwards the `tool_use` block to the dashboard via `agent_message`. The dashboard renders a multiple-choice UI (`AskQuestionBlock`). When the user selects options and clicks Continue:
-1. Dashboard emits `user_answer { chatId, toolUseId, answer }` via Socket.io
-2. Gateway resolves chat → project → sandbox → `SandboxManager.sendUserAnswer()`
-3. Bridge pipes a JSONL `tool_result` message to Claude's stdin, referencing the `tool_use_id`
-4. Claude receives the answer and continues execution
+### AskUserQuestion (waiting_for_input)
+Claude's native `AskUserQuestion` tool is **disallowed** in all modes (both TS and Go bridges). Instead, all agents use the MCP `ask_user` tool (`mcp__terminal-server__ask_user`) which routes through the bridge's `/internal/ask-user` endpoint:
+
+1. Agent calls `mcp__terminal-server__ask_user` → MCP server POSTs to bridge `/internal/ask-user`
+2. Bridge emits `claude_message` (with `AskUserQuestion` tool_use block) + `ask_user_pending` over WebSocket
+3. Gateway/CLI sets chat status to `waiting_for_input` and emits `agent_status { status: 'waiting_for_input' }`
+4. Dashboard renders `AskQuestionBlock` with multiple-choice UI; CLI TUI shows `?` indicator and answer prompt
+5. User answers → `user_answer { chatId, toolUseId, answer }` via Socket.io (or `answerCh` in CLI TUI)
+6. Bridge resolves the pending HTTP request, emits `ask_user_resolved`, status returns to `running`
+7. MCP server returns the answer to the agent, which continues execution
+
+The `waiting_for_input` status is persisted in the DB and survives page reloads. The bridge times out pending questions after 5 minutes.
 
 ### Terminals
 Each project supports multiple persistent terminal sessions (like tmux). Terminals survive dashboard reloads via scrollback replay.
@@ -69,8 +79,11 @@ An MCP server (`mcp-terminal-server.js`) runs inside the sandbox alongside the b
 | `list_terminals` | List all open terminal sessions |
 | `write_to_terminal` | Send input to a terminal (e.g. answer a prompt) |
 | `close_terminal` | Close a terminal |
+| `get_preview_url` | Get public preview URL for a port running in the sandbox |
+| `get_plan_format_instructions` | Get the exact plan format delimiters for Plan mode |
+| `ask_user` | Ask the user a question and block until they respond (triggers `waiting_for_input` status) |
 
-The MCP server communicates with the bridge via local HTTP endpoints (`/internal/terminal-create`, `/internal/terminal-read`, etc.). Claude discovers the tools via `~/.claude/mcp.json` written during sandbox provisioning.
+The MCP server communicates with the bridge via local HTTP endpoints (`/internal/terminal-create`, `/internal/terminal-read`, `/internal/ask-user`, etc.). Agents discover the tools via their MCP config: Claude Code uses `~/.claude.json`, OpenCode uses `opencode.json`, Codex uses `codex mcp add`.
 
 Example: user asks *"start the dev server so I can watch it"* → Claude calls `open_terminal({ name: "Dev Server", command: "npm run dev" })` → a new tab appears in the dashboard terminal panel with live output.
 
@@ -78,7 +91,7 @@ Example: user asks *"start the dev server so I can watch it"* → Claude calls `
 - Server: NestJS `@WebSocketGateway` at namespace `/ws/agent`, path `/ws/socket.io`
 - Client: `socket.io-client` connects with same path
 - Vite proxy: `/ws` → `http://localhost:6000` with `ws: true`
-- Chat events: `subscribe_project`, `execute_chat`, `send_prompt`, `user_answer` (client→server); `agent_message`, `agent_status`, `agent_error` (server→client)
+- Chat events: `subscribe_project`, `execute_chat`, `send_prompt`, `user_answer` (client→server); `agent_message`, `agent_status`, `agent_error` (server→client). `agent_status` values: `running`, `waiting_for_input`, `retrying`, `completed`, `error`
 - Terminal events: `terminal_create`, `terminal_input`, `terminal_resize`, `terminal_close`, `terminal_list` (client→server); `terminal_created`, `terminal_output`, `terminal_exit`, `terminal_error`, `terminal_list` (server→client)
 - File events: `file_list`, `file_create`, `file_rename`, `file_delete`, `file_move`, `file_read`, `file_write` (client→server); `file_list_result`, `file_op_result`, `file_changed`, `file_read_result`, `file_write_result` (server→client)
 - Project info events: `project_info` (client→server + server→client) – returns `{ gitBranch, projectDir }` for the status bar and file tree root

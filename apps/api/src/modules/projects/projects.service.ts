@@ -32,6 +32,7 @@ export class ProjectsService implements OnModuleInit {
     try {
       this.sandboxManager = new SandboxManager({
         anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+        openaiApiKey: process.env.OPENAI_API_KEY,
       });
       await this.sandboxManager.initialize();
       this.logger.log(
@@ -116,7 +117,7 @@ export class ProjectsService implements OnModuleInit {
       this.logger.log(`No sandboxId for project ${projectId} – provisioning new sandbox`);
       await this.repo.update(projectId, { status: 'creating' });
       this.gateway.notifyUpdated(await this.findById(projectId));
-      await this.provisionSandbox(projectId, project.sandboxSnapshot, project.name, project.gitRepo);
+      await this.provisionSandbox(projectId, project.sandboxSnapshot, project.name, project.gitRepo, project.agentType);
     }
   }
 
@@ -162,7 +163,7 @@ export class ProjectsService implements OnModuleInit {
     this.gateway.notifyCreated(saved);
 
     // Asynchronously create the Daytona sandbox
-    this.provisionSandbox(saved.id, saved.sandboxSnapshot, saved.name, saved.gitRepo).catch((err) => {
+    this.provisionSandbox(saved.id, saved.sandboxSnapshot, saved.name, saved.gitRepo, saved.agentType).catch((err) => {
       this.logger.error(`Failed to provision sandbox for project ${saved.id}: ${err}`);
     });
 
@@ -358,6 +359,7 @@ export class ProjectsService implements OnModuleInit {
     snapshot: string,
     projectName?: string,
     gitRepo?: string | null,
+    agentType?: string,
   ): Promise<void> {
     if (!(await this.ensureSandboxManager())) {
       this.logger.warn('No SandboxManager – skipping sandbox creation (configure API keys in Settings)');
@@ -368,7 +370,7 @@ export class ProjectsService implements OnModuleInit {
     }
 
     try {
-      const sandboxId = await this.sandboxManager.createSandbox(snapshot, projectName, gitRepo || undefined);
+      const sandboxId = await this.sandboxManager.createSandbox(snapshot, projectName, gitRepo || undefined, agentType);
       await this.repo.update(projectId, {
         sandboxId,
         status: 'running',

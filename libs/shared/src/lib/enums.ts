@@ -10,12 +10,14 @@ export enum ProjectStatus {
 export enum AgentType {
   ClaudeCode = 'claude_code',
   OpenCode = 'open_code',
+  Codex = 'codex',
 }
 
 // ── Task ─────────────────────────────────────────────
 export enum TaskStatus {
   Idle = 'idle',
   Running = 'running',
+  WaitingForInput = 'waiting_for_input',
   Completed = 'completed',
   Error = 'error',
 }

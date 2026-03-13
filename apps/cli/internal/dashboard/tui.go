@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/apex/cli/internal/chat"
@@ -11,21 +12,19 @@ import (
 	"github.com/apex/cli/internal/types"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
 const (
-	focusProjects = 0
-	focusChats    = 1
-	focusContent  = 2
-	focusPrompt   = 3
+	focusList    = 0
+	focusContent = 1
+	focusPrompt  = 2
 )
 
-// truncateRunes truncates s to max runes, appending "..." if truncated.
 func truncateRunes(s string, max int) string {
 	if max <= 3 {
 		return s
@@ -37,37 +36,104 @@ func truncateRunes(s string, max int) string {
 	return string(runes[:max-3]) + "..."
 }
 
-// ProjectItem implements list.DefaultItem for projects.
-type projectItem struct {
-	project db.ProjectRow
-}
-
-func (i projectItem) Title() string {
-	return truncateRunes(i.project.Name, 20)
-}
-func (i projectItem) Description() string { return i.project.Status + " · " + formatTime(i.project.CreatedAt) }
-func (i projectItem) FilterValue() string { return i.project.Name }
-
-// ChatItem implements list.DefaultItem for chats.
-type chatItem struct {
-	chat db.ChatRow
-}
-
-func (i chatItem) Title() string {
-	title := i.chat.Title
-	if title == "" {
-		title = "(empty)"
-	}
-	return truncateRunes(title, 40)
-}
-func (i chatItem) Description() string { return formatTime(i.chat.UpdatedAt) }
-func (i chatItem) FilterValue() string { return i.chat.Title }
-
 func formatTime(iso string) string {
 	if len(iso) >= 10 {
 		return iso[:10]
 	}
 	return iso
+}
+
+// treeItem represents either a project header or a chat entry in the unified tree list.
+type treeItem struct {
+	isProject  bool
+	expanded   bool
+	project    db.ProjectRow
+	chat       db.ChatRow
+	projectIdx int
+}
+
+func (i treeItem) FilterValue() string {
+	if i.isProject {
+		return i.project.Name
+	}
+	return i.chat.Title
+}
+
+// treeDelegate renders tree items: projects as bold headers with expand arrows,
+// chats indented underneath.
+type treeDelegate struct{}
+
+func (d treeDelegate) Height() int                             { return 1 }
+func (d treeDelegate) Spacing() int                            { return 0 }
+func (d treeDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
+
+func chatStatusIndicator(status string) (symbol string, color lipgloss.Color) {
+	switch status {
+	case "running":
+		return "●", lipgloss.Color("214") // yellow/orange
+	case "waiting_for_input":
+		return "?", lipgloss.Color("214") // yellow/orange question mark
+	case "completed":
+		return "✓", lipgloss.Color("76") // green
+	case "error":
+		return "✗", lipgloss.Color("196") // red
+	default:
+		return "○", lipgloss.Color("243") // dim gray
+	}
+}
+
+func (d treeDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	ti, ok := item.(treeItem)
+	if !ok {
+		return
+	}
+
+	selected := index == m.Index()
+	width := m.Width()
+	if width <= 0 {
+		width = 30
+	}
+
+	var line string
+	if ti.isProject {
+		arrow := "▶"
+		if ti.expanded {
+			arrow = "▼"
+		}
+		name := truncateRunes(ti.project.Name, width-14)
+		status := ti.project.Status
+		left := arrow + " " + name
+		right := status
+		pad := width - lipgloss.Width(left) - lipgloss.Width(right)
+		if pad < 1 {
+			pad = 1
+		}
+		raw := left + strings.Repeat(" ", pad) + right
+		if selected {
+			line = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("170")).Render(raw)
+		} else {
+			line = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252")).Render(raw)
+		}
+	} else {
+		title := ti.chat.Title
+		if title == "" {
+			title = "(empty)"
+		}
+		symbol, symbolColor := chatStatusIndicator(ti.chat.Status)
+		title = truncateRunes(title, width-6)
+
+		indent := "   "
+		textColor := lipgloss.Color("245")
+		if selected {
+			textColor = lipgloss.Color("170")
+		}
+
+		line = lipgloss.NewStyle().Foreground(textColor).Render(indent) +
+			lipgloss.NewStyle().Foreground(symbolColor).Render(symbol+" ") +
+			lipgloss.NewStyle().Foreground(textColor).Render(title)
+	}
+
+	fmt.Fprint(w, line)
 }
 
 type model struct {
@@ -78,42 +144,42 @@ type model struct {
 	focus  int
 
 	projects     []db.ProjectRow
-	chats        []db.ChatRow
-	projectList  list.Model
-	chatList     list.Model
+	projectChats map[string][]db.ChatRow
+	expanded     map[string]bool
+	treeItems    []treeItem
+	treeList     list.Model
 	viewport     viewport.Model
 	viewportInit bool
-
-	projectDelegate list.DefaultDelegate
-	chatDelegate    list.DefaultDelegate
-
-	lastProjectIdx int
-	lastChatIdx    int
+	viewingChatID string
 
 	// Prompt panel (when sandbox is running)
-	promptInput    textarea.Model
-	agentMode      string
-	manager        *sandbox.Manager
-	connectedProj  string // project ID we're connected to
-	streaming        bool
+	promptInput      textarea.Model
+	agentMode        string
+	manager          *sandbox.Manager
+	connectedProj    string
+	streamingChatID  string // chat ID currently streaming, empty if none
+	waitingForAnswer bool
+	pendingQuestion  string // questionID for the pending ask_user
 	promptDoneCh     chan promptDoneMsg
-	contentUpdatedCh chan string // chatID when new assistant message written to DB
+	contentUpdatedCh chan string
+	askUserCh        chan askUserMsg
+	answerCh         chan answerPayload // sends answers to the bridge goroutine
 	promptErr        string
 
 	// Create project
-	creatingProject   bool   // input panel visible
-	projectCreating   bool   // create in progress (block Enter, show status)
-	projectNameInput  textinput.Model
-	projectCreateErr  string
+	creatingProject  bool
+	projectCreating  bool
+	projectNameInput textinput.Model
+	projectCreateErr string
 
 	// Delete project confirmation
-	confirmingDelete  bool   // confirmation dialog visible
-	confirmDeleteIdx  int    // project index to delete
-	projectDeleteErr  string // error message when delete fails
+	confirmingDelete bool
+	confirmDeleteID  string
+	projectDeleteErr string
 
 	// Lipgloss styles
 	panelStyle         lipgloss.Style
-	focusLineStyle     lipgloss.Style // line under panel when focused
+	focusLineStyle     lipgloss.Style
 	promptPanelStyle   lipgloss.Style
 	promptPanelFocused lipgloss.Style
 }
@@ -124,6 +190,17 @@ type promptDoneMsg struct {
 
 type contentUpdatedMsg struct {
 	chatID string
+}
+
+type askUserMsg struct {
+	chatID     string
+	questionID string
+}
+
+type answerPayload struct {
+	chatID     string
+	questionID string
+	answer     string
 }
 
 type promptConnectErrMsg struct {
@@ -148,46 +225,17 @@ type projectDeleteErrMsg struct {
 
 // NewModel creates a new dashboard TUI model.
 func NewModel(database *db.DB, cfg *Config) (*model, error) {
-	projDel := list.NewDefaultDelegate()
-	projDel.ShowDescription = true
-	projDel.SetSpacing(0)
-	projDel.SetHeight(2)
-	// Initial width; updated in WindowSizeMsg to prevent long names wrapping
-	projDel.Styles.NormalTitle = projDel.Styles.NormalTitle.MaxWidth(16)
-	projDel.Styles.SelectedTitle = projDel.Styles.SelectedTitle.MaxWidth(16)
-	projDel.Styles.DimmedTitle = projDel.Styles.DimmedTitle.MaxWidth(16)
-
-	chatDel := list.NewDefaultDelegate()
-	chatDel.ShowDescription = true
-	chatDel.SetSpacing(0)
-	chatDel.SetHeight(2)
-	chatDel.Styles.NormalTitle = chatDel.Styles.NormalTitle.MaxWidth(16)
-	chatDel.Styles.SelectedTitle = chatDel.Styles.SelectedTitle.MaxWidth(16)
-	chatDel.Styles.DimmedTitle = chatDel.Styles.DimmedTitle.MaxWidth(16)
-
 	projects, err := database.ListProjects(db.DefaultUserID)
 	if err != nil {
 		return nil, err
 	}
 
-	projectItems := make([]list.Item, len(projects))
-	for i, p := range projects {
-		projectItems[i] = projectItem{project: p}
-	}
-
-	projList := list.New(projectItems, projDel, 24, 12)
-	projList.Title = "Projects"
-	projList.SetShowFilter(false)
-	projList.SetFilteringEnabled(false)
-	projList.SetShowStatusBar(false)
-	projList.SetShowHelp(false)
-
-	chatList := list.New([]list.Item{}, chatDel, 24, 12)
-	chatList.Title = "Chats"
-	chatList.SetShowFilter(false)
-	chatList.SetFilteringEnabled(false)
-	chatList.SetShowStatusBar(false)
-	chatList.SetShowHelp(false)
+	tl := list.New([]list.Item{}, treeDelegate{}, 30, 12)
+	tl.Title = "Projects"
+	tl.SetShowFilter(false)
+	tl.SetFilteringEnabled(false)
+	tl.SetShowStatusBar(false)
+	tl.SetShowHelp(false)
 
 	vp := viewport.New(48, 12)
 	vp.Style = lipgloss.NewStyle()
@@ -199,7 +247,6 @@ func NewModel(database *db.DB, cfg *Config) (*model, error) {
 	ti.SetHeight(3)
 	ti.ShowLineNumbers = false
 	ti.Prompt = ""
-	// Remove default border/background from textarea
 	ti.FocusedStyle.Base = lipgloss.NewStyle()
 	ti.BlurredStyle.Base = lipgloss.NewStyle()
 
@@ -209,38 +256,51 @@ func NewModel(database *db.DB, cfg *Config) (*model, error) {
 	projNameInput.Width = 40
 
 	m := &model{
-		db:              database,
-		cfg:             cfg,
-		width:           80,
-		height:          24,
-		focus:           focusProjects,
-		projects:        projects,
-		projectList:     projList,
-		chatList:        chatList,
-		viewport:        vp,
-		promptInput:     ti,
-		agentMode:       "agent",
-		projectDelegate: projDel,
-		chatDelegate:    chatDel,
-		lastProjectIdx:  -1,
-		lastChatIdx:     -1,
-		promptDoneCh:    make(chan promptDoneMsg, 1),
+		db:               database,
+		cfg:              cfg,
+		width:            80,
+		height:           24,
+		focus:            focusList,
+		projects:         projects,
+		projectChats:     make(map[string][]db.ChatRow),
+		expanded:         make(map[string]bool),
+		treeList:         tl,
+		viewport:         vp,
+		promptInput:      ti,
+		agentMode:        "agent",
+		promptDoneCh:     make(chan promptDoneMsg, 1),
 		contentUpdatedCh: make(chan string, 32),
-		panelStyle: lipgloss.NewStyle().Padding(0, 1),
+		askUserCh:        make(chan askUserMsg, 1),
+		answerCh:         make(chan answerPayload, 1),
+		panelStyle:       lipgloss.NewStyle().Padding(0, 1),
 		focusLineStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("170")).
 			Padding(0, 0),
-		promptPanelStyle: lipgloss.NewStyle().Padding(0, 2),
+		promptPanelStyle:   lipgloss.NewStyle().Padding(0, 2),
 		promptPanelFocused: lipgloss.NewStyle().Padding(0, 2),
-		projectNameInput: projNameInput,
+		projectNameInput:   projNameInput,
 	}
-	// Initial load: show first project's chats if any
-	if len(projects) > 0 {
-		m.lastProjectIdx = 0
-		m.loadChatsForProject(0)
+
+	for _, p := range projects {
+		chats, _ := database.ListChats(p.ID)
+		m.projectChats[p.ID] = chats
+	}
+
+	for _, p := range projects {
+		m.expanded[p.ID] = true
+	}
+	m.buildTreeItems()
+
+	if len(projects) == 0 {
+		m.viewport.SetContent("No projects yet. Press Ctrl+N to create one.")
 	} else {
-		m.viewport.SetContent("No projects yet. Run: apex project create --name <name>")
+		chats := m.projectChats[projects[0].ID]
+		if len(chats) > 0 {
+			m.loadContentForChatByID(chats[0].ID)
+			m.treeList.Select(1) // first chat (index 0 is the project header)
+		}
 	}
+
 	return m, nil
 }
 
@@ -248,34 +308,125 @@ func (m model) Init() tea.Cmd {
 	return nil
 }
 
-// hasPromptPanel returns true when we should show the prompt (project has running sandbox).
+// buildTreeItems rebuilds the flat item list from projects + expanded chats,
+// preserving the current selection when possible.
+func (m *model) buildTreeItems() {
+	prevIdx := m.treeList.Index()
+	var prevItem treeItem
+	if prevIdx >= 0 && prevIdx < len(m.treeItems) {
+		prevItem = m.treeItems[prevIdx]
+	}
+
+	var items []treeItem
+	for i, p := range m.projects {
+		exp := m.expanded[p.ID]
+		items = append(items, treeItem{
+			isProject:  true,
+			expanded:   exp,
+			project:    p,
+			projectIdx: i,
+		})
+		if exp {
+			chats := m.projectChats[p.ID]
+			for _, c := range chats {
+				items = append(items, treeItem{
+					isProject:  false,
+					project:    p,
+					chat:       c,
+					projectIdx: i,
+				})
+			}
+		}
+	}
+	m.treeItems = items
+
+	listItems := make([]list.Item, len(items))
+	for i, ti := range items {
+		listItems[i] = ti
+	}
+	m.treeList.SetItems(listItems)
+
+	if prevIdx >= 0 {
+		for i, ti := range items {
+			if prevItem.isProject && ti.isProject && ti.project.ID == prevItem.project.ID {
+				m.treeList.Select(i)
+				return
+			}
+			if !prevItem.isProject && !ti.isProject && ti.chat.ID == prevItem.chat.ID {
+				m.treeList.Select(i)
+				return
+			}
+		}
+		if prevIdx >= len(items) && len(items) > 0 {
+			m.treeList.Select(len(items) - 1)
+		}
+	}
+}
+
+func (m *model) selectInTree(projectID string, chatID string) {
+	for i, ti := range m.treeItems {
+		if chatID != "" && !ti.isProject && ti.chat.ID == chatID {
+			m.treeList.Select(i)
+			return
+		}
+		if chatID == "" && ti.isProject && ti.project.ID == projectID {
+			m.treeList.Select(i)
+			return
+		}
+	}
+}
+
 func (m *model) hasPromptPanel() bool {
-	if len(m.projects) == 0 || m.projectList.Index() < 0 || m.projectList.Index() >= len(m.projects) {
+	p := m.selectedProject()
+	if p == nil {
 		return false
 	}
-	p := m.projects[m.projectList.Index()]
 	return p.SandboxID != nil && *p.SandboxID != "" && p.Status == "running"
 }
 
 func (m *model) selectedProject() *db.ProjectRow {
-	if m.projectList.Index() < 0 || m.projectList.Index() >= len(m.projects) {
+	idx := m.treeList.Index()
+	if idx < 0 || idx >= len(m.treeItems) {
 		return nil
 	}
-	return &m.projects[m.projectList.Index()]
+	pIdx := m.treeItems[idx].projectIdx
+	if pIdx < 0 || pIdx >= len(m.projects) {
+		return nil
+	}
+	return &m.projects[pIdx]
 }
 
 func (m *model) selectedChat() *db.ChatRow {
-	if m.chatList.Index() < 0 || m.chatList.Index() >= len(m.chats) {
+	idx := m.treeList.Index()
+	if idx < 0 || idx >= len(m.treeItems) {
 		return nil
 	}
-	return &m.chats[m.chatList.Index()]
+	ti := m.treeItems[idx]
+	if ti.isProject {
+		return nil
+	}
+	chats := m.projectChats[ti.project.ID]
+	for i := range chats {
+		if chats[i].ID == ti.chat.ID {
+			return &chats[i]
+		}
+	}
+	return nil
+}
+
+func (m *model) selectedTreeItem() *treeItem {
+	idx := m.treeList.Index()
+	if idx < 0 || idx >= len(m.treeItems) {
+		return nil
+	}
+	return &m.treeItems[idx]
 }
 
 func (m *model) maxFocus() int {
 	if m.hasPromptPanel() {
-		return 4 // projects, chats, content, prompt
+		return 3 // list, content, prompt
 	}
-	return 3
+	return 2
 }
 
 func (m *model) connectToSandbox() error {
@@ -287,7 +438,7 @@ func (m *model) connectToSandbox() error {
 		return errNoSandbox
 	}
 	if m.manager != nil && m.connectedProj == p.ID {
-		return nil // already connected
+		return nil
 	}
 	if m.manager != nil {
 		m.manager.Close()
@@ -314,17 +465,62 @@ type errConfig struct{ msg string }
 
 func (e *errConfig) Error() string { return e.msg }
 
-func (m *model) runDeleteProject(idx int) tea.Cmd {
-	if idx < 0 || idx >= len(m.projects) {
+const draftChatTitle = "(draft)"
+
+func (m *model) ensureDraftChat() bool {
+	p := m.selectedProject()
+	if p == nil || !m.hasPromptPanel() {
+		return false
+	}
+	chats := m.projectChats[p.ID]
+	for _, c := range chats {
+		if c.Title == draftChatTitle {
+			m.selectInTree(p.ID, c.ID)
+			return true
+		}
+	}
+	chatRow, err := m.db.CreateChat(p.ID, draftChatTitle)
+	if err != nil {
+		return false
+	}
+	_ = chatRow
+	m.reloadProjectChats(p.ID)
+	m.expanded[p.ID] = true
+	m.buildTreeItems()
+	chats = m.projectChats[p.ID]
+	for _, c := range chats {
+		if c.Title == draftChatTitle {
+			m.selectInTree(p.ID, c.ID)
+			break
+		}
+	}
+	return true
+}
+
+func (m *model) reloadProjectChats(projectID string) {
+	chats, err := m.db.ListChats(projectID)
+	if err != nil {
+		m.projectChats[projectID] = nil
+		return
+	}
+	m.projectChats[projectID] = chats
+}
+
+func (m *model) runDeleteProject(projectID string) tea.Cmd {
+	var proj *db.ProjectRow
+	for i := range m.projects {
+		if m.projects[i].ID == projectID {
+			proj = &m.projects[i]
+			break
+		}
+	}
+	if proj == nil {
 		return nil
 	}
-	proj := m.projects[idx]
-	projectID := proj.ID
 	sandboxID := proj.SandboxID
 	cfg := m.cfg
-	db := m.db
+	dbRef := m.db
 
-	// Close our connection if we're connected to this project
 	if m.manager != nil && m.connectedProj == projectID {
 		m.manager.Close()
 		m.manager = nil
@@ -332,7 +528,6 @@ func (m *model) runDeleteProject(idx int) tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		// Try to delete sandbox first (best effort)
 		if sandboxID != nil && *sandboxID != "" && cfg != nil && cfg.CanConnect() {
 			manager, err := sandbox.NewManager(cfg.AnthropicKey, cfg.DaytonaKey, cfg.DaytonaURL)
 			if err == nil {
@@ -341,7 +536,7 @@ func (m *model) runDeleteProject(idx int) tea.Cmd {
 				manager.Close()
 			}
 		}
-		if err := db.DeleteProject(projectID); err != nil {
+		if err := dbRef.DeleteProject(projectID); err != nil {
 			return projectDeleteErrMsg{err: err}
 		}
 		return projectDeletedMsg{projectID: projectID}
@@ -357,13 +552,12 @@ func (m *model) runCreateProject(name string) tea.Cmd {
 	if err != nil {
 		return func() tea.Msg { return projectCreateErrMsg{err: fmt.Errorf("create project: %w", err)} }
 	}
-	// Run sandbox provisioning in Cmd (goroutine) so UI stays responsive
 	cfg := m.cfg
-	db := m.db
+	dbRef := m.db
 	return func() tea.Msg {
 		if cfg == nil || !cfg.CanConnect() {
-			db.UpdateProjectStatus(project.ID, "stopped", nil, nil)
-			proj, _ := db.GetProject(project.ID)
+			dbRef.UpdateProjectStatus(project.ID, "stopped", nil, nil)
+			proj, _ := dbRef.GetProject(project.ID)
 			if proj != nil {
 				return projectCreatedMsg{project: *proj}
 			}
@@ -372,7 +566,7 @@ func (m *model) runCreateProject(name string) tea.Cmd {
 		manager, mErr := sandbox.NewManager(cfg.AnthropicKey, cfg.DaytonaKey, cfg.DaytonaURL)
 		if mErr != nil {
 			errMsg := mErr.Error()
-			db.UpdateProjectStatus(project.ID, "error", nil, &errMsg)
+			dbRef.UpdateProjectStatus(project.ID, "error", nil, &errMsg)
 			return projectCreateErrMsg{err: fmt.Errorf("sandbox manager: %w", mErr)}
 		}
 		defer manager.Close()
@@ -380,11 +574,11 @@ func (m *model) runCreateProject(name string) tea.Cmd {
 		sandboxID, sErr := manager.CreateSandbox(ctx, project.SandboxSnapshot, name, "")
 		if sErr != nil {
 			errMsg := sErr.Error()
-			db.UpdateProjectStatus(project.ID, "error", nil, &errMsg)
+			dbRef.UpdateProjectStatus(project.ID, "error", nil, &errMsg)
 			return projectCreateErrMsg{err: fmt.Errorf("sandbox: %w", sErr)}
 		}
-		db.UpdateProjectStatus(project.ID, "running", &sandboxID, nil)
-		proj, _ := db.GetProject(project.ID)
+		dbRef.UpdateProjectStatus(project.ID, "running", &sandboxID, nil)
+		proj, _ := dbRef.GetProject(project.ID)
 		if proj != nil {
 			return projectCreatedMsg{project: *proj}
 		}
@@ -392,9 +586,47 @@ func (m *model) runCreateProject(name string) tea.Cmd {
 	}
 }
 
-func (m *model) trySendPrompt() tea.Cmd {
-	if m.streaming {
+func (m *model) trySendAnswer() tea.Cmd {
+	answer := m.promptInput.Value()
+	if answer == "" {
 		return nil
+	}
+	m.promptInput.Reset()
+	m.promptInput.Placeholder = "Type a prompt... (Enter to send · Alt+Enter new line)"
+	m.waitingForAnswer = false
+	questionID := m.pendingQuestion
+	m.pendingQuestion = ""
+	m.streamingChatID = m.viewingChatID
+
+	// Update status to running immediately so the tree shows it
+	chatID := m.viewingChatID
+	m.db.UpdateChatStatus(chatID, "running")
+	if p := m.selectedProject(); p != nil {
+		m.reloadProjectChats(p.ID)
+		m.buildTreeItems()
+	}
+
+	// Send via the answerCh -- the bridge goroutine (which owns the
+	// active manager connection) will read this and call SendUserAnswer.
+	select {
+	case m.answerCh <- answerPayload{
+		chatID:     chatID,
+		questionID: questionID,
+		answer:     answer,
+	}:
+	default:
+		m.promptErr = "Answer channel full"
+		m.streamingChatID = ""
+	}
+	return nil
+}
+
+func (m *model) trySendPrompt() tea.Cmd {
+	if m.streamingChatID != "" && m.streamingChatID == m.viewingChatID {
+		return nil
+	}
+	if m.waitingForAnswer {
+		return m.trySendAnswer()
 	}
 	input := m.promptInput.Value()
 	if input == "" {
@@ -407,11 +639,6 @@ func (m *model) trySendPrompt() tea.Cmd {
 		return nil
 	}
 	activeChat := m.selectedChat()
-	if activeChat == nil && len(m.chats) > 0 {
-		m.promptErr = "Select a chat"
-		return nil
-	}
-	// Create new chat if none selected or list is empty
 	if activeChat == nil {
 		chatRow, err := m.db.CreateChat(p.ID, input)
 		if err != nil {
@@ -419,11 +646,12 @@ func (m *model) trySendPrompt() tea.Cmd {
 			return nil
 		}
 		activeChat = chatRow
-		m.loadChatsForProject(m.projectList.Index())
-		m.lastChatIdx = 0
+		m.reloadProjectChats(p.ID)
+		m.expanded[p.ID] = true
+		m.buildTreeItems()
+		m.selectInTree(p.ID, activeChat.ID)
 	}
 
-	// Add user message to DB
 	contentJSON := db.MarshalJSON([]types.ContentBlock{{Type: "text", Text: input}})
 	if err := m.db.AddMessage(activeChat.ID, "user", contentJSON, nil); err != nil {
 		m.promptErr = "Failed to save message"
@@ -431,24 +659,22 @@ func (m *model) trySendPrompt() tea.Cmd {
 	}
 	m.db.UpdateChatStatus(activeChat.ID, "running")
 
-	// Rename draft chat to prompt (matches tasks.service naming: first 100 chars)
 	if activeChat.Title == draftChatTitle {
 		title := input
 		if len(title) > 100 {
 			title = title[:100] + "…"
 		}
 		m.db.UpdateChatTitle(activeChat.ID, title)
-		for i := range m.chats {
-			if m.chats[i].ID == activeChat.ID {
-				m.chats[i].Title = title
-				items := make([]list.Item, len(m.chats))
-				for j, c := range m.chats {
-					items[j] = chatItem{chat: c}
-				}
-				m.chatList.SetItems(items)
+		chats := m.projectChats[p.ID]
+		for i := range chats {
+			if chats[i].ID == activeChat.ID {
+				chats[i].Title = title
 				break
 			}
 		}
+		m.projectChats[p.ID] = chats
+		m.buildTreeItems()
+		m.selectInTree(p.ID, activeChat.ID)
 	}
 
 	sessionID := ""
@@ -458,17 +684,24 @@ func (m *model) trySendPrompt() tea.Cmd {
 
 	m.promptInput.Reset()
 	m.promptErr = ""
-	m.streaming = true
+	m.streamingChatID = activeChat.ID
+	m.viewingChatID = activeChat.ID
 
-	// Run connect + send in Cmd (executed in goroutine by Bubble Tea) so UI stays responsive.
-	// Use tea.Batch so we get both: real-time content updates during streaming, and done when complete.
 	chatID := activeChat.ID
 	contentCh := m.contentUpdatedCh
 	doneCh := m.promptDoneCh
+	askCh := m.askUserCh
+	answerCh := m.answerCh
 	dbCopy := m.db
 	onUpdated := func(cid string) {
 		select {
 		case contentCh <- cid:
+		default:
+		}
+	}
+	onAskUser := func(cid, questionID string) {
+		select {
+		case askCh <- askUserMsg{chatID: cid, questionID: questionID}:
 		default:
 		}
 	}
@@ -477,11 +710,36 @@ func (m *model) trySendPrompt() tea.Cmd {
 		if err := m.connectToSandbox(); err != nil {
 			return promptConnectErrMsg{err: err}
 		}
-		if err := m.manager.SendPrompt(chatID, input, sessionID, m.agentMode); err != nil {
+		agentType := ""
+		if proj := m.selectedProject(); proj != nil {
+			agentType = proj.AgentType
+		}
+		if err := m.manager.SendPrompt(chatID, input, sessionID, m.agentMode, agentType); err != nil {
 			return promptConnectErrMsg{err: fmt.Errorf("send: %w", err)}
 		}
+
+		bridgeDone := make(chan struct{})
+		mgr := m.manager
+
+		// Listen for user answers from the TUI and forward them to the bridge.
+		// This goroutine has access to mgr (the active connection).
 		go func() {
-			chat.ProcessBridgeToDB(dbCopy, m.manager, chatID, onUpdated)
+			for {
+				select {
+				case ans := <-answerCh:
+					mgr.SendUserAnswer(ans.chatID, ans.questionID, ans.answer)
+				case <-bridgeDone:
+					return
+				}
+			}
+		}()
+
+		go func() {
+			chat.ProcessBridgeToDBWithCallbacks(dbCopy, mgr, chatID, chat.BridgeCallbacks{
+				OnContentUpdated: onUpdated,
+				OnAskUser:        onAskUser,
+			})
+			close(bridgeDone)
 			select {
 			case doneCh <- promptDoneMsg{chatID: chatID}:
 			default:
@@ -494,94 +752,11 @@ func (m *model) trySendPrompt() tea.Cmd {
 		return contentUpdatedMsg{chatID: <-contentCh}
 	}
 
-	return tea.Batch(blockUntilDone, waitForContentUpdate)
-}
+	waitForAskUser := func() tea.Msg {
+		return <-askCh
+	}
 
-func (m *model) loadChatsForProject(index int) {
-	if index < 0 || index >= len(m.projects) {
-		m.chats = nil
-		m.chatList.SetItems([]list.Item{})
-		m.viewport.SetContent("Select a project")
-		return
-	}
-	p := m.projects[index]
-	chats, err := m.db.ListChats(p.ID)
-	if err != nil {
-		m.chats = nil
-		m.chatList.SetItems([]list.Item{})
-		m.viewport.SetContent("Failed to load chats")
-		return
-	}
-	m.chats = chats
-	items := make([]list.Item, len(chats))
-	for i, c := range chats {
-		items[i] = chatItem{chat: c}
-	}
-	m.chatList.SetItems(items)
-	m.chatList.ResetSelected()
-	m.lastChatIdx = 0
-	if len(chats) > 0 {
-		m.loadContentForChat(0)
-	} else {
-		m.viewport.SetContent("No chats in this project")
-	}
-}
-
-// syncPanelSizes sets list/viewport sizes. The focused panel gets contentHeight-1
-// so there's room for the 1-line focus indicator at the bottom.
-func (m *model) syncPanelSizes(col1, col2, col3, listHeight int) {
-	projH := listHeight
-	if m.focus == focusProjects {
-		projH = listHeight - 1
-		if projH < 4 {
-			projH = 4
-		}
-	}
-	chatH := listHeight
-	if m.focus == focusChats {
-		chatH = listHeight - 1
-		if chatH < 4 {
-			chatH = 4
-		}
-	}
-	contentH := listHeight
-	if m.focus == focusContent {
-		contentH = listHeight - 1
-		if contentH < 4 {
-			contentH = 4
-		}
-	}
-	m.projectList.SetSize(col1-2, projH)
-	m.chatList.SetSize(col2-2, chatH)
-	m.viewport.Height = contentH
-}
-
-// syncPanelSizesOnFocus recalculates and applies panel sizes from current width/height.
-const draftChatTitle = "(draft)"
-
-// ensureDraftChat creates a draft chat if none exists, or selects existing draft. Returns true if a chat is ready.
-func (m *model) ensureDraftChat() bool {
-	p := m.selectedProject()
-	if p == nil || !m.hasPromptPanel() {
-		return false
-	}
-	// If there's already a draft chat, select it
-	for i, c := range m.chats {
-		if c.Title == draftChatTitle {
-			m.chatList.Select(i)
-			m.lastChatIdx = i
-			return true
-		}
-	}
-	// Create new draft
-	chatRow, err := m.db.CreateChat(p.ID, draftChatTitle)
-	if err != nil {
-		return false
-	}
-	m.loadChatsForProject(m.projectList.Index())
-	m.lastChatIdx = 0
-	_ = chatRow
-	return true
+	return tea.Batch(blockUntilDone, waitForContentUpdate, waitForAskUser)
 }
 
 func (m *model) refreshProjects() {
@@ -590,34 +765,16 @@ func (m *model) refreshProjects() {
 		return
 	}
 	m.projects = projects
-	items := make([]list.Item, len(projects))
-	for i, p := range projects {
-		items[i] = projectItem{project: p}
+	for _, p := range projects {
+		if _, ok := m.projectChats[p.ID]; !ok {
+			chats, _ := m.db.ListChats(p.ID)
+			m.projectChats[p.ID] = chats
+		}
+		if _, ok := m.expanded[p.ID]; !ok {
+			m.expanded[p.ID] = true
+		}
 	}
-	m.projectList.SetItems(items)
-}
-
-func (m *model) syncPanelSizesOnFocus() {
-	col1 := m.width / 4
-	col2 := m.width / 4
-	col3 := m.width / 2
-	if col1 < 12 {
-		col1 = 12
-	}
-	if col2 < 12 {
-		col2 = 12
-	}
-	if col3 < 20 {
-		col3 = 20
-	}
-	listHeight := m.height - 2
-	if m.hasPromptPanel() {
-		listHeight = m.height - 7
-	}
-	if listHeight < 6 {
-		listHeight = 6
-	}
-	m.syncPanelSizes(col1, col2, col3, listHeight)
+	m.buildTreeItems()
 }
 
 func (m *model) waitForContentUpdateCmd() tea.Cmd {
@@ -626,17 +783,18 @@ func (m *model) waitForContentUpdateCmd() tea.Cmd {
 	}
 }
 
-func (m *model) loadContentForChat(index int) {
-	m.refreshContentForChat(index, true)
+func (m *model) waitForAskUserCmd() tea.Cmd {
+	return func() tea.Msg {
+		return <-m.askUserCh
+	}
 }
 
-func (m *model) refreshContentForChat(index int, forceBottom bool) {
-	if index < 0 || index >= len(m.chats) {
-		m.viewport.SetContent("Select a chat")
-		return
-	}
-	c := m.chats[index]
-	rows, err := m.db.GetMessages(c.ID)
+func (m *model) loadContentForChatByID(chatID string) {
+	m.refreshContentForChatByID(chatID, true)
+}
+
+func (m *model) refreshContentForChatByID(chatID string, forceBottom bool) {
+	rows, err := m.db.GetMessages(chatID)
 	if err != nil {
 		m.viewport.SetContent("Failed to load messages")
 		return
@@ -652,13 +810,52 @@ func (m *model) refreshContentForChat(index int, forceBottom bool) {
 	if forceBottom || wasAtBottom {
 		m.viewport.GotoBottom()
 	}
+	m.viewingChatID = chatID
+}
+
+func (m *model) syncLayout() {
+	leftCol := m.width * 2 / 5
+	rightCol := m.width - leftCol
+	if leftCol < 20 {
+		leftCol = 20
+	}
+	if rightCol < 20 {
+		rightCol = 20
+	}
+
+	listHeight := m.height - 2
+	if m.hasPromptPanel() {
+		listHeight = m.height - 7
+	}
+	if listHeight < 6 {
+		listHeight = 6
+	}
+
+	treeH := listHeight
+	if m.focus == focusList {
+		treeH = listHeight - 1
+		if treeH < 4 {
+			treeH = 4
+		}
+	}
+	m.treeList.SetSize(leftCol-2, treeH)
+
+	contentH := listHeight
+	if m.focus == focusContent {
+		contentH = listHeight - 1
+		if contentH < 4 {
+			contentH = 4
+		}
+	}
+	m.viewport.Width = rightCol - 2
+	m.viewport.Height = contentH
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case promptConnectErrMsg:
 		m.promptErr = msg.err.Error()
-		m.streaming = false
+		m.streamingChatID = ""
 		return m, nil
 
 	case projectCreatedMsg:
@@ -668,15 +865,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.projectNameInput.Blur()
 		m.projectCreateErr = ""
 		m.refreshProjects()
-		// Select the new project
-		for i, p := range m.projects {
-			if p.ID == msg.project.ID {
-				m.projectList.Select(i)
-				m.lastProjectIdx = i
-				m.loadChatsForProject(i)
-				break
-			}
-		}
+		m.expanded[msg.project.ID] = true
+		m.buildTreeItems()
+		m.selectInTree(msg.project.ID, "")
 		return m, nil
 
 	case projectCreateErrMsg:
@@ -694,21 +885,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.manager = nil
 			m.connectedProj = ""
 		}
+		delete(m.expanded, msg.projectID)
+		delete(m.projectChats, msg.projectID)
 		m.refreshProjects()
-		m.chatList.SetItems([]list.Item{})
 		m.viewport.SetContent("Select a project")
-		if len(m.projects) > 0 {
-			// Select previous position or last item
-			sel := m.projectList.Index()
-			if sel >= len(m.projects) {
-				sel = len(m.projects) - 1
-			}
-			m.projectList.Select(sel)
-			m.lastProjectIdx = sel
-			m.loadChatsForProject(sel)
-		} else {
-			m.lastProjectIdx = -1
-		}
+		m.viewingChatID = ""
 		return m, nil
 
 	case projectDeleteErrMsg:
@@ -717,85 +898,59 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case contentUpdatedMsg:
-		if m.streaming && m.chatList.Index() >= 0 && m.chatList.Index() < len(m.chats) &&
-			m.chats[m.chatList.Index()].ID == msg.chatID {
-			m.refreshContentForChat(m.chatList.Index(), false)
+		if m.streamingChatID == msg.chatID && m.viewingChatID == msg.chatID {
+			m.refreshContentForChatByID(msg.chatID, false)
 		}
 		return m, m.waitForContentUpdateCmd()
 
-	case promptDoneMsg:
-		m.streaming = false
-		if m.chatList.Index() >= 0 && m.chatList.Index() < len(m.chats) {
-			m.loadContentForChat(m.chatList.Index())
+	case askUserMsg:
+		m.streamingChatID = ""
+		m.waitingForAnswer = true
+		m.pendingQuestion = msg.questionID
+		m.promptInput.Placeholder = "Type your answer... (Enter to send)"
+		if m.viewingChatID == msg.chatID {
+			m.refreshContentForChatByID(msg.chatID, false)
 		}
-		if m.projectList.Index() >= 0 && m.projectList.Index() < len(m.projects) {
-			m.loadChatsForProject(m.projectList.Index())
+		if p := m.selectedProject(); p != nil {
+			m.reloadProjectChats(p.ID)
+			m.buildTreeItems()
+		}
+		m.focus = focusPrompt
+		m.promptInput.Focus()
+		return m, m.waitForAskUserCmd()
+
+	case promptDoneMsg:
+		m.streamingChatID = ""
+		m.waitingForAnswer = false
+		m.pendingQuestion = ""
+		if m.viewingChatID != "" {
+			m.loadContentForChatByID(m.viewingChatID)
+		}
+		if p := m.selectedProject(); p != nil {
+			m.reloadProjectChats(p.ID)
+			m.buildTreeItems()
 		}
 		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		col1 := msg.Width / 4
-		col2 := msg.Width / 4
-		col3 := msg.Width / 2
-		if col1 < 12 {
-			col1 = 12
-		}
-		if col2 < 12 {
-			col2 = 12
-		}
-		if col3 < 20 {
-			col3 = 20
-		}
-		listHeight := msg.Height - 2
-		if m.hasPromptPanel() {
-			listHeight = msg.Height - 7
-		}
-		if listHeight < 6 {
-			listHeight = 6
-		}
-		m.syncPanelSizes(col1, col2, col3, listHeight)
-		// Enforce width on delegates so long names/descriptions truncate instead of wrapping
-		itemW := col1 - 4
-		if itemW < 8 {
-			itemW = 8
-		}
-		for _, style := range []*lipgloss.Style{
-			&m.projectDelegate.Styles.NormalTitle, &m.projectDelegate.Styles.NormalDesc,
-			&m.projectDelegate.Styles.SelectedTitle, &m.projectDelegate.Styles.SelectedDesc,
-			&m.projectDelegate.Styles.DimmedTitle, &m.projectDelegate.Styles.DimmedDesc,
-		} {
-			*style = style.MaxWidth(itemW)
-		}
-		itemW = col2 - 4
-		if itemW < 8 {
-			itemW = 8
-		}
-		for _, style := range []*lipgloss.Style{
-			&m.chatDelegate.Styles.NormalTitle, &m.chatDelegate.Styles.NormalDesc,
-			&m.chatDelegate.Styles.SelectedTitle, &m.chatDelegate.Styles.SelectedDesc,
-			&m.chatDelegate.Styles.DimmedTitle, &m.chatDelegate.Styles.DimmedDesc,
-		} {
-			*style = style.MaxWidth(itemW)
-		}
-		m.viewport.Width = col3 - 2
-		m.viewportInit = true
+		m.syncLayout()
 		m.promptInput.SetWidth(msg.Width - 4)
 		m.projectNameInput.Width = msg.Width - 20
+		m.viewportInit = true
 		return m, nil
 
 	case tea.KeyMsg:
-		// Clear delete error on any key (dismiss)
 		if m.projectDeleteErr != "" && !m.confirmingDelete {
 			m.projectDeleteErr = ""
 		}
 
-		// Delete confirmation
+		// Delete confirmation dialog
 		if m.confirmingDelete {
 			switch msg.String() {
 			case "y", "Y":
-				if cmd := m.runDeleteProject(m.confirmDeleteIdx); cmd != nil {
+				if cmd := m.runDeleteProject(m.confirmDeleteID); cmd != nil {
 					m.confirmingDelete = false
 					m.projectDeleteErr = ""
 					return m, cmd
@@ -807,10 +962,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Create project mode
+		// Create project input mode
 		if m.creatingProject {
 			if m.projectCreating {
-				// Create in progress: block all input until done
 				return m, nil
 			}
 			switch msg.String() {
@@ -836,7 +990,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, inputCmd
 		}
 
-		// When in prompt: Ctrl+keys, Tab; q, enter go to textarea
+		// Prompt panel focused
 		if m.focus == focusPrompt {
 			switch msg.String() {
 			case "ctrl+c":
@@ -862,30 +1016,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.focus == focusPrompt {
 					m.promptInput.Focus()
 				}
-				m.syncPanelSizesOnFocus()
+				m.syncLayout()
 				return m, nil
 			}
-			// All other keys pass through to textarea
 		} else {
-			// Not in prompt: handle shortcuts
 			switch msg.String() {
 			case "ctrl+n":
-				if m.focus == focusChats && m.hasPromptPanel() {
-					// Find or create draft chat, then focus prompt
-					if m.ensureDraftChat() {
-						m.focus = focusPrompt
-						m.promptInput.Focus()
-						m.syncPanelSizesOnFocus()
-					}
-					return m, nil
-				}
-				// Create new project (when projects panel or no prompt panel)
 				m.creatingProject = true
 				m.projectNameInput.Reset()
 				m.projectNameInput.Focus()
 				m.projectNameInput.Width = m.width - 20
 				m.projectCreateErr = ""
 				return m, nil
+			case "n":
+				if m.focus == focusList && m.hasPromptPanel() {
+					if m.ensureDraftChat() {
+						m.focus = focusPrompt
+						m.promptInput.Focus()
+						m.syncLayout()
+					}
+					return m, nil
+				}
 			case "q", "ctrl+c":
 				if m.manager != nil {
 					m.manager.Close()
@@ -903,35 +1054,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.promptInput.Blur()
 				}
-				m.syncPanelSizesOnFocus()
+				m.syncLayout()
 				return m, nil
 			case "backspace", "delete":
-				if m.focus == focusProjects {
-					idx := m.projectList.Index()
-					if idx >= 0 && idx < len(m.projects) {
+				if m.focus == focusList {
+					ti := m.selectedTreeItem()
+					if ti != nil && ti.isProject {
 						m.confirmingDelete = true
-						m.confirmDeleteIdx = idx
+						m.confirmDeleteID = ti.project.ID
 						m.projectDeleteErr = ""
 						return m, nil
 					}
 				}
 				return m, nil
 			case "enter":
-				switch m.focus {
-				case focusProjects:
-					idx := m.projectList.Index()
-					if idx >= 0 && idx < len(m.projects) {
-						m.loadChatsForProject(idx)
-						m.focus = focusChats
-					}
-					return m, nil
-				case focusChats:
-					idx := m.chatList.Index()
-					if idx >= 0 && idx < len(m.chats) {
-						m.loadContentForChat(idx)
+				if m.focus == focusList {
+					ti := m.selectedTreeItem()
+					if ti != nil {
+						if ti.isProject {
+							m.expanded[ti.project.ID] = !m.expanded[ti.project.ID]
+							if m.expanded[ti.project.ID] {
+								m.reloadProjectChats(ti.project.ID)
+							}
+							m.buildTreeItems()
+							m.selectInTree(ti.project.ID, "")
+							return m, nil
+						}
+						m.loadContentForChatByID(ti.chat.ID)
 						m.focus = focusContent
+						m.syncLayout()
+						return m, nil
 					}
-					return m, nil
 				}
 			}
 		}
@@ -940,28 +1093,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Route input to focused component
 	var cmd tea.Cmd
 	switch m.focus {
-	case focusProjects:
-		m.projectList, cmd = m.projectList.Update(msg)
-		if idx := m.projectList.Index(); idx != m.lastProjectIdx && idx >= 0 && idx < len(m.projects) {
-			m.lastProjectIdx = idx
-			m.loadChatsForProject(idx)
-			if m.manager != nil && m.connectedProj != m.projects[idx].ID {
+	case focusList:
+		oldProj := m.selectedProject()
+		m.treeList, cmd = m.treeList.Update(msg)
+		newProj := m.selectedProject()
+
+		if oldProj != nil && newProj != nil && oldProj.ID != newProj.ID {
+			if m.manager != nil && m.connectedProj != newProj.ID {
 				m.manager.Close()
 				m.manager = nil
 				m.connectedProj = ""
 			}
 		}
-	case focusChats:
-		m.chatList, cmd = m.chatList.Update(msg)
-		if idx := m.chatList.Index(); idx != m.lastChatIdx && idx >= 0 && idx < len(m.chats) {
-			m.lastChatIdx = idx
-			m.loadContentForChat(idx)
+
+		ti := m.selectedTreeItem()
+		if ti != nil && !ti.isProject && ti.chat.ID != m.viewingChatID {
+			m.loadContentForChatByID(ti.chat.ID)
 		}
 	case focusContent:
 		m.viewport, cmd = m.viewport.Update(msg)
 	case focusPrompt:
-		// Auto-create draft chat when typing in prompt with no chats (fresh project)
-		if m.hasPromptPanel() && len(m.chats) == 0 && m.selectedProject() != nil {
+		if m.hasPromptPanel() && m.selectedChat() == nil && m.selectedProject() != nil {
 			m.ensureDraftChat()
 		}
 		m.promptInput, cmd = m.promptInput.Update(msg)
@@ -974,17 +1126,13 @@ func (m model) View() string {
 		return ""
 	}
 
-	col1 := m.width / 4
-	col2 := m.width / 4
-	col3 := m.width / 2
-	if col1 < 12 {
-		col1 = 12
+	leftCol := m.width * 2 / 5
+	rightCol := m.width - leftCol
+	if leftCol < 20 {
+		leftCol = 20
 	}
-	if col2 < 12 {
-		col2 = 12
-	}
-	if col3 < 20 {
-		col3 = 20
+	if rightCol < 20 {
+		rightCol = 20
 	}
 
 	mainHeight := m.height - 2
@@ -995,42 +1143,39 @@ func (m model) View() string {
 		mainHeight = 6
 	}
 
-	// Render each panel; add focus line at bottom when focused
-	projContent := m.projectList.View()
-	if m.focus == focusProjects {
-		focusLine := m.focusLineStyle.Width(col1 - 2).Render(strings.Repeat("─", col1-2))
-		projContent = lipgloss.JoinVertical(lipgloss.Left, projContent, focusLine)
+	// Left panel: project/chat tree
+	treeContent := m.treeList.View()
+	if m.focus == focusList {
+		focusLine := m.focusLineStyle.Width(leftCol - 2).Render(strings.Repeat("─", leftCol-2))
+		treeContent = lipgloss.JoinVertical(lipgloss.Left, treeContent, focusLine)
 	}
-	projView := m.panelStyle.Width(col1).Height(mainHeight).MaxHeight(mainHeight).Render(projContent)
+	treeView := m.panelStyle.Width(leftCol).Height(mainHeight).MaxHeight(mainHeight).Render(treeContent)
 
-	chatContent := m.chatList.View()
-	if m.focus == focusChats {
-		focusLine := m.focusLineStyle.Width(col2 - 2).Render(strings.Repeat("─", col2-2))
-		chatContent = lipgloss.JoinVertical(lipgloss.Left, chatContent, focusLine)
-	}
-	chatView := m.panelStyle.Width(col2).Height(mainHeight).MaxHeight(mainHeight).Render(chatContent)
-
-	content := "Select a project and chat"
-	if len(m.chats) > 0 && m.chatList.Index() >= 0 && m.chatList.Index() < len(m.chats) {
+	// Right panel: content viewport
+	content := "Select a chat to view messages"
+	if m.viewingChatID != "" {
 		content = m.viewport.View()
 	} else if m.viewport.TotalLineCount() > 0 {
 		content = m.viewport.View()
 	}
 	if m.focus == focusContent {
-		focusLine := m.focusLineStyle.Width(col3 - 2).Render(strings.Repeat("─", col3-2))
+		focusLine := m.focusLineStyle.Width(rightCol - 2).Render(strings.Repeat("─", rightCol-2))
 		content = lipgloss.JoinVertical(lipgloss.Left, content, focusLine)
 	}
-	contentView := m.panelStyle.Width(col3).Height(mainHeight).MaxHeight(mainHeight).Render(content)
+	contentView := m.panelStyle.Width(rightCol).Height(mainHeight).MaxHeight(mainHeight).Render(content)
 
-	layout := lipgloss.JoinHorizontal(lipgloss.Top, projView, chatView, contentView)
+	layout := lipgloss.JoinHorizontal(lipgloss.Top, treeView, contentView)
 
+	// Prompt panel
 	if m.hasPromptPanel() {
 		promptStyle := m.promptPanelStyle
 		if m.focus == focusPrompt {
 			promptStyle = m.promptPanelFocused
 		}
 		statusText := ""
-		if m.streaming {
+		if m.waitingForAnswer && m.viewingChatID != "" && m.pendingQuestion != "" {
+			statusText = " ? Waiting for your answer (type below, press Enter)"
+		} else if m.streamingChatID != "" && m.streamingChatID == m.viewingChatID {
 			statusText = " Thinking..."
 		} else if m.promptErr != "" {
 			statusText = " " + m.promptErr
@@ -1051,7 +1196,7 @@ func (m model) View() string {
 		layout = layout + "\n" + promptPanel
 	}
 
-	// Create project panel (replaces help when active)
+	// Create project overlay
 	if m.creatingProject {
 		var createContent string
 		if m.projectCreating {
@@ -1074,24 +1219,30 @@ func (m model) View() string {
 		return layout + "\n" + lipgloss.NewStyle().Padding(0, 1).Render(createContent)
 	}
 
+	// Help / confirmation line
 	var helpLine string
-	if m.confirmingDelete && m.confirmDeleteIdx >= 0 && m.confirmDeleteIdx < len(m.projects) {
-		name := m.projects[m.confirmDeleteIdx].Name
+	if m.confirmingDelete && m.confirmDeleteID != "" {
+		name := ""
+		for _, p := range m.projects {
+			if p.ID == m.confirmDeleteID {
+				name = p.Name
+				break
+			}
+		}
 		helpLine = lipgloss.NewStyle().Foreground(lipgloss.Color("170")).Render("Delete \"") +
 			lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(name) +
 			lipgloss.NewStyle().Foreground(lipgloss.Color("170")).Render("\"? ") +
 			lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("y: yes · N/Esc: cancel")
-	} else if m.projectDeleteErr != "" && m.focus == focusProjects {
-		helpLine = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("Delete failed: "+m.projectDeleteErr)
+	} else if m.projectDeleteErr != "" {
+		helpLine = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("Delete failed: " + m.projectDeleteErr)
 	} else {
-		help := " Tab: focus · Enter: select · Ctrl+N: new · Backspace: delete · ↑/↓/PgUp/PgDn: scroll · q: quit"
+		help := " Tab: focus · Enter: expand/select · Ctrl+N: new project · Backspace: delete · ↑/↓: navigate · q: quit"
 		if m.hasPromptPanel() {
-			help = " Tab: focus · Enter: send · Alt+Enter: new line · Ctrl+N: new · Backspace: delete · ↑/↓/PgUp/PgDn: scroll · q: quit"
+			help = " Tab: focus · Enter: send/expand · Ctrl+N: new project · n: new chat · ↑/↓: navigate · q: quit"
 		}
 		helpLine = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(help)
 	}
 	return layout + "\n" + helpLine
 }
 
-// Ensure model implements tea.Model
 var _ tea.Model = (*model)(nil)

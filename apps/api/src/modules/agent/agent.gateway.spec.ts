@@ -107,6 +107,7 @@ describe('Agent auto-restart on timeout', () => {
       null,
       'agent',
       undefined,
+      undefined,
     );
 
     // Advance past the initial timeout - gateway should retry
@@ -120,6 +121,7 @@ describe('Agent auto-restart on timeout', () => {
       CHAT_ID,
       null,
       'agent',
+      undefined,
       undefined,
     );
   });
@@ -144,6 +146,89 @@ describe('Agent auto-restart on timeout', () => {
     expect(agentErrorCall[1]).toMatchObject({ chatId: CHAT_ID });
     // Error text varies: "Agent stopped responding" (after first msg) or "Agent did not respond within" (no response)
     expect(agentErrorCall[1].error).toMatch(/Agent (stopped responding|did not respond)/);
+  });
+
+  it('should set waiting_for_input on ask_user_pending', async () => {
+    await gateway.handleSendPrompt(
+      mockClient as any,
+      { chatId: CHAT_ID, prompt: 'Hello', mode: 'agent' },
+    );
+
+    mockManager.emit('message', SANDBOX_ID, {
+      type: 'ask_user_pending',
+      chatId: CHAT_ID,
+      questionId: 'ask-123',
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(chatsService.updateStatus).toHaveBeenCalledWith(CHAT_ID, 'waiting_for_input');
+    const emitMock = (gateway as any).server.to().emit;
+    const statusCall = emitMock.mock.calls.find(
+      (c: unknown[]) => c[0] === 'agent_status' && (c[1] as any)?.status === 'waiting_for_input',
+    );
+    expect(statusCall).toBeDefined();
+  });
+
+  it('should set running on ask_user_resolved', async () => {
+    await gateway.handleSendPrompt(
+      mockClient as any,
+      { chatId: CHAT_ID, prompt: 'Hello', mode: 'agent' },
+    );
+
+    mockManager.emit('message', SANDBOX_ID, {
+      type: 'ask_user_resolved',
+      chatId: CHAT_ID,
+      questionId: 'ask-123',
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(chatsService.updateStatus).toHaveBeenCalledWith(CHAT_ID, 'running');
+    const emitMock = (gateway as any).server.to().emit;
+    const statusCall = emitMock.mock.calls.find(
+      (c: unknown[]) => c[0] === 'agent_status' && (c[1] as any)?.status === 'running',
+    );
+    expect(statusCall).toBeDefined();
+  });
+
+  it('should not override waiting_for_input with completed on result', async () => {
+    chatsService.findById.mockResolvedValue({
+      id: CHAT_ID,
+      projectId: PROJECT_ID,
+      claudeSessionId: null,
+      status: 'waiting_for_input',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
+    });
+
+    await gateway.handleSendPrompt(
+      mockClient as any,
+      { chatId: CHAT_ID, prompt: 'Hello', mode: 'agent' },
+    );
+
+    mockManager.emit('message', SANDBOX_ID, {
+      type: 'claude_message',
+      chatId: CHAT_ID,
+      data: {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        duration_ms: 100,
+        num_turns: 1,
+        result: '',
+        session_id: 'sess-1',
+        total_cost_usd: 0.01,
+        usage: { input_tokens: 10, output_tokens: 10 },
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Should NOT have been set to 'completed'
+    const completedCall = chatsService.updateStatus.mock.calls.find(
+      (c: unknown[]) => c[1] === 'completed',
+    );
+    expect(completedCall).toBeUndefined();
   });
 
   it('should auto-retry when agent crashes (claude_exit code !== 0)', async () => {
@@ -179,6 +264,7 @@ describe('Agent auto-restart on timeout', () => {
       CHAT_ID,
       null,
       'agent',
+      undefined,
       undefined,
     );
   });

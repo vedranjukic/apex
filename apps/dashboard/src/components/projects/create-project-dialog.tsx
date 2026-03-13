@@ -92,6 +92,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
             >
               <option value="claude_code">Claude Code</option>
               <option value="open_code">OpenCode</option>
+              <option value="codex">Codex</option>
             </select>
           </div>
 

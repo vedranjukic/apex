@@ -19,7 +19,7 @@ class CreateChatBody {
 
 class UpdateStatusBody {
   @IsString()
-  @IsIn(['idle', 'running', 'completed', 'error'])
+  @IsIn(['idle', 'running', 'waiting_for_input', 'completed', 'error'])
   status!: string;
 }
 

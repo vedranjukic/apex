@@ -13,10 +13,17 @@ import { settingsApi } from "../api/client";
 const FIELDS = [
   {
     key: "ANTHROPIC_API_KEY",
-    label: "Anthropic API Key",
+    label: "Anthropic API Key (Claude Code)",
     type: "password" as const,
     placeholder: "sk-ant-...",
-    help: "Get your key from console.anthropic.com",
+    help: "Required for Claude Code projects. Get your key from console.anthropic.com",
+  },
+  {
+    key: "OPENAI_API_KEY",
+    label: "OpenAI API Key (Codex)",
+    type: "password" as const,
+    placeholder: "sk-proj-...",
+    help: "Required for Codex projects. Get your key from platform.openai.com",
   },
   {
     key: "DAYTONA_API_KEY",
@@ -36,7 +43,7 @@ const FIELDS = [
     key: "DAYTONA_SNAPSHOT",
     label: "Daytona Snapshot",
     type: "text" as const,
-    placeholder: "daytona-apex-2",
+    placeholder: "daytona-apex-3",
     help: "Sandbox snapshot image name. Leave empty to use the default.",
   },
 ];
