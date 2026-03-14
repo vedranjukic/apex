@@ -45,9 +45,11 @@ const HIDDEN_TOOLS = new Set([
   'EnterPlanMode',
 ]);
 
+const MCP_HANDLED_TOOLS = new Set(['mcp__terminal-server__ask_user']);
+
 export function ToolUseBlock({ block }: { block: ContentBlock }) {
   const name = block.name ?? '';
-  if (HIDDEN_TOOLS.has(name) || name.startsWith('mcp__')) return null;
+  if (HIDDEN_TOOLS.has(name) || (name.startsWith('mcp__') && !MCP_HANDLED_TOOLS.has(name))) return null;
 
   const input = (block.input ?? {}) as Input;
   switch (block.name) {

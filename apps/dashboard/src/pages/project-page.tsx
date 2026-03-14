@@ -35,6 +35,7 @@ export function ProjectPage() {
   const { requestPreviewUrl } = usePortsSocket(projectId, socket);
   const addMessage = useChatsStore((s) => s.addMessage);
   const createChat = useChatsStore((s) => s.createChat);
+  const fetchChats = useChatsStore((s) => s.fetchChats);
   const resetEditor = useEditorStore((s) => s.reset);
   const pollRef = useRef<ReturnType<typeof setInterval>>();
   const [provisionMsg, setProvisionMsg] = useState<string | null>(null);
@@ -42,6 +43,12 @@ export function ProjectPage() {
   useEffect(() => {
     resetEditor();
   }, [resetEditor]);
+
+  useEffect(() => {
+    if (projectId) {
+      fetchChats(projectId);
+    }
+  }, [projectId, fetchChats]);
 
   const handleSendPrompt = useCallback(
     (chatId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => {

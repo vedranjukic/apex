@@ -379,7 +379,12 @@ function handleStartAgent(msg) {
 }
 
 function handleUserAnswer(msg) {
-  const pending = pendingAskUser.get(msg.toolUseId);
+  let pending = pendingAskUser.get(msg.toolUseId);
+  if (!pending && msg.chatId) {
+    for (const [, entry] of pendingAskUser) {
+      if (entry.chatId === msg.chatId) { pending = entry; break; }
+    }
+  }
   if (pending) { pending.resolve(msg.answer); return; }
   const entry = agentProcesses.get(msg.chatId);
   if (entry && entry.adapter.isAlive(entry)) {
@@ -551,7 +556,7 @@ const server = http.createServer((req, res) => {
           }
           res.writeHead(408, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "User did not respond in time" }));
         }, ASK_TIMEOUT_MS);
-        pendingAskUser.set(questionId, { resolve: (answer) => {
+        pendingAskUser.set(questionId, { chatId: activeChatId, resolve: (answer) => {
           clearTimeout(entry.timer); pendingAskUser.delete(questionId);
           if (state.ws && state.ws.readyState === 1) {
             state.ws.send(JSON.stringify({ type: "ask_user_resolved", chatId: activeChatId, questionId: questionId }));

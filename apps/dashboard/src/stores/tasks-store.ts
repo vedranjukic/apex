@@ -61,6 +61,13 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
       const chats = await chatsApi.listByProject(projectId, get().searchQuery || undefined);
       if (get().projectId !== projectId) return;
       set({ chats, loading: false });
+
+      if (!get().activeChatId && chats.length > 0) {
+        const mostRecent = chats.reduce((latest, chat) =>
+          new Date(chat.updatedAt) > new Date(latest.updatedAt) ? chat : latest,
+        );
+        get().setActiveChat(mostRecent.id);
+      }
     } catch (err) {
       if (get().projectId !== projectId) return;
       set({ error: String(err), loading: false });
