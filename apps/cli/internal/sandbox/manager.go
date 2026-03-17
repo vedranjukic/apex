@@ -134,13 +134,13 @@ func (m *Manager) Connect(ctx context.Context, sandboxID string) error {
 }
 
 // SendPrompt sends a prompt to the agent process in the sandbox.
-// mode is "agent", "plan", or "ask"; empty defaults to "agent".
-// agentType is "claude_code", "open_code", or "codex"; empty uses the bridge default.
-func (m *Manager) SendPrompt(threadID, prompt, sessionID, mode, agentType string) error {
+// agent is the OpenCode agent name ("build", "plan", "sisyphus"); empty defaults to "build".
+// model is the provider/model string; empty uses the agent default.
+func (m *Manager) SendPrompt(threadID, prompt, sessionID, agent, model string) error {
 	if m.bridge == nil {
 		return fmt.Errorf("not connected to bridge")
 	}
-	return m.bridge.sendPrompt(threadID, prompt, sessionID, mode, agentType)
+	return m.bridge.sendPrompt(threadID, prompt, sessionID, agent, model)
 }
 
 // SendUserAnswer sends a user answer for an AskUserQuestion back to the bridge.
@@ -205,7 +205,7 @@ func (m *Manager) installBridge(ctx context.Context, sandbox *daytona.Sandbox, p
 		exec(ctx, sandbox, fmt.Sprintf("cd %s && git init 2>&1 || true", projectDir))
 	}
 
-	bridgeJS := GenerateBridgeScript(bridgePort, projectDir, "")
+	bridgeJS := GenerateBridgeScript(bridgePort, projectDir)
 	if err := sandbox.FileSystem.UploadFile(ctx, []byte(bridgeJS), bridgeDir+"/bridge.js"); err != nil {
 		return fmt.Errorf("upload bridge.js: %w", err)
 	}
@@ -215,23 +215,54 @@ func (m *Manager) installBridge(ctx context.Context, sandbox *daytona.Sandbox, p
 		return fmt.Errorf("upload mcp-terminal-server.js: %w", err)
 	}
 
-	mcpConfig, _ := json.Marshal(map[string]interface{}{
-		"mcpServers": map[string]interface{}{
+	// Pre-warm OpenCode (triggers one-time DB migration)
+	exec(ctx, sandbox, fmt.Sprintf(
+		"cd %s && HOME=/home/daytona /home/daytona/.opencode/bin/opencode session list 2>&1; echo opencode pre-warm done",
+		projectDir))
+
+	// Write .env so OpenCode picks up provider keys from the project root.
+	dotEnv := fmt.Sprintf("ANTHROPIC_API_KEY=%s\n", m.anthropicKey)
+	if err := sandbox.FileSystem.UploadFile(ctx, []byte(dotEnv), projectDir+"/.env"); err != nil {
+		return fmt.Errorf("upload .env: %w", err)
+	}
+
+	// Write OpenCode config with agents and MCP.
+	openCodeConfig, _ := json.Marshal(map[string]interface{}{
+		"$schema":       "https://opencode.ai/config.json",
+		"default_agent": "build",
+		"agent": map[string]interface{}{
+			"build": map[string]interface{}{
+				"description": "Full development agent with all tools enabled",
+				"mode":        "primary",
+				"prompt":      "{file:AGENTS.md}",
+			},
+			"plan": map[string]interface{}{
+				"description": "Analysis and planning without making changes",
+				"mode":        "primary",
+				"tools":       map[string]interface{}{"write": false, "edit": false, "bash": false},
+			},
+			"sisyphus": map[string]interface{}{
+				"description": "Orchestration agent for complex multi-step tasks",
+				"mode":        "primary",
+				"prompt":      "{file:.opencode/agents/sisyphus-prompt.txt}",
+				"steps":       50,
+				"permission":  map[string]interface{}{"task": map[string]interface{}{"*": "allow"}},
+			},
+		},
+		"experimental": map[string]interface{}{"mcp_timeout": 300000},
+		"mcp": map[string]interface{}{
 			"terminal-server": map[string]interface{}{
-				"type":    "stdio",
-				"command": "node",
-				"args":    []string{bridgeDir + "/mcp-terminal-server.js"},
-				"env":     map[string]interface{}{},
+				"type":    "local",
+				"command": []string{"node", bridgeDir + "/mcp-terminal-server.js"},
+				"timeout": 300000,
 			},
 		},
 	})
-	exec(ctx, sandbox, "mkdir -p /home/daytona/.claude")
-	// Claude Code reads MCP config from ~/.claude.json (root-level file, NOT ~/.claude/mcp.json)
-	if err := sandbox.FileSystem.UploadFile(ctx, mcpConfig, homeDir+"/.claude.json"); err != nil {
-		return fmt.Errorf("upload .claude.json: %w", err)
+	if err := sandbox.FileSystem.UploadFile(ctx, openCodeConfig, projectDir+"/opencode.json"); err != nil {
+		return fmt.Errorf("upload opencode.json: %w", err)
 	}
 
-	claudeMd := fmt.Sprintf(`# Sandbox Environment
+	agentsMd := fmt.Sprintf(`# Sandbox Environment
 
 Your working directory is %s. This IS the project root.
 All project files (source code, configs, package.json, etc.) MUST be created
@@ -265,8 +296,25 @@ It blocks until the user responds, so the user sees a clear prompt in the UI.
 Do NOT ask questions as plain text — the UI cannot detect them.
 ALWAYS use the `+"`ask_user`"+` tool so the system knows you are waiting for input.
 `, projectDir)
-	if err := sandbox.FileSystem.UploadFile(ctx, []byte(claudeMd), "/home/daytona/.claude/CLAUDE.md"); err != nil {
-		return fmt.Errorf("upload CLAUDE.md: %w", err)
+	if err := sandbox.FileSystem.UploadFile(ctx, []byte(agentsMd), projectDir+"/AGENTS.md"); err != nil {
+		return fmt.Errorf("upload AGENTS.md: %w", err)
+	}
+
+	// Upload Sisyphus agent prompt
+	exec(ctx, sandbox, fmt.Sprintf("mkdir -p %s/.opencode/agents", projectDir))
+	sisyphusPrompt := `You are Sisyphus, an orchestration agent for complex multi-step tasks.
+
+Your approach:
+1. Analyze the request and break it into concrete sub-tasks
+2. Delegate implementation to subagents using @general for multi-step work and @explore for codebase investigation
+3. Track progress — when a subtask fails, retry with adjusted context
+4. Provide a status update after each sub-task completes
+5. Synthesize the results and present a final summary
+
+When delegating, be specific about what each subagent should do.
+Prefer parallel delegation when sub-tasks are independent.`
+	if err := sandbox.FileSystem.UploadFile(ctx, []byte(sisyphusPrompt), projectDir+"/.opencode/agents/sisyphus-prompt.txt"); err != nil {
+		return fmt.Errorf("upload sisyphus-prompt.txt: %w", err)
 	}
 
 	// Only install deps if not already present (snapshot may include them)
@@ -275,9 +323,8 @@ ALWAYS use the `+"`ask_user`"+` tool so the system knows you are waiting for inp
 		bridgeDir, bridgeDir))
 
 	// Fire-and-forget: the nohup command starts the bridge in the background.
-	// The Daytona API blocks until its proxy times out (~30s), so we don't wait.
 	bridgeCmd := fmt.Sprintf(
-		"cd %s && ANTHROPIC_API_KEY=%q DAYTONA_API_KEY=%q DAYTONA_API_URL=%q DAYTONA_SANDBOX_ID=%q nohup node bridge.js > /tmp/bridge.log 2>&1 &",
+		"cd %s && ANTHROPIC_API_KEY=%q DAYTONA_API_KEY=%q DAYTONA_API_URL=%q DAYTONA_SANDBOX_ID=%q HOME=/home/daytona PATH=/home/daytona/.opencode/bin:$PATH nohup node bridge.js > /tmp/bridge.log 2>&1 &",
 		bridgeDir, m.anthropicKey, m.daytonaKey, m.daytonaURL, sandbox.ID,
 	)
 	go exec(ctx, sandbox, bridgeCmd)

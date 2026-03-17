@@ -50,16 +50,15 @@ type ContentBlock struct {
 	Content   string                 `json:"content,omitempty"`
 }
 
-// ClaudeOutput represents a parsed message from Claude's stream-json output.
-type ClaudeOutput struct {
-	Type    string     `json:"type"`
-	Subtype string     `json:"subtype,omitempty"`
-	Message *ClaudeMsg `json:"message,omitempty"`
+// AgentOutput represents a parsed message from the bridge's normalized output.
+type AgentOutput struct {
+	Type    string    `json:"type"`
+	Subtype string    `json:"subtype,omitempty"`
+	Message *AgentMsg `json:"message,omitempty"`
 
-	SessionID         string `json:"session_id,omitempty"`
-	Model             string `json:"model,omitempty"`
-	CWD               string `json:"cwd,omitempty"`
-	ClaudeCodeVersion string `json:"claude_code_version,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	Model     string `json:"model,omitempty"`
+	CWD       string `json:"cwd,omitempty"`
 
 	IsError      *bool    `json:"is_error,omitempty"`
 	TotalCostUSD *float64 `json:"total_cost_usd,omitempty"`
@@ -71,22 +70,28 @@ type ClaudeOutput struct {
 	UUID string `json:"uuid,omitempty"`
 }
 
-// ParseClaudeOutput parses a json.RawMessage into a ClaudeOutput.
-func ParseClaudeOutput(raw json.RawMessage) (*ClaudeOutput, error) {
-	var out ClaudeOutput
+// ClaudeOutput is a backward-compatible alias for AgentOutput.
+type ClaudeOutput = AgentOutput
+
+// ParseClaudeOutput parses a json.RawMessage into an AgentOutput.
+func ParseClaudeOutput(raw json.RawMessage) (*AgentOutput, error) {
+	var out AgentOutput
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
-// ClaudeMsg contains the message content from an assistant response.
-type ClaudeMsg struct {
+// AgentMsg contains the message content from an assistant response.
+type AgentMsg struct {
 	Content    []ContentBlock `json:"content"`
 	Model      string         `json:"model,omitempty"`
 	StopReason *string        `json:"stop_reason,omitempty"`
 	Usage      *Usage         `json:"usage,omitempty"`
 }
+
+// ClaudeMsg is a backward-compatible alias for AgentMsg.
+type ClaudeMsg = AgentMsg
 
 // Usage tracks token counts.
 type Usage struct {

@@ -124,7 +124,7 @@ func createProjectWithSandbox(database *db.DB, name, gitRepoURL string) (*db.Pro
 		gitRepo = &gitRepoURL
 	}
 
-	projectRow, err := database.CreateProject(userID, name, "", "claude_code", cfg.Snapshot, gitRepo)
+	projectRow, err := database.CreateProject(userID, name, "", "build", cfg.Snapshot, gitRepo)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create project: %w", err)
 	}

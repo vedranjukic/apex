@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { ScrollText, ChevronDown, ChevronRight, Play, Loader2, Check } from 'lucide-react';
+import { ScrollText, ChevronDown, ChevronRight, Play, Loader2, Check, ArrowRight } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useThreadActions } from './thread-actions-context';
@@ -17,15 +17,20 @@ interface PlanBlockProps {
 export function PlanBlock({ filename, content, isComplete, wasBuilt, threadStatus }: PlanBlockProps) {
   const [expanded, setExpanded] = useState(true);
   const { sendSilentPrompt } = useThreadActions();
+  const agentType = useAgentSettingsStore((s) => s.agentType);
   const isRunning = threadStatus === 'running';
-  const buildDisabled = !isComplete || isRunning || !!wasBuilt;
+  const actionDisabled = !isComplete || isRunning || !!wasBuilt;
+  const isPlanAgent = agentType === 'plan';
 
-  const handleBuild = useCallback(() => {
-    if (!buildDisabled) {
-      useAgentSettingsStore.getState().setMode('agent');
+  const handleAction = useCallback(() => {
+    if (actionDisabled) return;
+    if (isPlanAgent) {
+      useAgentSettingsStore.getState().setAgentType('build');
       sendSilentPrompt(`${BUILD_PROMPT_PREFIX}${content}`, 'agent');
+    } else {
+      sendSilentPrompt('Continue. Execute the tasks outlined above.');
     }
-  }, [content, buildDisabled, sendSilentPrompt]);
+  }, [content, actionDisabled, isPlanAgent, sendSilentPrompt]);
 
   return (
     <div className="rounded-lg overflow-hidden border border-border">
@@ -71,21 +76,23 @@ export function PlanBlock({ filename, content, isComplete, wasBuilt, threadStatu
             : <><ChevronRight className="w-3 h-3" /> Expand plan</>}
         </button>
         <button
-          onClick={handleBuild}
-          disabled={buildDisabled}
+          onClick={handleAction}
+          disabled={actionDisabled}
           className={[
             'flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all',
-            buildDisabled
+            actionDisabled
               ? 'bg-surface text-text-muted border border-border cursor-not-allowed opacity-60'
               : 'bg-primary text-white hover:bg-primary-hover cursor-pointer',
           ].join(' ')}
         >
           {isRunning
-            ? <><Loader2 className="w-3 h-3 animate-spin" /> Building…</>
+            ? <><Loader2 className="w-3 h-3 animate-spin" /> Running…</>
             : wasBuilt
-              ? <><Check className="w-3 h-3" /> Built</>
+              ? <><Check className="w-3 h-3" /> Done</>
               : isComplete
-                ? <><Play className="w-3 h-3" /> Build</>
+                ? isPlanAgent
+                  ? <><Play className="w-3 h-3" /> Build</>
+                  : <><ArrowRight className="w-3 h-3" /> Continue</>
                 : <><Loader2 className="w-3 h-3 animate-spin" /> Preparing…</>}
         </button>
       </div>

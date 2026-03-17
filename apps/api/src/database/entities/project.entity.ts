@@ -40,8 +40,8 @@ export class ProjectEntity {
   @Column({ type: 'text', nullable: true, default: null })
   statusError: string | null;
 
-  @Column({ default: 'claude_code' })
-  agentType: string; // AgentType enum
+  @Column({ default: 'build' })
+  agentType: string; // OpenCode agent name: build, plan, sisyphus
 
   /** Git repository URL to clone into the project folder */
   @Column({ type: 'varchar', nullable: true, default: null })

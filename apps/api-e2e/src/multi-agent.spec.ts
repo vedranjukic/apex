@@ -158,8 +158,8 @@ describeIfDaytona('Multi-agent E2E', () => {
       if (projectId) await deleteProject(projectId);
     });
 
-    it('should provision a claude_code project', async () => {
-      projectId = await createProject('e2e-claude-test', 'claude_code');
+    it('should provision a build agent project', async () => {
+      projectId = await createProject('e2e-build-test', 'build');
       await waitForSandbox(projectId);
     }, 6 * 60 * 1000);
 
@@ -206,8 +206,8 @@ describeIfDaytona('Multi-agent E2E', () => {
       if (projectId) await deleteProject(projectId);
     });
 
-    it('should provision an open_code project', async () => {
-      projectId = await createProject('e2e-opencode-test', 'open_code');
+    it('should provision a plan agent project', async () => {
+      projectId = await createProject('e2e-plan-test', 'plan');
       await waitForSandbox(projectId);
     }, 6 * 60 * 1000);
 
@@ -284,8 +284,8 @@ describeIfDaytona('Multi-agent E2E', () => {
       if (projectId) await deleteProject(projectId);
     });
 
-    it('should provision a codex project', async () => {
-      projectId = await createProject('e2e-codex-test', 'codex');
+    it('should provision a sisyphus agent project', async () => {
+      projectId = await createProject('e2e-sisyphus-test', 'sisyphus');
       await waitForSandbox(projectId);
     }, 6 * 60 * 1000);
 
@@ -293,7 +293,7 @@ describeIfDaytona('Multi-agent E2E', () => {
       socket = await connectSocket();
       await subscribeProject(socket, projectId);
 
-      const threadId = await createThread(projectId, 'Say exactly: hello from codex');
+      const threadId = await createThread(projectId, 'Say exactly: hello from sisyphus');
       socket.emit('execute_thread', { threadId, mode: 'agent' });
 
       const events = await collectAgentEvents(socket, threadId);

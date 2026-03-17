@@ -8,9 +8,9 @@ export enum ProjectStatus {
 }
 
 export enum AgentType {
-  ClaudeCode = 'claude_code',
-  OpenCode = 'open_code',
-  Codex = 'codex',
+  Build = 'build',
+  Plan = 'plan',
+  Sisyphus = 'sisyphus',
 }
 
 // ── Task ─────────────────────────────────────────────

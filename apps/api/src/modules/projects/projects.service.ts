@@ -153,7 +153,7 @@ export class ProjectsService implements OnModuleInit {
       userId,
       name: data.name,
       description: data.description || '',
-      agentType: data.agentType || 'claude_code',
+      agentType: data.agentType || 'build',
       sandboxSnapshot: data.sandboxSnapshot || process.env['DAYTONA_SNAPSHOT'] || '',
       gitRepo: data.gitRepo || null,
       agentConfig: data.agentConfig || null,

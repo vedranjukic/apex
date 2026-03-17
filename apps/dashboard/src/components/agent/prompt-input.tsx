@@ -8,7 +8,7 @@ import {
 } from 'react';
 import { Send } from 'lucide-react';
 import { FilePicker } from './file-picker';
-import { ModeDropdown, ModelDropdown, AgentDropdown } from './mode-model-dropdowns';
+import { AgentDropdown, ModelDropdown } from './mode-model-dropdowns';
 import { useAgentSettingsStore } from '../../stores/agent-settings-store';
 import { useEditorStore, type CodeSelection } from '../../stores/editor-store';
 
@@ -370,7 +370,6 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
 
           {/* Toolbar row */}
           <div className="flex items-center gap-1 px-2 py-1.5 bg-sidebar border border-t-0 border-border rounded-b-xl">
-            <ModeDropdown />
             {!hideAgentDropdown && <AgentDropdown />}
             <ModelDropdown />
             <div className="flex-1" />

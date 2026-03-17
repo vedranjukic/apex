@@ -33,7 +33,7 @@ export interface IProject {
   sandboxId: string | null;
   sandboxSnapshot: string;
   status: ProjectStatus;
-  agentType: AgentType;
+  agentType: AgentType | string;
   agentConfig: IAgentConfig;
   forkedFromId: string | null;
   branchName: string | null;

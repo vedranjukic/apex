@@ -100,9 +100,9 @@ func (b *bridgeConn) send(v interface{}) error {
 }
 
 // sendPrompt sends a start_claude message to the bridge.
-// mode is "agent", "plan", or "ask"; empty defaults to "agent".
-// agentType is "claude_code", "open_code", or "codex"; empty uses the bridge default.
-func (b *bridgeConn) sendPrompt(threadID, prompt, sessionID, mode, agentType string) error {
+// agent is the OpenCode agent name ("build", "plan", "sisyphus"); empty defaults to "build".
+// model is the provider/model string (e.g., "anthropic/claude-sonnet-4"); empty uses the agent default.
+func (b *bridgeConn) sendPrompt(threadID, prompt, sessionID, agent, model string) error {
 	msg := map[string]interface{}{
 		"type":     "start_claude",
 		"prompt":   prompt,
@@ -111,11 +111,11 @@ func (b *bridgeConn) sendPrompt(threadID, prompt, sessionID, mode, agentType str
 	if sessionID != "" {
 		msg["sessionId"] = sessionID
 	}
-	if mode != "" {
-		msg["mode"] = mode
+	if agent != "" {
+		msg["agent"] = agent
 	}
-	if agentType != "" {
-		msg["agentType"] = agentType
+	if model != "" {
+		msg["model"] = model
 	}
 	return b.send(msg)
 }

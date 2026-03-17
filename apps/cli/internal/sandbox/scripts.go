@@ -10,12 +10,9 @@ const bridgePort = 8080
 // GenerateBridgeScript returns the JavaScript source for bridge.js
 // that runs inside a Daytona sandbox. Mirrors the TypeScript
 // getBridgeScript() in libs/orchestrator/src/lib/bridge-script.ts.
-// agentType is "claude_code", "open_code", or "codex"; empty defaults to "claude_code".
-func GenerateBridgeScript(port int, projectDir string, agentType string) string {
+// Uses OpenCode as the single agent runtime.
+func GenerateBridgeScript(port int, projectDir string) string {
 	safeProjDir := strings.ReplaceAll(projectDir, `"`, `\"`)
-	if agentType == "" {
-		agentType = "claude_code"
-	}
 
 	return fmt.Sprintf(`const http = require("http");
 const { WebSocketServer } = require("ws");
@@ -24,7 +21,6 @@ const pty = require("node-pty");
 const crypto = require("crypto");
 
 const PORT = %d;
-const API_KEY = process.env.ANTHROPIC_API_KEY || "";
 const PROJECT_DIR = "%s" || process.env.HOME || "/home/daytona";
 const MAX_SCROLLBACK = 5000;
 const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY || "";
@@ -34,7 +30,7 @@ const https = require("https");
 const urlMod = require("url");
 
 let state = { ws: null };
-const claudeProcesses = new Map();
+const agentProcesses = new Map();
 const pendingAskUser = new Map();
 
 const terminals = new Map();
@@ -363,7 +359,7 @@ const server = http.createServer((req, res) => {
       try {
         const payload = JSON.parse(body);
         const questionId = "ask-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-        const activeThreadId = payload.threadId !== "default" ? payload.threadId : (claudeProcesses.size > 0 ? Array.from(claudeProcesses.keys()).pop() : "default");
+        const activeThreadId = payload.threadId !== "default" ? payload.threadId : (agentProcesses.size > 0 ? Array.from(agentProcesses.keys()).pop() : "default");
         if (state.ws && state.ws.readyState === 1) {
           state.ws.send(JSON.stringify({ type: "claude_message", threadId: activeThreadId, data: { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: questionId, name: "AskUserQuestion", input: payload.input || {} }], stop_reason: "tool_use" } } }));
           state.ws.send(JSON.stringify({ type: "ask_user_pending", threadId: activeThreadId, questionId: questionId }));
@@ -401,6 +397,78 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server });
 
+function spawnOpenCode(threadId, prompt, agent, model, sessionId) {
+  const ocAgent = agent || "build";
+  const ocModel = model || "";
+  log("\u{1F916}", "Spawning OpenCode for thread " + threadId + " agent=" + ocAgent);
+  const ocBin = "/home/daytona/.opencode/bin/opencode";
+  const args = ["run", "--format", "json"];
+  if (ocAgent) args.push("--agent", ocAgent);
+  if (ocModel) args.push("-m", ocModel);
+  if (sessionId) args.push("--session", sessionId);
+  args.push(prompt);
+
+  try {
+    const proc = pty.spawn(ocBin, args, {
+      name: "xterm-256color", cols: 200, rows: 50, cwd: PROJECT_DIR,
+      env: { ...process.env, HOME: "/home/daytona" },
+    });
+    agentProcesses.set(threadId, { proc, sessionId, threadId });
+    let capturedSessionId = null;
+    let stepCost = 0;
+    let buffer = "";
+
+    proc.onData((d) => {
+      buffer += d;
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const rawLine of lines) {
+        const line = rawLine.replace(/[\x00-\x1f\x7f]+(\[\?[\d;]*[a-zA-Z])?/g, "").trim();
+        if (!line) continue;
+        try {
+          const ev = JSON.parse(line);
+          if (!capturedSessionId && ev.sessionID) {
+            capturedSessionId = ev.sessionID;
+            const ex = agentProcesses.get(threadId);
+            if (ex) ex.sessionId = capturedSessionId;
+            ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: { type: "system", subtype: "init", session_id: capturedSessionId, tools: [], model: ocModel || ocAgent, cwd: PROJECT_DIR } }));
+          }
+          if (ev.type === "text") {
+            ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: { type: "assistant", message: { role: "assistant", model: ocModel || ocAgent, content: [{ type: "text", text: ev.part.text || "" }], stop_reason: "end_turn" } } }));
+          } else if (ev.type === "tool_use") {
+            const s = ev.part.state || {};
+            const tn = ev.part.tool || "unknown";
+            const nn = { bash: "Bash", read: "Read", glob: "Glob", grep: "Grep", apply_patch: "Write", write: "Write", edit: "Edit" }[tn] || tn;
+            ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: { type: "assistant", message: { role: "assistant", model: ocModel || ocAgent, content: [
+              { type: "tool_use", id: ev.part.callID || ev.part.id, name: nn, input: s.input || {} },
+              { type: "tool_result", tool_use_id: ev.part.callID || ev.part.id, content: typeof s.output === "string" ? s.output : JSON.stringify(s.output || "") },
+            ], stop_reason: "tool_use" } } }));
+          } else if (ev.type === "step_finish") {
+            stepCost += ev.part.cost || 0;
+            if (ev.part.reason === "stop") {
+              const tk = ev.part.tokens || {};
+              ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: { type: "result", subtype: "success", is_error: false, duration_ms: 0, num_turns: 1, result: "", session_id: capturedSessionId || "", total_cost_usd: stepCost, usage: { input_tokens: tk.input || 0, output_tokens: tk.output || 0 } } }));
+            }
+          } else if (ev.type === "error") {
+            ws.send(JSON.stringify({ type: "claude_error", threadId: threadId, error: (ev.error && ev.error.data && ev.error.data.message) || "OpenCode error" }));
+          }
+        } catch {}
+      }
+    });
+
+    proc.onExit(({ exitCode }) => {
+      log("\u{1F916}", "OpenCode exited for thread " + threadId + " code=" + exitCode);
+      if (!capturedSessionId && exitCode !== 0) {
+        ws.send(JSON.stringify({ type: "claude_error", threadId: threadId, error: "OpenCode exited with code " + exitCode }));
+      }
+      agentProcesses.delete(threadId);
+      ws.send(JSON.stringify({ type: "claude_exit", threadId: threadId, code: exitCode || 0 }));
+    });
+  } catch (e) {
+    ws.send(JSON.stringify({ type: "claude_error", threadId: threadId, error: e.message || String(e) }));
+  }
+}
+
 wss.on("connection", (ws) => {
   log("\u{1F517}", "Orchestrator connected");
   state.ws = ws;
@@ -410,153 +478,36 @@ wss.on("connection", (ws) => {
     try {
       const msg = JSON.parse(data.toString());
 
-      function pipeToStdin(proc, jsonObj) {
-        if (proc) {
-          proc.write(JSON.stringify(jsonObj) + "\n");
-        }
-      }
-
-      function spawnClaude(threadId, prompt, mode, model, sessionId) {
-        const agentMode = mode || "agent";
-        log("\u{1F916}", "Spawning Claude for thread " + threadId + " mode=" + agentMode + ": " + prompt.slice(0, 50) + "...");
-
-        const claudeArgs = [
-          "--verbose",
-          "--output-format", "stream-json",
-          "--input-format", "stream-json",
-        ];
-
-        if (agentMode === "plan") {
-          claudeArgs.push("--dangerously-skip-permissions");
-          claudeArgs.push("--disallowedTools", "AskUserQuestion,Edit,Write,MultiEdit");
-          claudeArgs.push("--append-system-prompt", "You are in Plan mode. Analyze the request and produce a detailed plan. You CANNOT create or edit files. Only use read-only tools to explore the codebase, then present your plan as text.");
-        } else if (agentMode === "ask") {
-          claudeArgs.push("--dangerously-skip-permissions");
-          claudeArgs.push("--disallowedTools", "AskUserQuestion,Edit,Write,MultiEdit,Bash");
-          claudeArgs.push("--append-system-prompt", "You are in Ask mode. Only answer the question using read-only tools. You CANNOT create, edit, or write files, or run shell commands.");
-        } else {
-          claudeArgs.push("--dangerously-skip-permissions");
-          claudeArgs.push("--disallowedTools", "AskUserQuestion");
-        }
-
-        if (model) {
-          claudeArgs.push("--model", model);
-        }
-
-        if (sessionId) {
-          claudeArgs.push("--resume", sessionId);
-        }
-
-        claudeArgs.push("-p", prompt);
-
-        try {
-          const proc = pty.spawn("claude", claudeArgs, {
-            name: "xterm-256color",
-            cols: 200,
-            rows: 50,
-            cwd: PROJECT_DIR,
-            env: { ...process.env, ANTHROPIC_API_KEY: API_KEY },
-          });
-          claudeProcesses.set(threadId, proc);
-
-          let buffer = "";
-          proc.onData((d) => {
-            buffer += d;
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-            for (const line of lines) {
-              const trimmed = line.replace(/[\x00-\x1f\x7f]+(\[\?[\d;]*[a-zA-Z])?/g, "").trim();
-              if (!trimmed) continue;
-              try {
-                const parsed = JSON.parse(trimmed);
-                ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: parsed }));
-                if (parsed.type === "assistant" && parsed.message?.content) {
-                  const toolResults = [];
-                  for (const block of parsed.message.content) {
-                    if (block?.type === "tool_use" && block?.name === "Bash" && block?.id) {
-                      const cmd = (block.input?.command ?? "").trim() || "(no command)";
-                      try {
-                        const out = execSync(cmd, { cwd: PROJECT_DIR, encoding: "utf8", timeout: 60000, maxBuffer: 1024 * 1024 });
-                        toolResults.push({ type: "tool_result", tool_use_id: block.id, content: out || "" });
-                      } catch (err) {
-                        const msg = err?.stderr || err?.message || String(err);
-                        toolResults.push({ type: "tool_result", tool_use_id: block.id, content: "Error: " + msg });
-                      }
-                    }
-                  }
-                  if (toolResults.length > 0) {
-                    ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: { type: "user", message: { role: "user", content: toolResults } } }));
-                  }
-                }
-              } catch {}
-            }
-          });
-
-          proc.onExit(({ exitCode }) => {
-            if (buffer.trim()) {
-              const trimmed = buffer.replace(/[\x00-\x1f\x7f]+(\[\?[\d;]*[a-zA-Z])?/g, "").trim();
-              try {
-                const parsed = JSON.parse(trimmed);
-                ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: parsed }));
-              } catch {}
-            }
-            ws.send(JSON.stringify({ type: "claude_exit", threadId: threadId, code: exitCode }));
-            claudeProcesses.delete(threadId);
-          });
-        } catch (e) {
-          ws.send(JSON.stringify({ type: "claude_error", threadId: threadId, error: e.message || String(e) }));
-          claudeProcesses.delete(threadId);
-        }
-      }
-
       if (msg.type === "start_claude") {
         const threadId = msg.threadId || "default";
-        const existing = claudeProcesses.get(threadId);
-
-        if (existing && existing.pid > 0) {
-          log("\u{1F916}", "Piping follow-up to existing Claude for thread " + threadId + ": " + msg.prompt.slice(0, 50) + "...");
-          pipeToStdin(existing, {
-            type: "user",
-            message: { role: "user", content: msg.prompt },
-          });
-        } else {
-          if (existing) { try { existing.kill(); } catch {} claudeProcesses.delete(threadId); }
-          spawnClaude(threadId, msg.prompt, msg.mode, msg.model, msg.sessionId);
+        const existing = agentProcesses.get(threadId);
+        if (existing) {
+          if (existing.proc) { try { existing.proc.kill(); } catch {} }
+          agentProcesses.delete(threadId);
         }
+        spawnOpenCode(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId);
 
       } else if (msg.type === "claude_user_answer") {
-        const pending = pendingAskUser.get(msg.toolUseId);
-        if (pending) {
-          pending.resolve(msg.answer);
-        } else {
-          const proc = claudeProcesses.get(msg.threadId);
-          if (proc && proc.pid > 0) {
-            log("\u{1F916}", "Piping user answer for thread " + msg.threadId + " tool=" + msg.toolUseId);
-            pipeToStdin(proc, {
-              type: "user",
-              message: {
-                role: "user",
-                content: [{ type: "tool_result", tool_use_id: msg.toolUseId, content: msg.answer }],
-              },
-            });
-          } else {
-            ws.send(JSON.stringify({ type: "claude_error", threadId: msg.threadId, error: "No active Claude process to receive answer" }));
+        let pending = pendingAskUser.get(msg.toolUseId);
+        if (!pending && msg.threadId) {
+          for (const [, entry] of pendingAskUser) {
+            if (entry.threadId === msg.threadId) { pending = entry; break; }
           }
         }
+        if (pending) { pending.resolve(msg.answer); }
+        else { ws.send(JSON.stringify({ type: "claude_error", threadId: msg.threadId, error: "No pending ask_user to receive answer" })); }
 
       } else if (msg.type === "claude_input") {
-        const p = claudeProcesses.get(msg.threadId);
-        if (p) {
-          p.write(msg.data);
-        }
+        const e = agentProcesses.get(msg.threadId);
+        if (e && e.proc && e.proc.write) e.proc.write(msg.data);
 
       } else if (msg.type === "stop_claude") {
-        const targetThreadId = msg.threadId;
-        if (targetThreadId) {
-          const p = claudeProcesses.get(targetThreadId);
-          if (p) { p.kill(); claudeProcesses.delete(targetThreadId); }
+        if (msg.threadId) {
+          const e = agentProcesses.get(msg.threadId);
+          if (e && e.proc) { try { e.proc.kill(); } catch {} }
+          agentProcesses.delete(msg.threadId);
         } else {
-          for (const [cid, p] of claudeProcesses) { p.kill(); claudeProcesses.delete(cid); }
+          for (const [cid, e] of agentProcesses) { if (e.proc) { try { e.proc.kill(); } catch {} } agentProcesses.delete(cid); }
         }
 
       } else if (msg.type === "terminal_create") {
@@ -599,7 +550,7 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     log("\u{1F50C}", "Orchestrator disconnected");
-    for (const [cid, p] of claudeProcesses) { try { p.kill(); } catch {} claudeProcesses.delete(cid); }
+    for (const [cid, e] of agentProcesses) { if (e.proc) { try { e.proc.kill(); } catch {} } agentProcesses.delete(cid); }
   });
 });
 

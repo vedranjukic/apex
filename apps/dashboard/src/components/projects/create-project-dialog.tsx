@@ -13,7 +13,6 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [gitRepo, setGitRepo] = useState('');
-  const [agentType, setAgentType] = useState('claude_code');
   const [submitting, setSubmitting] = useState(false);
 
   if (!open) return null;
@@ -26,7 +25,6 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
       const project = await createProject({
         name: name.trim(),
         description: description.trim(),
-        agentType,
         gitRepo: gitRepo.trim() || undefined,
       });
       onCreated(project.id);
@@ -81,19 +79,6 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
               className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
             />
             <p className="text-xs text-text-muted mt-1">Optional. The repo will be cloned into the project folder.</p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-1">Agent</label>
-            <select
-              value={agentType}
-              onChange={(e) => setAgentType(e.target.value)}
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-surface"
-            >
-              <option value="claude_code">Claude Code</option>
-              <option value="open_code">OpenCode</option>
-              <option value="codex">Codex</option>
-            </select>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">

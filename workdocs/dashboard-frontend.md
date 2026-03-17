@@ -271,14 +271,14 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 
 | Field / Action          | Type / Description |
 | ----------------------- | ------------------ |
-| `agentType`             | `AgentTypeId` — `'claude_code' \| 'open_code' \| 'codex'` (default `'claude_code'`) |
+| `agentType`             | `AgentTypeId` — OpenCode agent name: `'build' \| 'plan' \| 'sisyphus'` (default `'build'`) |
 | `mode`                  | `AgentMode` — `'agent' \| 'plan' \| 'ask'` (default `'agent'`) |
-| `model`                 | `AgentModel` — agent-specific model string (default `'sonnet'`) |
-| `setAgentType(type)`    | Change agent type; also resets `model` to `DEFAULT_MODEL_BY_TYPE[type]` |
+| `model`                 | `AgentModel` — provider/model string (default `'anthropic/claude-sonnet-4'`) |
+| `setAgentType(type)`    | Change agent; also resets `model` to `DEFAULT_MODEL` |
 | `setMode(mode)`         | Change agent mode |
 | `setModel(model)`       | Change agent model |
 
-**Constants:** `AGENT_TYPES` (dropdown labels), `AGENT_MODELS_BY_TYPE` (per-agent model lists), `DEFAULT_MODEL_BY_TYPE` (default model per agent).
+**Constants:** `AGENTS` (agent dropdown options), `AGENT_MODELS` (unified model list across all providers), `DEFAULT_MODEL` (default model for new threads).
 
 When switching to a thread that has a stored `agentType`, `AgentThread` calls `setAgentType()` to restore the dropdowns.
 

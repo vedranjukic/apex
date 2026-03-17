@@ -434,12 +434,12 @@ func agentTypeLabel(at *string) string {
 		return ""
 	}
 	switch *at {
-	case "claude_code":
-		return "Claude Code"
-	case "open_code":
-		return "OpenCode"
-	case "codex":
-		return "Codex"
+	case "build":
+		return "Build"
+	case "plan":
+		return "Plan"
+	case "sisyphus":
+		return "Sisyphus"
 	default:
 		return *at
 	}
@@ -579,7 +579,7 @@ func (m *model) runCreateProject(name string) tea.Cmd {
 	if err != nil {
 		return func() tea.Msg { return projectCreateErrMsg{err: fmt.Errorf("ensure user: %w", err)} }
 	}
-	project, err := m.db.CreateProject(userID, name, "", "claude_code", "", nil)
+	project, err := m.db.CreateProject(userID, name, "", "build", "", nil)
 	if err != nil {
 		return func() tea.Msg { return projectCreateErrMsg{err: fmt.Errorf("create project: %w", err)} }
 	}
@@ -741,11 +741,11 @@ func (m *model) trySendPrompt() tea.Cmd {
 		if err := m.connectToSandbox(); err != nil {
 			return promptConnectErrMsg{err: err}
 		}
-		agentType := ""
-		if proj := m.selectedProject(); proj != nil {
-			agentType = proj.AgentType
+		agent := "build"
+		if m.agentMode == "plan" {
+			agent = "plan"
 		}
-		if err := m.manager.SendPrompt(threadID, input, sessionID, m.agentMode, agentType); err != nil {
+		if err := m.manager.SendPrompt(threadID, input, sessionID, agent, ""); err != nil {
 			return promptConnectErrMsg{err: fmt.Errorf("send: %w", err)}
 		}
 

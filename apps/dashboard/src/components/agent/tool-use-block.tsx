@@ -47,12 +47,31 @@ const HIDDEN_TOOLS = new Set([
 
 const MCP_HANDLED_TOOLS = new Set(['mcp__terminal-server__ask_user']);
 
+const TOOL_NAME_ALIASES: Record<string, string> = {
+  todowrite: 'TodoWrite',
+  todo_write: 'TodoWrite',
+  websearch: 'WebSearch',
+  web_search: 'WebSearch',
+  webfetch: 'WebFetch',
+  web_fetch: 'WebFetch',
+  strreplace: 'StrReplace',
+  str_replace: 'StrReplace',
+  multiedit: 'MultiEdit',
+  multi_edit: 'MultiEdit',
+  askuserquestion: 'AskUserQuestion',
+};
+
+export function normalizeTool(name: string): string {
+  return TOOL_NAME_ALIASES[name.toLowerCase()] ?? name;
+}
+
 export function ToolUseBlock({ block }: { block: ContentBlock }) {
-  const name = block.name ?? '';
-  if (HIDDEN_TOOLS.has(name) || (name.startsWith('mcp__') && !MCP_HANDLED_TOOLS.has(name))) return null;
+  const rawName = block.name ?? '';
+  const name = normalizeTool(rawName);
+  if (HIDDEN_TOOLS.has(name) || (rawName.startsWith('mcp__') && !MCP_HANDLED_TOOLS.has(rawName))) return null;
 
   const input = (block.input ?? {}) as Input;
-  switch (block.name) {
+  switch (name) {
     case 'Task':
       return <TaskBlock input={input} />;
     case 'Bash':
@@ -77,9 +96,9 @@ export function ToolUseBlock({ block }: { block: ContentBlock }) {
       return <WebFetchBlock input={input} />;
     case 'Glob':
     case 'Grep':
-      return <SearchBlock name={block.name!} input={input} />;
+      return <SearchBlock name={name} input={input} />;
     default:
-      return <GenericToolBlock name={block.name} input={input} />;
+      return <GenericToolBlock name={rawName} input={input} />;
   }
 }
 
@@ -457,6 +476,7 @@ interface TodoItem {
 
 function TodoWriteBlock({ input }: { input: Input }) {
   const todos = Array.isArray(input.todos) ? (input.todos as TodoItem[]) : [];
+  const completedCount = todos.filter((t) => t.status === 'completed').length;
 
   if (todos.length === 0) {
     return <GenericToolBlock name="TodoWrite" input={input} />;
@@ -468,7 +488,7 @@ function TodoWriteBlock({ input }: { input: Input }) {
         <ListTodo className="w-3.5 h-3.5 text-violet-500" />
         <span className="font-medium">Tasks</span>
         <span className="text-text-muted ml-auto">
-          {todos.filter((t) => t.status === 'completed').length}/{todos.length} done
+          {completedCount}/{todos.length} done
         </span>
       </div>
       <ul className="divide-y divide-border">

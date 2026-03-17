@@ -3,7 +3,7 @@ import { User, Bot, Info, Clock } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Message, ContentBlock } from '../../api/client';
-import { ToolUseBlock, BashGroupBlock, TransientSearchBlock, type BashItem } from './tool-use-block';
+import { ToolUseBlock, BashGroupBlock, TransientSearchBlock, normalizeTool, type BashItem } from './tool-use-block';
 import { PlanBlock } from './plan-block';
 import { MarkdownBlock } from './markdown-block';
 import { usePlanStore, extractTitle, extractPlanBody, BUILD_PROMPT_PREFIX, PLAN_BLOCK_REGEX, PLAN_BLOCK_START } from '../../stores/plan-store';
@@ -188,7 +188,8 @@ const DEDUP_ALIASES: Record<string, string> = {
 };
 
 function dedupKey(name: string): string {
-  return DEDUP_ALIASES[name] ?? name;
+  const normalized = normalizeTool(name);
+  return DEDUP_ALIASES[normalized] ?? normalized;
 }
 
 /** Tools that are transient: only shown live, not rendered on refresh (Bash is always rendered) */
@@ -280,7 +281,9 @@ function groupConsecutiveBash(
 function deduplicateBlocks(blocks: ContentBlock[]): ContentBlock[] {
   const bestByKey = new Map<string, ContentBlock>();
   for (const b of blocks) {
-    if (b.type === 'tool_use' && b.name && DEDUP_TOOLS.has(b.name)) {
+    if (b.type === 'tool_use' && b.name) {
+      const normalized = normalizeTool(b.name);
+      if (!DEDUP_TOOLS.has(normalized)) continue;
       const key = dedupKey(b.name);
       const existing = bestByKey.get(key);
       if (existing && existing.name !== b.name) continue;
@@ -292,15 +295,18 @@ function deduplicateBlocks(blocks: ContentBlock[]): ContentBlock[] {
   const seen = new Set<string>();
   const out: ContentBlock[] = [];
   for (const b of blocks) {
-    if (b.type === 'tool_use' && b.name && DEDUP_TOOLS.has(b.name)) {
-      const key = dedupKey(b.name);
-      if (!seen.has(key)) {
-        seen.add(key);
-        out.push(bestByKey.get(key)!);
+    if (b.type === 'tool_use' && b.name) {
+      const normalized = normalizeTool(b.name);
+      if (DEDUP_TOOLS.has(normalized)) {
+        const key = dedupKey(b.name);
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push(bestByKey.get(key)!);
+        }
+        continue;
       }
-    } else {
-      out.push(b);
     }
+    out.push(b);
   }
   return out;
 }
@@ -315,11 +321,17 @@ const HEADING_RE = /^#{1,3}\s+/m;
 
 const PLAN_STRUCTURE_INDICATORS = /^#{1,3}\s+(Stack|File Structure|Project Structure|Implementation Steps|Features|Structure|Details)\b/gm;
 
-/** True if text contains ```plan ... ``` block or plan-like structure (Stack, File Structure, etc.) */
+const TASK_STRUCTURE_INDICATORS = /^#{1,3}\s+(Architecture|Breakdown|Worker|Task|Decomposition|Execution Flow|Verification|Subtask|Phase)\b/gm;
+
+/** True if text contains ```plan ... ``` block or plan/task-like structure */
 function hasPlanBlock(text: string): boolean {
   if (PLAN_BLOCK_REGEX.test(text)) return true;
-  const indicators = text.match(PLAN_STRUCTURE_INDICATORS);
-  return (indicators?.length ?? 0) >= 2 && text.length >= 150;
+  if (text.length < 150) return false;
+  const planIndicators = text.match(PLAN_STRUCTURE_INDICATORS);
+  if ((planIndicators?.length ?? 0) >= 2) return true;
+  const taskIndicators = text.match(TASK_STRUCTURE_INDICATORS);
+  if ((taskIndicators?.length ?? 0) >= 2) return true;
+  return false;
 }
 
 /** Extract plan content: prefers ```plan ... ``` (handles nested blocks), fallback to structure-based */
@@ -633,11 +645,16 @@ function SystemBubble({ message }: { message: Message }) {
 
 const MIN_MARKDOWN_LEN = 200;
 
+/** Convert bare `\n` into markdown hard breaks (`  \n`) so single newlines render visually. */
+function ensureHardBreaks(text: string): string {
+  return text.replace(/(?<! {2})\n/g, '  \n');
+}
+
 function ContentBlockView({ block }: { block: ContentBlock }) {
   if (block.type === 'text' && block.text) {
     if (block.text.length >= MIN_MARKDOWN_LEN && HEADING_RE.test(block.text)) {
       const title = extractTitle(block.text);
-      return <MarkdownBlock title={title} content={block.text} />;
+      return <MarkdownBlock title={title} content={ensureHardBreaks(block.text)} />;
     }
     return (
       <div className="text-sm leading-relaxed">
@@ -652,7 +669,7 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
               ),
             }}
           >
-            {block.text}
+            {ensureHardBreaks(block.text)}
           </Markdown>
         </article>
       </div>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useMemo, useCallback } from 'react';
-import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo, RotateCcw, MessageCircleQuestion } from 'lucide-react';
+import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo, RotateCcw, MessageCircleQuestion, Send } from 'lucide-react';
+// Send used in the continue banner below the messages
 import { useThreadsStore } from '../../stores/tasks-store';
 import { groupMessages, MessageGroupView, PlanShownProvider } from './message-bubble';
 import { PromptInput, type PromptInputHandle } from './prompt-input';
@@ -80,23 +81,30 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
 
-  const currentTask = useMemo(() => {
+  const taskInfo = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (msg.role !== 'assistant') continue;
       for (let j = msg.content.length - 1; j >= 0; j--) {
         const block = msg.content[j];
-        if (block.type === 'tool_use' && block.name === 'TodoWrite' && block.input) {
+        const bName = (block.name ?? '').toLowerCase();
+        if (block.type === 'tool_use' && (bName === 'todowrite' || bName === 'todo_write') && block.input) {
           const todos = (block.input as Record<string, unknown>).todos;
           if (Array.isArray(todos)) {
             const ip = todos.find((t: any) => t.status === 'in_progress');
-            if (ip && (ip as any).content) return (ip as any).content as string;
+            const hasPending = todos.some((t: any) => t.status === 'pending' || t.status === 'in_progress');
+            const allDone = todos.length > 0 && todos.every((t: any) => t.status === 'completed');
+            return {
+              currentTask: ip && (ip as any).content ? (ip as any).content as string : null,
+              hasPending: hasPending && !allDone,
+            };
           }
         }
       }
     }
-    return null;
+    return { currentTask: null, hasPending: false };
   }, [messages]);
+  const currentTask = taskInfo.currentTask;
 
   useEffect(() => {
     restoredScrollRef.current = false;
@@ -256,13 +264,28 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
           )}
         </div>
 
+        {/* Continue banner — shown when agent stopped with pending tasks */}
+        {taskInfo.hasPending && !isRunning && (
+          <div className="flex items-center gap-3 px-4 py-2 border-t border-border bg-primary/5">
+            <ListTodo className="w-4 h-4 text-violet-400 shrink-0" />
+            <span className="text-xs text-text-secondary flex-1">The agent has pending tasks to complete.</span>
+            <button
+              type="button"
+              onClick={() => onSendSilentPrompt(activeThreadId!, 'Continue. Execute the pending tasks.')}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-primary text-white hover:bg-primary-hover transition-colors font-medium shrink-0"
+            >
+              <Send className="w-3 h-3" />
+              Continue
+            </button>
+          </div>
+        )}
+
         {/* Input */}
         <PromptInput
           ref={promptRef}
           onSend={(prompt, files, mode, model, snippets, agentType) => onSendPrompt(activeThreadId!, prompt, files, mode, model, snippets, agentType)}
           disabled={isRunning}
           requestListing={requestListing}
-          hideAgentDropdown
         />
       </div>
     </ThreadActionsContext.Provider>

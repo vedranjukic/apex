@@ -1310,7 +1310,7 @@ export class AgentGateway
         (thread.claudeSessionId ? ` (resuming session ${thread.claudeSessionId})` : ' (new session)'),
     );
     try {
-      await manager.sendPrompt(project.sandboxId, prompt, threadId, thread.claudeSessionId, mode, model, effectiveAgentType);
+      await manager.sendPrompt(project.sandboxId, prompt, threadId, thread.claudeSessionId, mode, model, effectiveAgentType as string);
       this.logger.log(`Prompt sent successfully for thread ${threadId}`);
       client.emit('prompt_accepted', { threadId });
     } catch (err) {

@@ -31,7 +31,7 @@ const describeE2e = hasSandboxKeys ? describe : describe.skip;
 // ── Helpers ──────────────────────────────────────────
 
 async function createProject(name: string): Promise<string> {
-  const res = await axios.post('/api/projects', { name, agentType: 'claude_code' });
+  const res = await axios.post('/api/projects', { name, agentType: 'build' });
   expect([200, 201]).toContain(res.status);
   return res.data.id;
 }

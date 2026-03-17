@@ -44,7 +44,7 @@ var projectCreateCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Creating project %q...\n", createName)
-		project, err := database.CreateProject(userID, createName, createDescription, "claude_code", "", gitRepo)
+		project, err := database.CreateProject(userID, createName, createDescription, "build", "", gitRepo)
 		if err != nil {
 			return fmt.Errorf("failed to create project: %w", err)
 		}

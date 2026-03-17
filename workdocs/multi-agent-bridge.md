@@ -1,14 +1,12 @@
-# Multi-Agent Bridge Abstraction
+# OpenCode Bridge Architecture
 
-The bridge script supports three agent backends through an adapter pattern. Each adapter normalizes its agent's native streaming protocol into the same event format (`system`/`assistant`/`result` with content blocks), so the gateway and dashboard remain agent-agnostic.
+The bridge script uses OpenCode as the single agent runtime. Custom agents (Build, Plan, Sisyphus) and models from any provider (Anthropic, OpenAI, OpenCode free) are selected via `--agent` and `-m` flags on `opencode run`.
 
-## Supported Agents
+## Runtime
 
-| Agent | Binary | Process Model | Auth |
-|---|---|---|---|
-| **Claude Code** (`claude_code`) | `claude` | Long-lived PTY, bidirectional JSONL stdin/stdout | `ANTHROPIC_API_KEY` env var |
-| **OpenCode** (`open_code`) | `/home/daytona/.opencode/bin/opencode` | Per-prompt PTY, `--session` for context | Free built-in models; or `opencode auth login` |
-| **Codex** (`codex`) | `codex app-server --listen stdio://` | Long-lived child process, JSON-RPC 2.0 | `codex login --with-api-key` (writes `~/.codex/auth.json`) |
+| Binary | Process Model | Auth |
+|---|---|---|
+| `/home/daytona/.opencode/bin/opencode` | Per-prompt PTY, `--session` for context | Configured via `opencode.json` providers with `{env:VAR}` syntax |
 
 ## Architecture
 

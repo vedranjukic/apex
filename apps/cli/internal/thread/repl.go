@@ -482,12 +482,12 @@ func (r *REPL) listThreads() {
 		agentLabel := ""
 		if c.AgentType != nil && *c.AgentType != "" {
 			switch *c.AgentType {
-			case "claude_code":
-				agentLabel = dimStyle.Sprint("[claude]")
-			case "open_code":
-				agentLabel = dimStyle.Sprint("[opencode]")
-			case "codex":
-				agentLabel = dimStyle.Sprint("[codex]")
+			case "build":
+				agentLabel = dimStyle.Sprint("[build]")
+			case "plan":
+				agentLabel = dimStyle.Sprint("[plan]")
+			case "sisyphus":
+				agentLabel = dimStyle.Sprint("[sisyphus]")
 			default:
 				agentLabel = dimStyle.Sprintf("[%s]", *c.AgentType)
 			}
@@ -591,7 +591,7 @@ func (r *REPL) handleUserInput(input string) {
 
 	r.spin.Start()
 
-	if err := r.manager.SendPrompt(threadID, input, sessionID, "", r.project.AgentType); err != nil {
+	if err := r.manager.SendPrompt(threadID, input, sessionID, "build", ""); err != nil {
 		r.spin.Stop()
 		errorStyle.Fprintf(ProgressOut, "  Failed to send prompt: %v\n", err)
 		r.mu.Lock()

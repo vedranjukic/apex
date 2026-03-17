@@ -336,19 +336,20 @@ export class SandboxManager extends EventEmitter {
     sessionId?: string | null,
     mode?: string,
     model?: string,
-    agentType?: string,
+    agent?: string,
     forceRestart?: boolean,
   ): Promise<void> {
     const session = await this.ensureConnected(sandboxId);
+    // Map legacy mode values to OpenCode agent names
+    const effectiveAgent = agent || (mode === 'plan' ? 'plan' : 'build');
     session.ws!.send(
       JSON.stringify({
         type: "start_claude",
         prompt,
         threadId,
         sessionId: sessionId || undefined,
-        mode: mode || undefined,
+        agent: effectiveAgent,
         model: model || undefined,
-        agentType: agentType || undefined,
         forceRestart: forceRestart || undefined,
       }),
     );
@@ -1369,16 +1370,79 @@ export class SandboxManager extends EventEmitter {
   /** Restart the bridge process inside the sandbox and refresh preview URL */
   private async restartBridge(session: InternalSession): Promise<void> {
     const { sandbox, projectDir } = session;
+    const sid = session.sandboxId.slice(0, 8);
 
     await sandbox.process.executeCommand(
       'pkill -f "node bridge.js" 2>/dev/null; sleep 0.3',
     );
 
     const bridgeCode = getBridgeScript(BRIDGE_PORT, projectDir);
+    console.log(
+      `[bridge:${sid}] uploading bridge.js (${bridgeCode.length} bytes, has spawnOpenCode: ${bridgeCode.includes("spawnOpenCode")})`,
+    );
     await sandbox.fs.uploadFile(
       Buffer.from(bridgeCode),
       `${BRIDGE_DIR}/bridge.js`,
     );
+
+    // Write .env so OpenCode picks up provider keys
+    const dotEnvLines: string[] = [];
+    if (this.config.anthropicApiKey) {
+      dotEnvLines.push(`ANTHROPIC_API_KEY=${this.config.anthropicApiKey}`);
+    }
+    if (this.config.openaiApiKey) {
+      dotEnvLines.push(`OPENAI_API_KEY=${this.config.openaiApiKey}`);
+    }
+    if (dotEnvLines.length > 0 && projectDir) {
+      await sandbox.fs.uploadFile(
+        Buffer.from(dotEnvLines.join("\n") + "\n"),
+        `${projectDir}/.env`,
+      );
+      console.log(`[bridge:${sid}] wrote .env with ${dotEnvLines.length} keys`);
+    }
+
+    // Write opencode.json if missing
+    const checkOcConfig = await sandbox.process.executeCommand(
+      `test -f ${projectDir}/opencode.json && echo exists || echo missing`,
+    );
+    if ((checkOcConfig.result ?? "").includes("missing")) {
+      const openCodeConfig: Record<string, unknown> = {
+        $schema: "https://opencode.ai/config.json",
+        default_agent: "build",
+        agent: {
+          build: {
+            description: "Full development agent with all tools enabled",
+            mode: "primary",
+            prompt: "{file:AGENTS.md}",
+          },
+          plan: {
+            description: "Analysis and planning without making changes",
+            mode: "primary",
+            tools: { write: false, edit: false, bash: false },
+          },
+          sisyphus: {
+            description: "Orchestration agent for complex multi-step tasks",
+            mode: "primary",
+            prompt: "{file:.opencode/agents/sisyphus-prompt.txt}",
+            steps: 50,
+            permission: { task: { "*": "allow" } },
+          },
+        },
+        experimental: { mcp_timeout: 300000 },
+        mcp: {
+          "terminal-server": {
+            type: "local",
+            command: ["node", `${BRIDGE_DIR}/mcp-terminal-server.js`],
+            timeout: 300000,
+          },
+        },
+      };
+      await sandbox.fs.uploadFile(
+        Buffer.from(JSON.stringify(openCodeConfig)),
+        `${projectDir}/opencode.json`,
+      );
+      console.log(`[bridge:${sid}] wrote opencode.json`);
+    }
 
     const bridgeSessionId = `bridge-restart-${Date.now()}`;
     session.bridgeSessionId = bridgeSessionId;
@@ -1416,7 +1480,7 @@ export class SandboxManager extends EventEmitter {
     this.emit("status", session.sandboxId, "starting_bridge");
 
     const { sandbox, projectDir } = session;
-    const effectiveAgentType = agentType || "claude_code";
+    // OpenCode is the single runtime — agentType param kept for backward compat
 
     await sandbox.fs.createFolder(BRIDGE_DIR, "755");
 
@@ -1434,7 +1498,7 @@ export class SandboxManager extends EventEmitter {
       await sandbox.process.executeCommand("git init", projectDir);
     }
 
-    const bridgeCode = getBridgeScript(BRIDGE_PORT, projectDir, effectiveAgentType);
+    const bridgeCode = getBridgeScript(BRIDGE_PORT, projectDir);
     await sandbox.fs.uploadFile(
       Buffer.from(bridgeCode),
       `${BRIDGE_DIR}/bridge.js`,
@@ -1484,83 +1548,94 @@ export class SandboxManager extends EventEmitter {
       "",
     ].join("\n");
 
-    if (effectiveAgentType === "claude_code") {
-      const mcpConfig = JSON.stringify({
-        mcpServers: {
-          "terminal-server": {
-            type: "stdio",
-            command: "node",
-            args: [`${BRIDGE_DIR}/mcp-terminal-server.js`],
-            env: {},
-          },
-        },
-      });
-      await sandbox.fs.createFolder("/home/daytona/.claude", "755");
+    // Pre-warm: trigger the one-time DB migration before the bridge spawns `opencode run`.
+    await sandbox.process.executeCommand(
+      `cd ${projectDir} && HOME=/home/daytona /home/daytona/.opencode/bin/opencode session list 2>&1; echo "opencode pre-warm done"`,
+    );
+
+    // Write a .env in the project dir so OpenCode picks up provider keys.
+    // OpenCode loads .env from the project root on startup.
+    const dotEnvLines: string[] = [];
+    if (this.config.anthropicApiKey) {
+      dotEnvLines.push(`ANTHROPIC_API_KEY=${this.config.anthropicApiKey}`);
+    }
+    if (this.config.openaiApiKey) {
+      dotEnvLines.push(`OPENAI_API_KEY=${this.config.openaiApiKey}`);
+    }
+    if (dotEnvLines.length > 0) {
       await sandbox.fs.uploadFile(
-        Buffer.from(mcpConfig),
-        `${HOME_DIR}/.claude.json`,
-      );
-      await sandbox.fs.uploadFile(
-        Buffer.from(sandboxInstructions),
-        "/home/daytona/.claude/CLAUDE.md",
-      );
-    } else if (effectiveAgentType === "codex") {
-      // Update Codex CLI to latest before login/config
-      await sandbox.process.executeCommand(
-        `npm install -g @openai/codex@latest 2>/dev/null || true`,
-      );
-      if (this.config.openaiApiKey) {
-        // Write auth.json directly — more reliable than `codex login` across versions
-        const codexAuth = JSON.stringify({
-          auth_mode: 'apikey',
-          OPENAI_API_KEY: this.config.openaiApiKey,
-        });
-        await sandbox.process.executeCommand(`mkdir -p /home/daytona/.codex`);
-        await sandbox.fs.uploadFile(
-          Buffer.from(codexAuth),
-          '/home/daytona/.codex/auth.json',
-        );
-      }
-      // Register MCP terminal server so Codex can use ask_user, terminals, etc.
-      await sandbox.process.executeCommand(
-        `codex mcp add terminal-server -- node ${BRIDGE_DIR}/mcp-terminal-server.js 2>/dev/null || true`,
-      );
-      // Write AGENTS.md for Codex instructions
-      await sandbox.fs.uploadFile(
-        Buffer.from(sandboxInstructions),
-        `${projectDir}/AGENTS.md`,
-      );
-    } else if (effectiveAgentType === "open_code") {
-      // Pre-warm: trigger the one-time DB migration before the bridge spawns `opencode run`.
-      // The migration happens on any opencode invocation. Use `session list` in project dir
-      // to trigger it without starting the TUI or requiring a prompt.
-      // Also add opencode to PATH for the bridge process.
-      await sandbox.process.executeCommand(
-        `cd ${projectDir} && HOME=/home/daytona /home/daytona/.opencode/bin/opencode session list 2>&1; echo "opencode pre-warm done"`,
-      );
-      // Write OpenCode config with MCP terminal server
-      // timeout must be high enough for ask_user (bridge blocks up to 5 min)
-      const openCodeConfig = JSON.stringify({
-        experimental: {
-          mcp_timeout: 300000,
-        },
-        mcp: {
-          "terminal-server": {
-            type: "local",
-            command: ["node", `${BRIDGE_DIR}/mcp-terminal-server.js`],
-            timeout: 300000,
-          },
-        },
-      });
-      await sandbox.fs.uploadFile(
-        Buffer.from(openCodeConfig),
-        `${projectDir}/opencode.json`,
-      );
-      await sandbox.fs.uploadFile(
-        Buffer.from(sandboxInstructions),
-        `${projectDir}/AGENTS.md`,
+        Buffer.from(dotEnvLines.join("\n") + "\n"),
+        `${projectDir}/.env`,
       );
     }
+
+    // Build the OpenCode config with agents and MCP.
+    // Provider credentials come from the .env file above — OpenCode auto-detects
+    // Anthropic / OpenAI when their env vars are present.
+    const openCodeConfig: Record<string, unknown> = {
+      $schema: "https://opencode.ai/config.json",
+      default_agent: "build",
+      agent: {
+        build: {
+          description: "Full development agent with all tools enabled",
+          mode: "primary",
+          prompt: "{file:AGENTS.md}",
+        },
+        plan: {
+          description: "Analysis and planning without making changes",
+          mode: "primary",
+          tools: { write: false, edit: false, bash: false },
+        },
+        sisyphus: {
+          description: "Orchestration agent for complex multi-step tasks with retry logic",
+          mode: "primary",
+          prompt: "{file:.opencode/agents/sisyphus-prompt.txt}",
+          steps: 50,
+          permission: { task: { "*": "allow" } },
+        },
+      },
+      experimental: { mcp_timeout: 300000 },
+      mcp: {
+        "terminal-server": {
+          type: "local",
+          command: ["node", `${BRIDGE_DIR}/mcp-terminal-server.js`],
+          timeout: 300000,
+        },
+      },
+    };
+
+    await sandbox.fs.uploadFile(
+      Buffer.from(JSON.stringify(openCodeConfig)),
+      `${projectDir}/opencode.json`,
+    );
+
+    // Upload Sisyphus agent prompt
+    await sandbox.process.executeCommand(
+      `mkdir -p ${projectDir}/.opencode/agents`,
+    );
+    const sisyphusPrompt = [
+      "You are Sisyphus, an orchestration agent for complex multi-step tasks.",
+      "",
+      "Your approach:",
+      "1. Analyze the request and break it into concrete sub-tasks",
+      "2. Delegate implementation to subagents using @general for multi-step work and @explore for codebase investigation",
+      "3. Track progress — when a subtask fails, retry with adjusted context",
+      "4. Provide a status update after each sub-task completes",
+      "5. Synthesize the results and present a final summary",
+      "",
+      "When delegating, be specific about what each subagent should do.",
+      "Prefer parallel delegation when sub-tasks are independent.",
+    ].join("\n");
+    await sandbox.fs.uploadFile(
+      Buffer.from(sisyphusPrompt),
+      `${projectDir}/.opencode/agents/sisyphus-prompt.txt`,
+    );
+
+    // Upload sandbox instructions (AGENTS.md)
+    await sandbox.fs.uploadFile(
+      Buffer.from(sandboxInstructions),
+      `${projectDir}/AGENTS.md`,
+    );
 
     await sandbox.process.executeCommand("npm init -y", BRIDGE_DIR);
     const npmResult = await sandbox.process.executeCommand(

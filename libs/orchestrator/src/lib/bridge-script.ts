@@ -2,17 +2,17 @@
  * Returns the JavaScript source for the bridge server that runs
  * INSIDE a Daytona sandbox. It is uploaded via sandbox.fs.uploadFile().
  *
- * Handles agent CLI orchestration (Claude Code, OpenCode, Codex) AND
- * multi-terminal PTY sessions.
+ * Uses OpenCode as the single agent runtime. Custom agents (build, plan,
+ * sisyphus, etc.) and models from any provider are selected via
+ * `--agent` and `-m` flags on `opencode run`.
  */
 export function getBridgeScript(
   port: number,
   projectDir?: string,
-  agentType?: string,
+  _agentType?: string,
   _agentConfig?: Record<string, unknown>,
 ): string {
   const safeProjDir = projectDir ? projectDir.replace(/"/g, '\\"') : '';
-  const safeAgentType = agentType || 'claude_code';
   return `const http = require("http");
 const { WebSocketServer } = require("ws");
 const { spawn, execSync } = require("child_process");
@@ -20,7 +20,6 @@ const pty = require("node-pty");
 const crypto = require("crypto");
 
 const PORT = ${port};
-const API_KEY = process.env.ANTHROPIC_API_KEY || "";
 const PROJECT_DIR = "${safeProjDir}" || process.env.HOME || "/home/daytona";
 const MAX_SCROLLBACK = 5000;
 const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY || "";
@@ -28,7 +27,6 @@ const DAYTONA_API_URL = (process.env.DAYTONA_API_URL || "https://app.daytona.io/
 const SANDBOX_ID = process.env.DAYTONA_SANDBOX_ID || "";
 const https = require("https");
 const urlMod = require("url");
-const AGENT_TYPE = "${safeAgentType}";
 
 let state = { ws: null };
 const agentProcesses = new Map();
@@ -58,398 +56,101 @@ function emitAgentError(threadId, error) {
 }
 
 // ══════════════════════════════════════════════════════
-// ── Agent Adapters ───────────────────────────────────
+// ── OpenCode Agent Adapter ───────────────────────────
 // ══════════════════════════════════════════════════════
 
-const claudeAdapter = {
-  name: "claude_code",
-  processModel: "long-lived",
+function spawnOpenCode(threadId, prompt, agent, model, sessionId) {
+  const ocModel = model || "";
+  const ocAgent = agent || "build";
+  log("\\u{1F916}", "Spawning OpenCode for thread " + threadId + " agent=" + ocAgent + " model=" + (ocModel || "default"));
+  const ocBin = "/home/daytona/.opencode/bin/opencode";
+  const args = ["run", "--format", "json"];
+  if (ocAgent) args.push("--agent", ocAgent);
+  if (ocModel) args.push("-m", ocModel);
+  if (sessionId) args.push("--session", sessionId);
+  args.push(prompt);
 
-  spawn(threadId, prompt, mode, model, sessionId) {
-    const agentMode = mode || "agent";
-    log("\\u{1F916}", "Spawning Claude for thread " + threadId + " mode=" + agentMode);
+  log("\\u{1F916}", "OpenCode cmd: " + ocBin + " " + args.join(" ") + " cwd=" + PROJECT_DIR);
+  const proc = pty.spawn(ocBin, args, {
+    name: "xterm-256color", cols: 200, rows: 50, cwd: PROJECT_DIR,
+    env: { ...process.env, HOME: "/home/daytona" },
+  });
+  let capturedSessionId = null;
+  let stepCost = 0;
+  let buffer = "";
 
-    const claudeArgs = ["--verbose", "--output-format", "stream-json", "--input-format", "stream-json"];
-    claudeArgs.push("--dangerously-skip-permissions");
-
-    if (agentMode === "plan") {
-      claudeArgs.push("--disallowedTools", "AskUserQuestion,Edit,Write,MultiEdit");
-      claudeArgs.push("--append-system-prompt", "You are in Plan mode. Analyze the request and produce a detailed plan. You CANNOT create or edit files. Only use read-only tools to explore the codebase. When presenting your plan, you MUST wrap the entire plan in fenced code blocks with the language tag \\"plan\\". Use this exact format:\\n\\n" + String.fromCharCode(96,96,96) + "plan\\n[Your plan content - use markdown. Include a File Structure section with the actual directory tree or list of files to create - do not leave it empty.]\\n" + String.fromCharCode(96,96,96) + "\\n\\nThe UI detects plans ONLY when they use this exact delimiter. You may call get_plan_format_instructions for the full specification.");
-    } else if (agentMode === "ask") {
-      claudeArgs.push("--disallowedTools", "AskUserQuestion,Edit,Write,MultiEdit,Bash");
-      claudeArgs.push("--append-system-prompt", "You are in Ask mode. Only answer the question using read-only tools. You CANNOT create, edit, or write files, or run shell commands.");
-    } else {
-      claudeArgs.push("--disallowedTools", "AskUserQuestion");
-    }
-    if (model) claudeArgs.push("--model", model);
-    if (sessionId) claudeArgs.push("--resume", sessionId);
-    claudeArgs.push("-p", prompt);
-
-    const proc = pty.spawn("claude", claudeArgs, {
-      name: "xterm-256color", cols: 200, rows: 50, cwd: PROJECT_DIR,
-      env: { ...process.env, ANTHROPIC_API_KEY: API_KEY },
-    });
-
-    let buffer = "";
-    proc.onData((d) => {
-      buffer += d;
-      const lines = buffer.split("\\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        const trimmed = line.replace(/[\\x00-\\x1f\\x7f]+(\\[\\?[\\d;]*[a-zA-Z])?/g, "").trim();
-        if (!trimmed) continue;
-        try { emitAgentMessage(threadId, JSON.parse(trimmed)); } catch {}
-      }
-    });
-
-    proc.onExit(({ exitCode }) => {
-      if (buffer.trim()) {
-        const trimmed = buffer.replace(/[\\x00-\\x1f\\x7f]+(\\[\\?[\\d;]*[a-zA-Z])?/g, "").trim();
-        try { emitAgentMessage(threadId, JSON.parse(trimmed)); } catch {}
-      }
-      emitAgentExit(threadId, exitCode);
-      agentProcesses.delete(threadId);
-    });
-
-    return proc;
-  },
-
-  isAlive(entry) { return entry.proc && entry.proc.pid > 0; },
-
-  sendFollowUp(entry, prompt) {
-    if (entry.proc) {
-      entry.proc.write(JSON.stringify({ type: "user", message: { role: "user", content: prompt } }) + "\\n");
-      return true;
-    }
-    return null;
-  },
-
-  sendUserAnswer(entry, toolUseId, answer) {
-    if (entry.proc) {
-      entry.proc.write(JSON.stringify({
-        type: "user",
-        message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: answer }] },
-      }) + "\\n");
-    }
-  },
-
-  kill(entry) { if (entry.proc) { try { entry.proc.kill(); } catch {} } },
-};
-
-// ── OpenCode Adapter ─────────────────────────────────
-const openCodeAdapter = {
-  name: "open_code",
-  processModel: "per-prompt",
-
-  spawn(threadId, prompt, mode, model, sessionId) {
-    const ocModel = model || "opencode/gpt-5-nano";
-    log("\\u{1F916}", "Spawning OpenCode for thread " + threadId + " model=" + ocModel);
-    const ocBin = "/home/daytona/.opencode/bin/opencode";
-    const args = ["run", "--format", "json", "-m", ocModel];
-    if (sessionId) args.push("--session", sessionId);
-    args.push(prompt);
-
-    log("\\u{1F916}", "OpenCode cmd: " + ocBin + " " + args.join(" ") + " cwd=" + PROJECT_DIR);
-    const proc = pty.spawn(ocBin, args, {
-      name: "xterm-256color", cols: 200, rows: 50, cwd: PROJECT_DIR,
-      env: { ...process.env, HOME: "/home/daytona" },
-    });
-    let capturedSessionId = null;
-    let stepCost = 0;
-    let stderrBuf = "";
-    let buffer = "";
-
-    proc.onData((d) => {
-      buffer += d;
-      const lines = buffer.split("\\n");
-      buffer = lines.pop() || "";
-      for (const rawLine of lines) {
-        const line = rawLine.replace(/[\\x00-\\x1f\\x7f]+(\\[\\?[\\d;]*[a-zA-Z])?/g, "").trim();
-        if (!line) continue;
-        try {
-          const ev = JSON.parse(line);
-          if (!capturedSessionId && ev.sessionID) {
-            capturedSessionId = ev.sessionID;
-            const ex = agentProcesses.get(threadId);
-            if (ex) ex.sessionId = capturedSessionId;
-            emitAgentMessage(threadId, { type: "system", subtype: "init", session_id: capturedSessionId, tools: [], model: ocModel, cwd: PROJECT_DIR });
-          }
-          if (ev.type === "text") {
-            emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: ocModel, content: [{ type: "text", text: ev.part.text || "" }], stop_reason: "end_turn" } });
-          } else if (ev.type === "tool_use") {
-            const s = ev.part.state || {};
-            const tn = ev.part.tool || "unknown";
-            const nn = { bash: "Bash", read: "Read", glob: "Glob", grep: "Grep", apply_patch: "Write", write: "Write", edit: "Edit" }[tn] || tn;
-            emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: ocModel, content: [
-              { type: "tool_use", id: ev.part.callID || ev.part.id, name: nn, input: s.input || {} },
-              { type: "tool_result", tool_use_id: ev.part.callID || ev.part.id, content: typeof s.output === "string" ? s.output : JSON.stringify(s.output || "") },
-            ], stop_reason: "tool_use" } });
-          } else if (ev.type === "step_finish") {
-            stepCost += ev.part.cost || 0;
-            if (ev.part.reason === "stop") {
-              const tk = ev.part.tokens || {};
-              emitAgentMessage(threadId, { type: "result", subtype: "success", is_error: false, duration_ms: 0, num_turns: 1, result: "", session_id: capturedSessionId || "", total_cost_usd: stepCost, usage: { input_tokens: tk.input || 0, output_tokens: tk.output || 0 } });
-            }
-          } else if (ev.type === "error") {
-            emitAgentError(threadId, (ev.error && ev.error.data && ev.error.data.message) || "OpenCode error");
-          }
-        } catch {}
-      }
-    });
-
-    proc.onExit(({ exitCode }) => {
-      if (buffer.trim()) {
-        const trimmed = buffer.replace(/[\\x00-\\x1f\\x7f]+(\\[\\?[\\d;]*[a-zA-Z])?/g, "").trim();
-        try { const ev = JSON.parse(trimmed); if (ev.type) { /* process last line */ } } catch {}
-      }
-      log("\\u{1F916}", "OpenCode exited for thread " + threadId + " code=" + exitCode);
-      if (!capturedSessionId && exitCode !== 0) {
-        emitAgentError(threadId, "OpenCode exited with code " + exitCode);
-      }
-      agentProcesses.delete(threadId);
-      emitAgentExit(threadId, exitCode || 0);
-    });
-    return proc;
-  },
-
-  isAlive(entry) { return entry.proc && entry.proc.pid > 0; },
-  sendFollowUp() { return null; },
-  sendUserAnswer(entry) { emitAgentError(entry.threadId || "default", "OpenCode does not support user answers"); },
-  kill(entry) { if (entry.proc) { try { entry.proc.kill(); } catch {} } },
-};
-
-// ── Codex Adapter (app-server) ───────────────────────
-const codexAdapter = {
-  name: "codex",
-  processModel: "long-lived",
-
-  spawn(threadId, prompt, mode, model, sessionId) {
-    const cm = model || "gpt-5.4";
-    log("\\u{1F916}", "Spawning Codex app-server for thread " + threadId + " model=" + cm);
-
-    log("\\u{1F916}", "Codex env: OPENAI_API_KEY=" + (process.env.OPENAI_API_KEY ? "set(" + process.env.OPENAI_API_KEY.length + " chars)" : "NOT_SET"));
-
-    const proc = spawn("codex", ["app-server", "--listen", "stdio://"], {
-      cwd: PROJECT_DIR, stdio: ["pipe", "pipe", "pipe"], env: process.env,
-    });
-
-    const entry = { proc, adapter: codexAdapter, sessionId: null, threadId: null, rpcId: 100, threadId, pendingPrompt: prompt, pendingModel: cm };
-    const readline = require("readline");
-    const rl = readline.createInterface({ input: proc.stdout });
-
-    function rpc(msg) { proc.stdin.write(JSON.stringify(msg) + "\\n"); }
-
-    let initDone = false;
-    let threadStarted = false;
-    let textBuf = "";
-    let errorDetails = [];
-    let stderrLines = [];
-    let turnRetryCount = 0;
-
-    rl.on("line", (line) => {
+  proc.onData((d) => {
+    buffer += d;
+    const lines = buffer.split("\\n");
+    buffer = lines.pop() || "";
+    for (const rawLine of lines) {
+      const line = rawLine.replace(/[\\x00-\\x1f\\x7f]+(\\[\\?[\\d;]*[a-zA-Z])?/g, "").trim();
+      if (!line) continue;
       try {
-        const msg = JSON.parse(line);
-
-        if (msg.id === 0 && msg.result && !initDone) {
-          initDone = true;
-          rpc({ method: "initialized", params: {} });
-          setTimeout(() => {
-            entry.rpcId++;
-            rpc({ method: "thread/start", id: entry.rpcId, params: { model: entry.pendingModel, cwd: PROJECT_DIR, approvalPolicy: "never", sandbox: "danger-full-access" } });
-          }, 100);
-          return;
+        const ev = JSON.parse(line);
+        if (!capturedSessionId && ev.sessionID) {
+          capturedSessionId = ev.sessionID;
+          const ex = agentProcesses.get(threadId);
+          if (ex) ex.sessionId = capturedSessionId;
+          emitAgentMessage(threadId, { type: "system", subtype: "init", session_id: capturedSessionId, tools: [], model: ocModel || ocAgent, cwd: PROJECT_DIR });
         }
-
-        if (msg.method === "thread/started" && msg.params?.thread?.id && !threadStarted) {
-          threadStarted = true;
-          entry.threadId = msg.params.thread.id;
-          entry.sessionId = entry.threadId;
-          emitAgentMessage(threadId, { type: "system", subtype: "init", session_id: entry.threadId, tools: [], model: entry.pendingModel, cwd: PROJECT_DIR });
-          setTimeout(() => {
-            entry.rpcId++;
-            entry.lastPrompt = entry.pendingPrompt;
-            rpc({ method: "turn/start", id: entry.rpcId, params: { threadId: entry.threadId, input: [{ type: "text", text: entry.pendingPrompt }] } });
-            entry.pendingPrompt = null;
-            var stored = agentProcesses.get(threadId);
-            if (stored) { stored.codexThreadId = entry.threadId; stored.rpcId = entry.rpcId; }
-          }, 100);
-          return;
-        }
-
-        if (msg.method === "item/started") {
-          const it = msg.params?.item || {};
-          if (it.type === "commandExecution" && it.status === "inProgress") {
-            emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: entry.pendingModel, content: [{ type: "tool_use", id: it.id, name: "Bash", input: { command: it.command || "" } }], stop_reason: "tool_use" } });
-          } else if (it.type === "agentMessage") {
-            textBuf = "";
+        if (ev.type === "text") {
+          emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: ocModel || ocAgent, content: [{ type: "text", text: ev.part.text || "" }], stop_reason: "end_turn" } });
+        } else if (ev.type === "tool_use") {
+          const s = ev.part.state || {};
+          const tn = ev.part.tool || "unknown";
+          const nn = { bash: "Bash", read: "Read", glob: "Glob", grep: "Grep", apply_patch: "Write", write: "Write", edit: "Edit", todowrite: "TodoWrite", todo_write: "TodoWrite", websearch: "WebSearch", web_search: "WebSearch", webfetch: "WebFetch", web_fetch: "WebFetch" }[tn] || tn;
+          emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: ocModel || ocAgent, content: [
+            { type: "tool_use", id: ev.part.callID || ev.part.id, name: nn, input: s.input || {} },
+            { type: "tool_result", tool_use_id: ev.part.callID || ev.part.id, content: typeof s.output === "string" ? s.output : JSON.stringify(s.output || "") },
+          ], stop_reason: "tool_use" } });
+        } else if (ev.type === "step_finish") {
+          stepCost += ev.part.cost || 0;
+          if (ev.part.reason === "stop") {
+            const tk = ev.part.tokens || {};
+            emitAgentMessage(threadId, { type: "result", subtype: "success", is_error: false, duration_ms: 0, num_turns: 1, result: "", session_id: capturedSessionId || "", total_cost_usd: stepCost, usage: { input_tokens: tk.input || 0, output_tokens: tk.output || 0 } });
           }
-        }
-
-        if (msg.method === "item/agentMessage/delta") {
-          textBuf += (msg.params?.text || msg.params?.delta || "");
-        }
-
-        if (msg.method === "item/completed") {
-          const it = msg.params?.item || {};
-          if (it.type === "commandExecution" && it.status === "completed") {
-            emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: entry.pendingModel, content: [{ type: "tool_result", tool_use_id: it.id, content: it.aggregated_output || "" }], stop_reason: "tool_use" } });
-          } else if (it.type === "agentMessage") {
-            emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: entry.pendingModel, content: [{ type: "text", text: it.text || textBuf }], stop_reason: "end_turn" } });
-            textBuf = "";
-          } else if (it.type === "fileChange") {
-            for (const ch of (it.changes || [])) {
-              emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: entry.pendingModel, content: [
-                { type: "tool_use", id: it.id + "-" + (ch.path || ""), name: "Write", input: { file_path: ch.path, diff: ch.diff } },
-                { type: "tool_result", tool_use_id: it.id + "-" + (ch.path || ""), content: "File changed: " + (ch.path || "") },
-              ], stop_reason: "tool_use" } });
-            }
-          }
-        }
-
-        if (msg.method === "turn/completed") {
-          const turn = msg.params?.turn || {};
-          const usage = msg.params?.usage || {};
-          const failed = turn.status === "failed";
-          if (failed) {
-            var turnErr = (stderrLines.length > 0 ? stderrLines[stderrLines.length - 1] : null)
-              || turn.error?.message || "Codex turn failed";
-            var turnErrData = turn.error?.data;
-            if (turnErrData && typeof turnErrData === "object" && turnErrData.message && turnErr.indexOf(turnErrData.message) === -1) {
-              turnErr += ": " + turnErrData.message;
-            }
-            emitAgentError(threadId, turnErr);
-          }
-          errorDetails = [];
-          stderrLines = [];
-          if (!failed) turnRetryCount = 0;
-          emitAgentMessage(threadId, { type: "result", subtype: failed ? "error" : "success", is_error: failed, duration_ms: 0, num_turns: 1, result: "", session_id: entry.threadId || "", total_cost_usd: 0, usage: { input_tokens: usage.input_tokens || 0, output_tokens: usage.output_tokens || 0 } });
-        }
-
-        if (msg.method === "error" && msg.params?.error) {
-          var errObj = msg.params.error;
-          var msgText = errObj.message || "";
-          var detailText = errObj.additionalDetails || "";
-          var errText = detailText.length > msgText.length ? detailText : (msgText || detailText);
-          if (errObj.codexErrorInfo && typeof errObj.codexErrorInfo === "object") {
-            var info = errObj.codexErrorInfo;
-            if (info.responseStreamDisconnected && info.responseStreamDisconnected.httpStatusCode) {
-              errText += " (HTTP " + info.responseStreamDisconnected.httpStatusCode + ")";
-            }
-          }
-          if (!errText) errText = JSON.stringify(errObj);
-          log("\\u{1F916}", "Codex error: willRetry=" + !!msg.params.willRetry + " msg=" + msgText.slice(0, 200) + " details=" + detailText.slice(0, 200));
-          if (!/^Reconnecting/i.test(errText) && errorDetails.indexOf(errText) === -1) {
-            errorDetails.push(errText);
-          }
-          if (detailText && !/^Reconnecting/i.test(detailText) && errorDetails.indexOf(detailText) === -1) {
-            errorDetails.push(detailText);
-          }
-          if (!msg.params.willRetry) {
-            var isStreamDisconnect = /error sending request for url/i.test(errText) || /error sending request for url/i.test(detailText);
-            if (isStreamDisconnect && turnRetryCount < 1 && entry.lastPrompt && entry.threadId) {
-              turnRetryCount++;
-              log("\\u{1F916}", "Stream disconnect on cold connection — silent retry " + turnRetryCount + "/1 for thread " + threadId);
-              errorDetails = [];
-              stderrLines = [];
-              entry.rpcId++;
-              rpc({ method: "turn/start", id: entry.rpcId, params: { threadId: entry.threadId, input: [{ type: "text", text: entry.lastPrompt }] } });
-            } else {
-              var bestErr = errorDetails[0] || errText;
-              for (var ei = 0; ei < errorDetails.length; ei++) {
-                if (errorDetails[ei].length > bestErr.length) bestErr = errorDetails[ei];
-              }
-              emitAgentError(threadId, bestErr + " (model: " + (entry.pendingModel || cm) + ")");
-              errorDetails = [];
-            }
-          }
-        }
-
-        if (!msg.method && msg.id && msg.error) {
-          var rpcErr = msg.error.message || JSON.stringify(msg.error);
-          log("\\u{1F916}", "Codex RPC error id=" + msg.id + ": " + rpcErr);
-          emitAgentError(threadId, rpcErr);
+        } else if (ev.type === "error") {
+          emitAgentError(threadId, (ev.error && ev.error.data && ev.error.data.message) || "OpenCode error");
         }
       } catch {}
-    });
-
-    proc.stderr.on("data", (d) => {
-      var text = d.toString().trim().slice(0, 500);
-      if (text) {
-        log("\\u{1F916}", "Codex stderr: " + text.slice(0, 200));
-        if (!/^Reconnecting/i.test(text)) stderrLines.push(text);
-        if (state.ws && state.ws.readyState === 1) {
-          state.ws.send(JSON.stringify({ type: "claude_stderr", threadId: threadId, data: text }));
-        }
-      }
-    });
-    proc.on("exit", (code) => {
-      log("\\u{1F916}", "Codex app-server exited for thread " + threadId + " code=" + code);
-      agentProcesses.delete(threadId);
-      emitAgentExit(threadId, code || 0);
-    });
-
-    rpc({ method: "initialize", id: 0, params: { clientInfo: { name: "apex", title: "Apex", version: "0.1.0" } } });
-    return proc;
-  },
-
-  isAlive(entry) { return entry.proc && !entry.proc.killed && entry.proc.exitCode === null; },
-
-  sendFollowUp(entry, prompt) {
-    var codexTid = entry.codexThreadId;
-    if (!entry.proc || !codexTid) return null;
-    entry.lastPrompt = prompt;
-    entry.rpcId = (entry.rpcId || 1000) + 1;
-    entry.proc.stdin.write(JSON.stringify({ method: "turn/start", id: entry.rpcId, params: { threadId: codexTid, input: [{ type: "text", text: prompt }] } }) + "\\n");
-    return true;
-  },
-
-  sendUserAnswer(entry, toolUseId, answer) {
-    var codexTid = entry.codexThreadId;
-    if (entry.proc && codexTid) {
-      entry.rpcId = (entry.rpcId || 1000) + 1;
-      entry.proc.stdin.write(JSON.stringify({ method: "turn/steer", id: entry.rpcId, params: { threadId: codexTid, input: [{ type: "text", text: answer }] } }) + "\\n");
     }
-  },
+  });
 
-  kill(entry) {
-    if (entry.proc) { try { entry.proc.stdin.end(); } catch {} try { entry.proc.kill(); } catch {} }
-  },
-};
-
-// ── Adapter registry ─────────────────────────────────
-const adapters = { claude_code: claudeAdapter, open_code: openCodeAdapter, codex: codexAdapter };
-function getAdapter(t) { return adapters[t] || adapters.claude_code; }
+  proc.onExit(({ exitCode }) => {
+    if (buffer.trim()) {
+      const trimmed = buffer.replace(/[\\x00-\\x1f\\x7f]+(\\[\\?[\\d;]*[a-zA-Z])?/g, "").trim();
+      try { const ev = JSON.parse(trimmed); if (ev.type) { /* process last line */ } } catch {}
+    }
+    log("\\u{1F916}", "OpenCode exited for thread " + threadId + " code=" + exitCode);
+    if (!capturedSessionId && exitCode !== 0) {
+      emitAgentError(threadId, "OpenCode exited with code " + exitCode);
+    }
+    agentProcesses.delete(threadId);
+    emitAgentExit(threadId, exitCode || 0);
+  });
+  return proc;
+}
 
 // ── Bridge core ──────────────────────────────────────
-function spawnAgent(threadId, prompt, mode, model, sessionId, agentType) {
-  const adapter = getAdapter(agentType || AGENT_TYPE);
+function spawnAgent(threadId, prompt, agent, model, sessionId) {
   try {
-    const proc = adapter.spawn(threadId, prompt, mode, model, sessionId);
-    agentProcesses.set(threadId, { proc, adapter, sessionId, threadId });
+    const proc = spawnOpenCode(threadId, prompt, agent, model, sessionId);
+    agentProcesses.set(threadId, { proc, sessionId, threadId });
   } catch (e) { emitAgentError(threadId, e.message || String(e)); }
 }
 
 function handleStartAgent(msg) {
   const threadId = msg.threadId || "default";
-  const at = msg.agentType || AGENT_TYPE;
-  const adapter = getAdapter(at);
   const existing = agentProcesses.get(threadId);
 
-  if (existing && adapter.isAlive(existing)) {
-    if (adapter.processModel === "long-lived" && !msg.forceRestart) {
-      log("\\u{1F916}", "Follow-up to existing " + adapter.name + " for thread " + threadId);
-      const ok = adapter.sendFollowUp(existing, msg.prompt);
-      if (ok !== null) return;
-    }
-    log("\\u{1F916}", "Killing existing " + adapter.name + " for thread " + threadId + (msg.forceRestart ? " (forceRestart)" : ""));
-    adapter.kill(existing);
-    agentProcesses.delete(threadId);
-  } else if (existing) {
-    adapter.kill(existing);
+  if (existing) {
+    log("\\u{1F916}", "Killing existing OpenCode for thread " + threadId);
+    if (existing.proc) { try { existing.proc.kill(); } catch {} }
     agentProcesses.delete(threadId);
   }
 
-  spawnAgent(threadId, msg.prompt, msg.mode, msg.model, msg.sessionId, at);
+  spawnAgent(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId);
 }
 
 function handleUserAnswer(msg) {
@@ -460,18 +161,17 @@ function handleUserAnswer(msg) {
     }
   }
   if (pending) { pending.resolve(msg.answer); return; }
-  const entry = agentProcesses.get(msg.threadId);
-  if (entry && entry.adapter.isAlive(entry)) {
-    entry.adapter.sendUserAnswer(entry, msg.toolUseId, msg.answer);
-  } else { emitAgentError(msg.threadId, "No active agent process to receive answer"); }
+  emitAgentError(msg.threadId, "No pending ask_user to receive answer");
 }
+
+function killEntry(e) { if (e && e.proc) { try { e.proc.kill(); } catch {} } }
 
 function handleStopAgent(msg) {
   if (msg.threadId) {
     const e = agentProcesses.get(msg.threadId);
-    if (e) { e.adapter.kill(e); agentProcesses.delete(msg.threadId); }
+    if (e) { killEntry(e); agentProcesses.delete(msg.threadId); }
   } else {
-    for (const [cid, e] of agentProcesses) { e.adapter.kill(e); agentProcesses.delete(cid); }
+    for (const [cid, e] of agentProcesses) { killEntry(e); agentProcesses.delete(cid); }
   }
 }
 
@@ -668,7 +368,7 @@ const server = http.createServer((req, res) => {
 // ── WebSocket server ─────────────────────────────────
 const wss = new WebSocketServer({ server });
 wss.on("connection", (ws) => {
-  log("\\u{1F517}", "Orchestrator connected (agent=" + AGENT_TYPE + ")");
+  log("\\u{1F517}", "Orchestrator connected");
   state.ws = ws;
   ws.send(JSON.stringify({ type: "bridge_ready", port: PORT }));
 
@@ -679,7 +379,7 @@ wss.on("connection", (ws) => {
       else if (msg.type === "claude_user_answer") { handleUserAnswer(msg); }
       else if (msg.type === "claude_input") {
         const e = agentProcesses.get(msg.threadId);
-        if (e && e.proc) { if (e.proc.write) e.proc.write(msg.data); else if (e.proc.stdin) e.proc.stdin.write(msg.data); }
+        if (e && e.proc && e.proc.write) e.proc.write(msg.data);
       }
       else if (msg.type === "stop_claude") { handleStopAgent(msg); }
       else if (msg.type === "terminal_create") {
@@ -702,7 +402,7 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     log("\\u{1F50C}", "Orchestrator disconnected");
-    for (const [cid, e] of agentProcesses) { e.adapter.kill(e); agentProcesses.delete(cid); }
+    for (const [cid, e] of agentProcesses) { killEntry(e); agentProcesses.delete(cid); }
   });
 });
 
@@ -744,6 +444,6 @@ setInterval(() => {
   } catch (e) {}
 }, 3000);
 
-server.listen(PORT, "0.0.0.0", () => { log("\\u{2705}", "Bridge ready on port " + PORT + " (agent=" + AGENT_TYPE + ")"); });
+server.listen(PORT, "0.0.0.0", () => { log("\\u{2705}", "Bridge ready on port " + PORT); });
 `;
 }

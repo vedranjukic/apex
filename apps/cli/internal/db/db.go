@@ -142,7 +142,7 @@ func (d *DB) CreateProject(userID, name, description, agentType, snapshot string
 	id := uuid.New().String()
 	now := nowISO()
 	if agentType == "" {
-		agentType = "claude_code"
+		agentType = "build"
 	}
 	if snapshot == "" {
 		snapshot = os.Getenv("DAYTONA_SNAPSHOT")
@@ -280,7 +280,7 @@ func (d *DB) EnsureTables() error {
 			"sandboxSnapshot" varchar NOT NULL DEFAULT '',
 			"status"          varchar NOT NULL DEFAULT 'creating',
 			"statusError"     text,
-			"agentType"       varchar NOT NULL DEFAULT 'claude_code',
+			"agentType"       varchar NOT NULL DEFAULT 'build',
 			"gitRepo"         varchar,
 			"agentConfig"     text,
 			"forkedFromId"    varchar,
