@@ -19,7 +19,7 @@ interface LeftSidebarProps {
   }) => void;
   readFile: (path: string) => void;
   socket: { current: Socket | null };
-  sendPrompt: (chatId: string, prompt: string, mode?: string, model?: string) => void;
+  sendPrompt: (threadId: string, prompt: string, mode?: string, model?: string) => void;
   onAnalyzeGitignore?: (prompt: string) => Promise<void>;
 }
 

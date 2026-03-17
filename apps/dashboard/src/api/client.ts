@@ -32,7 +32,7 @@ export interface Project {
   agentConfig: Record<string, unknown> | null;
   forkedFromId: string | null;
   branchName: string | null;
-  chats?: Chat[];
+  threads?: Thread[];
   createdAt: string;
   updatedAt: string;
 }
@@ -72,13 +72,14 @@ export const projectsApi = {
     request<Project[]>(`/projects/${id}/forks`),
 };
 
-// ── Chats ─────────────────────────────────────────────
-export interface Chat {
+// ── Threads ──────────────────────────────────────────
+export interface Thread {
   id: string;
   projectId: string;
   title: string;
   status: string;
   mode: string | null;
+  agentType: string | null;
   createdAt: string;
   updatedAt: string;
   messages?: Message[];
@@ -119,24 +120,24 @@ export const settingsApi = {
     }),
 };
 
-// ── Chats ─────────────────────────────────────────────
-export const chatsApi = {
+// ── Threads ──────────────────────────────────────────
+export const threadsApi = {
   listByProject: (projectId: string, search?: string) => {
     const q = search ? `?search=${encodeURIComponent(search)}` : '';
-    return request<Chat[]>(`/projects/${projectId}/chats${q}`);
+    return request<Thread[]>(`/projects/${projectId}/threads${q}`);
   },
-  get: (id: string) => request<Chat>(`/chats/${id}`),
-  create: (projectId: string, data: { prompt: string }) =>
-    request<Chat>(`/projects/${projectId}/chats`, {
+  get: (id: string) => request<Thread>(`/threads/${id}`),
+  create: (projectId: string, data: { prompt: string; agentType?: string }) =>
+    request<Thread>(`/projects/${projectId}/threads`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  messages: (id: string) => request<Message[]>(`/chats/${id}/messages`),
+  messages: (id: string) => request<Message[]>(`/threads/${id}/messages`),
   updateStatus: (id: string, status: string) =>
-    request<Chat>(`/chats/${id}/status`, {
+    request<Thread>(`/threads/${id}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     }),
   delete: (id: string) =>
-    request<{ ok: boolean }>(`/chats/${id}`, { method: 'DELETE' }),
+    request<{ ok: boolean }>(`/threads/${id}`, { method: 'DELETE' }),
 };

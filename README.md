@@ -59,8 +59,8 @@ Both the CLI and IDE follow the same core flow — provision a sandbox, connect 
 
 1. **Create a project** — optionally link a Git repository to clone into the sandbox.
 2. **Sandbox provisioned** — a Daytona sandbox spins up from a snapshot with the AI agent pre-installed. A Node.js bridge is uploaded and started inside it.
-3. **Start a chat** — send a prompt. The bridge spawns the agent process, pipes structured JSON output back over WebSocket.
-4. **Stream in real time** — every tool call, code edit, and thought from the agent streams back live. Multiple chats can run concurrently in the same sandbox.
+3. **Start a thread** — send a prompt. The bridge spawns the agent process, pipes structured JSON output back over WebSocket.
+4. **Stream in real time** — every tool call, code edit, and thought from the agent streams back live. Multiple threads can run concurrently in the same sandbox.
 5. **Interactive terminals** — open terminals alongside the agent. The agent itself can create terminals via MCP tools (e.g., to start a dev server).
 6. **Session continuity** — follow-up prompts resume the agent's session.
 
@@ -73,8 +73,8 @@ A CLI binary that makes remote sandboxed agents feel local. See the full [CLI do
 - **Transparent wrapping** — run Claude Code, Codex, or other agents inside Daytona sandboxes while interacting through your terminal as if the agent were local
 - **Direct connection** — connects straight to the sandbox bridge via WebSocket, no API server in the middle
 - **Project management** — `create`, `open`, `project list`, `project delete`
-- **Session persistence** — follow-up prompts carry full conversation context; `cmd` resumes existing chats
-- **REPL-style chat** — rich terminal rendering of agent output (thoughts, tool calls, code edits)
+- **Session persistence** — follow-up prompts carry full conversation context; `cmd` resumes existing threads
+- **REPL-style thread** — rich terminal rendering of agent output (thoughts, tool calls, code edits)
 - **Automatic provisioning** — sandbox creation, bridge setup, and Git repo cloning happen behind the scenes
 - **Ephemeral sandboxes** — `apex run "prompt"` spins up a throwaway sandbox, runs the task, and tears it down
 - **Scriptable** — `run` and `cmd` output only the result by default, making them safe to pipe
@@ -84,11 +84,11 @@ A CLI binary that makes remote sandboxed agents feel local. See the full [CLI do
 An Electron (or web-based) development environment for building applications interactively with AI agents.
 
 - **Full IDE experience** — VS Code–inspired layout with resizable panels, file explorer, search, and Git source control
-- **Live agent chat** — send prompts and watch the agent work in real time with grouped message rendering
+- **Live agent thread** — send prompts and watch the agent work in real time with grouped message rendering
 - **Integrated terminals** — multiple terminal tabs with full PTY support (xterm.js); the agent can also create its own terminals via MCP tools
-- **Multiple concurrent chats** — run several agent sessions in the same sandbox, each with its own context
+- **Multiple concurrent threads** — run several agent sessions in the same sandbox, each with its own context
 - **Command palette** — every action is a registered command with customizable keyboard shortcuts
-- **Session continuity** — layout state, chat history, and agent sessions persist across reloads and devices
+- **Session continuity** — layout state, thread history, and agent sessions persist across reloads and devices
 
 ## Shared Infrastructure
 
@@ -98,7 +98,7 @@ Both applications are built on top of the same sandboxing layer:
 - **WebSocket bridge** protocol — a Node.js server inside each sandbox that spawns agents, manages PTY sessions, and streams structured output
 - **MCP Terminal Server** — gives agents the ability to open, read, write to, and close terminals
 - **WebSocket** for real-time communication between clients and sandboxes
-- **SQLite** database for projects, chats, and messages (IDE path)
+- **SQLite** database for projects, threads, and messages (IDE path)
 
 ## Getting Started
 
@@ -193,7 +193,7 @@ apex/
 | Package | Description |
 |---|---|
 | `apps/api` | IDE backend — REST API, WebSocket gateway, sandbox orchestration, SQLite database |
-| `apps/dashboard` | IDE frontend — chat UI, terminal panel, file explorer, source control, command palette |
+| `apps/dashboard` | IDE frontend — thread UI, terminal panel, file explorer, source control, command palette |
 | `apps/cli` | Apex CLI — wraps remote agents for a local terminal experience, direct sandbox connection ([README](apps/cli/README.md)) |
 | `libs/orchestrator` | Sandbox lifecycle (Daytona SDK), bridge script generation, WebSocket protocol types |
 | `libs/shared` | TypeScript types shared between API and dashboard |

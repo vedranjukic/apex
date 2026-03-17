@@ -6,7 +6,7 @@
  * ask_user tool. Then verifies:
  *   1. agent_status transitions to waiting_for_input
  *   2. AskUserQuestion tool_use block appears in the event stream
- *   3. The chat status in the DB reflects waiting_for_input
+ *   3. The thread status in the DB reflects waiting_for_input
  *   4. Sending a user_answer transitions status back to running
  *   5. The agent continues and eventually reaches completed
  *
@@ -71,11 +71,11 @@ function subscribeProject(socket: Socket, projectId: string): Promise<void> {
   });
 }
 
-async function createChat(
+async function createThread(
   projectId: string,
   prompt: string,
 ): Promise<string> {
-  const res = await axios.post(`/api/projects/${projectId}/chats`, { prompt });
+  const res = await axios.post(`/api/projects/${projectId}/threads`, { prompt });
   expect([200, 201]).toContain(res.status);
   return res.data.id;
 }
@@ -88,8 +88,8 @@ async function deleteProject(projectId: string): Promise<void> {
   }
 }
 
-async function getChatStatus(chatId: string): Promise<string> {
-  const res = await axios.get(`/api/chats/${chatId}`);
+async function getThreadStatus(threadId: string): Promise<string> {
+  const res = await axios.get(`/api/threads/${threadId}`);
   return res.data.status;
 }
 
@@ -108,7 +108,7 @@ interface AgentEvent {
 }
 
 interface StatusEvent {
-  chatId: string;
+  threadId: string;
   status: string;
 }
 
@@ -116,7 +116,7 @@ interface StatusEvent {
 
 describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
   let projectId: string;
-  let chatId: string;
+  let threadId: string;
   let socket: Socket;
 
   afterAll(async () => {
@@ -144,7 +144,7 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
       'Do NOT proceed until you get the user answer.',
     ].join(' ');
 
-    chatId = await createChat(projectId, prompt);
+    threadId = await createThread(projectId, prompt);
 
     const statusUpdates: StatusEvent[] = [];
     const agentEvents: AgentEvent[] = [];
@@ -166,7 +166,7 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
       }, 3 * 60 * 1000);
 
       const onStatus = (data: StatusEvent) => {
-        if (data.chatId !== chatId) return;
+        if (data.threadId !== threadId) return;
         console.log(`[ask-user e2e] agent_status: ${data.status}`);
         statusUpdates.push(data);
 
@@ -190,15 +190,15 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
         }
       };
 
-      const onMessage = (data: { chatId?: string; message?: AgentEvent }) => {
-        if (data.chatId !== chatId) return;
+      const onMessage = (data: { threadId?: string; message?: AgentEvent }) => {
+        if (data.threadId !== threadId) return;
         if (data.message) {
           agentEvents.push(data.message);
         }
       };
 
-      const onError = (data: { chatId?: string; error?: string }) => {
-        if (data.chatId !== chatId) return;
+      const onError = (data: { threadId?: string; error?: string }) => {
+        if (data.threadId !== threadId) return;
         clearTimeout(timeout);
         cleanup();
         reject(new Error(`Agent error: ${data.error}`));
@@ -215,7 +215,7 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
       socket.on('agent_error', onError);
     });
 
-    socket.emit('execute_chat', { chatId, mode: 'agent' });
+    socket.emit('execute_thread', { threadId, mode: 'agent' });
 
     const result = await waitForAskUser;
 
@@ -238,13 +238,13 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
     expect(result.questionToolUseId).toBeTruthy();
 
     // The DB status should also be waiting_for_input
-    const dbStatus = await getChatStatus(chatId);
+    const dbStatus = await getThreadStatus(threadId);
     expect(dbStatus).toBe('waiting_for_input');
   }, 4 * 60 * 1000);
 
   it('should transition back to running when user answers', async () => {
-    // Retrieve the AskUserQuestion tool_use ID from the chat messages
-    const messagesRes = await axios.get(`/api/chats/${chatId}/messages`);
+    // Retrieve the AskUserQuestion tool_use ID from the thread messages
+    const messagesRes = await axios.get(`/api/threads/${threadId}/messages`);
     const messages = messagesRes.data;
     let toolUseId = '';
     for (const msg of messages) {
@@ -271,7 +271,7 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
       }, 3 * 60 * 1000);
 
       const onStatus = (data: StatusEvent) => {
-        if (data.chatId !== chatId) return;
+        if (data.threadId !== threadId) return;
         console.log(`[ask-user e2e] post-answer status: ${data.status}`);
         statusSequence.push(data.status);
 
@@ -291,7 +291,7 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
 
     // Send the user answer
     socket.emit('user_answer', {
-      chatId,
+      threadId,
       toolUseId,
       answer: 'Python',
     });
@@ -303,7 +303,7 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
     expect(statuses).toContain('running');
 
     // Should eventually complete
-    const finalStatus = await getChatStatus(chatId);
+    const finalStatus = await getThreadStatus(threadId);
     expect(['completed', 'running']).toContain(finalStatus);
   }, 4 * 60 * 1000);
 });

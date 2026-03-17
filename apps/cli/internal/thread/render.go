@@ -1,4 +1,4 @@
-package chat
+package thread
 
 import (
 	"encoding/json"
@@ -134,8 +134,9 @@ func RenderStatus(status string) {
 	}
 }
 
-// RenderChatHistory prints the message history for a chat.
-func RenderChatHistory(messages []types.Message) {
+// RenderThreadHistory prints the message history for a thread.
+func RenderThreadHistory(messages []types.Message) {
+	skip := deduplicateToolUseBlocks(messages)
 	for _, msg := range messages {
 		switch msg.Role {
 		case "user":
@@ -150,7 +151,7 @@ func RenderChatHistory(messages []types.Message) {
 				RenderToolResultBlocks(msg.Content)
 			}
 		case "assistant":
-			RenderAssistantBlocks(msg.Content)
+			renderAssistantBlocksFiltered(msg.Content, skip)
 		case "system":
 			if msg.Metadata != nil {
 				renderMetadataSummary(msg.Metadata)
@@ -159,8 +160,25 @@ func RenderChatHistory(messages []types.Message) {
 	}
 }
 
-// FormatChatHistory returns the formatted chat history as a string for TUI viewport display.
-func FormatChatHistory(messages []types.Message) string {
+func renderAssistantBlocksFiltered(blocks []types.ContentBlock, skip map[string]bool) {
+	for _, block := range blocks {
+		if block.Type == "tool_use" && skip[block.ID] {
+			continue
+		}
+		switch block.Type {
+		case "text":
+			renderTextBlock(block.Text)
+		case "tool_use":
+			renderToolUse(block)
+		case "tool_result":
+			renderToolResult(block)
+		}
+	}
+}
+
+// FormatThreadHistory returns the formatted thread history as a string for TUI viewport display.
+func FormatThreadHistory(messages []types.Message) string {
+	skip := deduplicateToolUseBlocks(messages)
 	var sb strings.Builder
 	var lastTool string
 	for _, msg := range messages {
@@ -184,6 +202,9 @@ func FormatChatHistory(messages []types.Message) string {
 			}
 		case "assistant":
 			for _, block := range msg.Content {
+				if block.Type == "tool_use" && skip[block.ID] {
+					continue
+				}
 				switch block.Type {
 				case "text":
 					if block.Text != "" {
@@ -473,6 +494,75 @@ func renderTextBlock(text string) {
 
 var hiddenTools = map[string]bool{
 	"ExitPlanMode": true, "ExitAskMode": true, "EnterPlanMode": true,
+}
+
+// dedupAliases maps MCP tool names to their canonical equivalents for deduplication.
+var dedupAliases = map[string]string{
+	"mcp__terminal-server__ask_user": "AskUserQuestion",
+}
+
+// dedupTools lists tool names whose blocks should be deduplicated across messages.
+var dedupTools = map[string]bool{
+	"TodoWrite":                      true,
+	"AskUserQuestion":                true,
+	"mcp__terminal-server__ask_user": true,
+}
+
+func toolDedupKey(name string) string {
+	if alias, ok := dedupAliases[name]; ok {
+		return alias
+	}
+	return name
+}
+
+// deduplicateToolUseBlocks scans messages and returns a set of block IDs that
+// should be skipped during rendering (duplicate dedup-tool instances).
+// For same-name tools (e.g. TodoWrite), keeps the last. For aliased tools
+// (e.g. mcp__terminal-server__ask_user / AskUserQuestion), keeps the first.
+func deduplicateToolUseBlocks(messages []types.Message) map[string]bool {
+	type entry struct {
+		blockID string
+		name    string
+	}
+	bestByKey := map[string]entry{}
+
+	for _, msg := range messages {
+		if msg.Role != "assistant" {
+			continue
+		}
+		for _, block := range msg.Content {
+			if block.Type != "tool_use" || block.Name == "" || !dedupTools[block.Name] {
+				continue
+			}
+			key := toolDedupKey(block.Name)
+			existing, exists := bestByKey[key]
+			if exists && existing.name != block.Name {
+				continue // alias collision: keep first
+			}
+			bestByKey[key] = entry{blockID: block.ID, name: block.Name}
+		}
+	}
+
+	keep := map[string]bool{}
+	for _, e := range bestByKey {
+		keep[e.blockID] = true
+	}
+
+	skip := map[string]bool{}
+	for _, msg := range messages {
+		if msg.Role != "assistant" {
+			continue
+		}
+		for _, block := range msg.Content {
+			if block.Type != "tool_use" || block.Name == "" || !dedupTools[block.Name] {
+				continue
+			}
+			if !keep[block.ID] {
+				skip[block.ID] = true
+			}
+		}
+	}
+	return skip
 }
 
 var lastToolUseName string

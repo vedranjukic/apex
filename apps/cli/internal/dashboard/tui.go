@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/apex/cli/internal/chat"
+	"github.com/apex/cli/internal/thread"
 	"github.com/apex/cli/internal/db"
 	"github.com/apex/cli/internal/sandbox"
 	"github.com/apex/cli/internal/types"
@@ -43,12 +43,12 @@ func formatTime(iso string) string {
 	return iso
 }
 
-// treeItem represents either a project header or a chat entry in the unified tree list.
+// treeItem represents either a project header or a thread entry in the unified tree list.
 type treeItem struct {
 	isProject  bool
 	expanded   bool
 	project    db.ProjectRow
-	chat       db.ChatRow
+	thread     db.ThreadRow
 	projectIdx int
 }
 
@@ -56,18 +56,18 @@ func (i treeItem) FilterValue() string {
 	if i.isProject {
 		return i.project.Name
 	}
-	return i.chat.Title
+	return i.thread.Title
 }
 
 // treeDelegate renders tree items: projects as bold headers with expand arrows,
-// chats indented underneath.
+// threads indented underneath.
 type treeDelegate struct{}
 
 func (d treeDelegate) Height() int                             { return 1 }
 func (d treeDelegate) Spacing() int                            { return 0 }
 func (d treeDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
-func chatStatusIndicator(status string) (symbol string, color lipgloss.Color) {
+func threadStatusIndicator(status string) (symbol string, color lipgloss.Color) {
 	switch status {
 	case "running":
 		return "●", lipgloss.Color("214") // yellow/orange
@@ -115,11 +115,11 @@ func (d treeDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 			line = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252")).Render(raw)
 		}
 	} else {
-		title := ti.chat.Title
+		title := ti.thread.Title
 		if title == "" {
 			title = "(empty)"
 		}
-		symbol, symbolColor := chatStatusIndicator(ti.chat.Status)
+		symbol, symbolColor := threadStatusIndicator(ti.thread.Status)
 		title = truncateRunes(title, width-6)
 
 		indent := "   "
@@ -144,20 +144,21 @@ type model struct {
 	focus  int
 
 	projects     []db.ProjectRow
-	projectChats map[string][]db.ChatRow
+	projectThreads map[string][]db.ThreadRow
 	expanded     map[string]bool
 	treeItems    []treeItem
 	treeList     list.Model
 	viewport     viewport.Model
 	viewportInit bool
-	viewingChatID string
+	viewingThreadID string
+	fullscreen   bool
 
 	// Prompt panel (when sandbox is running)
 	promptInput      textarea.Model
 	agentMode        string
 	manager          *sandbox.Manager
 	connectedProj    string
-	streamingChatID  string // chat ID currently streaming, empty if none
+	streamingThreadID  string // thread ID currently streaming, empty if none
 	waitingForAnswer bool
 	pendingQuestion  string // questionID for the pending ask_user
 	promptDoneCh     chan promptDoneMsg
@@ -185,20 +186,20 @@ type model struct {
 }
 
 type promptDoneMsg struct {
-	chatID string
+	threadID string
 }
 
 type contentUpdatedMsg struct {
-	chatID string
+	threadID string
 }
 
 type askUserMsg struct {
-	chatID     string
+	threadID     string
 	questionID string
 }
 
 type answerPayload struct {
-	chatID     string
+	threadID     string
 	questionID string
 	answer     string
 }
@@ -262,7 +263,7 @@ func NewModel(database *db.DB, cfg *Config) (*model, error) {
 		height:           24,
 		focus:            focusList,
 		projects:         projects,
-		projectChats:     make(map[string][]db.ChatRow),
+		projectThreads:     make(map[string][]db.ThreadRow),
 		expanded:         make(map[string]bool),
 		treeList:         tl,
 		viewport:         vp,
@@ -282,8 +283,8 @@ func NewModel(database *db.DB, cfg *Config) (*model, error) {
 	}
 
 	for _, p := range projects {
-		chats, _ := database.ListChats(p.ID)
-		m.projectChats[p.ID] = chats
+		threads, _ := database.ListThreads(p.ID)
+		m.projectThreads[p.ID] = threads
 	}
 
 	for _, p := range projects {
@@ -294,10 +295,10 @@ func NewModel(database *db.DB, cfg *Config) (*model, error) {
 	if len(projects) == 0 {
 		m.viewport.SetContent("No projects yet. Press Ctrl+N to create one.")
 	} else {
-		chats := m.projectChats[projects[0].ID]
-		if len(chats) > 0 {
-			m.loadContentForChatByID(chats[0].ID)
-			m.treeList.Select(1) // first chat (index 0 is the project header)
+		threads := m.projectThreads[projects[0].ID]
+		if len(threads) > 0 {
+			m.loadContentForThreadByID(threads[0].ID)
+			m.treeList.Select(1) // first thread (index 0 is the project header)
 		}
 	}
 
@@ -308,7 +309,7 @@ func (m model) Init() tea.Cmd {
 	return nil
 }
 
-// buildTreeItems rebuilds the flat item list from projects + expanded chats,
+// buildTreeItems rebuilds the flat item list from projects + expanded threads,
 // preserving the current selection when possible.
 func (m *model) buildTreeItems() {
 	prevIdx := m.treeList.Index()
@@ -327,12 +328,12 @@ func (m *model) buildTreeItems() {
 			projectIdx: i,
 		})
 		if exp {
-			chats := m.projectChats[p.ID]
-			for _, c := range chats {
+			threads := m.projectThreads[p.ID]
+			for _, c := range threads {
 				items = append(items, treeItem{
 					isProject:  false,
 					project:    p,
-					chat:       c,
+					thread:     c,
 					projectIdx: i,
 				})
 			}
@@ -352,7 +353,7 @@ func (m *model) buildTreeItems() {
 				m.treeList.Select(i)
 				return
 			}
-			if !prevItem.isProject && !ti.isProject && ti.chat.ID == prevItem.chat.ID {
+			if !prevItem.isProject && !ti.isProject && ti.thread.ID == prevItem.thread.ID {
 				m.treeList.Select(i)
 				return
 			}
@@ -363,13 +364,13 @@ func (m *model) buildTreeItems() {
 	}
 }
 
-func (m *model) selectInTree(projectID string, chatID string) {
+func (m *model) selectInTree(projectID string, threadID string) {
 	for i, ti := range m.treeItems {
-		if chatID != "" && !ti.isProject && ti.chat.ID == chatID {
+		if threadID != "" && !ti.isProject && ti.thread.ID == threadID {
 			m.treeList.Select(i)
 			return
 		}
-		if chatID == "" && ti.isProject && ti.project.ID == projectID {
+		if threadID == "" && ti.isProject && ti.project.ID == projectID {
 			m.treeList.Select(i)
 			return
 		}
@@ -396,7 +397,7 @@ func (m *model) selectedProject() *db.ProjectRow {
 	return &m.projects[pIdx]
 }
 
-func (m *model) selectedChat() *db.ChatRow {
+func (m *model) selectedThread() *db.ThreadRow {
 	idx := m.treeList.Index()
 	if idx < 0 || idx >= len(m.treeItems) {
 		return nil
@@ -405,13 +406,43 @@ func (m *model) selectedChat() *db.ChatRow {
 	if ti.isProject {
 		return nil
 	}
-	chats := m.projectChats[ti.project.ID]
-	for i := range chats {
-		if chats[i].ID == ti.chat.ID {
-			return &chats[i]
+	threads := m.projectThreads[ti.project.ID]
+	for i := range threads {
+		if threads[i].ID == ti.thread.ID {
+			return &threads[i]
 		}
 	}
 	return nil
+}
+
+func (m *model) viewingThread() *db.ThreadRow {
+	if m.viewingThreadID == "" {
+		return nil
+	}
+	for _, threads := range m.projectThreads {
+		for i := range threads {
+			if threads[i].ID == m.viewingThreadID {
+				return &threads[i]
+			}
+		}
+	}
+	return nil
+}
+
+func agentTypeLabel(at *string) string {
+	if at == nil || *at == "" {
+		return ""
+	}
+	switch *at {
+	case "claude_code":
+		return "Claude Code"
+	case "open_code":
+		return "OpenCode"
+	case "codex":
+		return "Codex"
+	default:
+		return *at
+	}
 }
 
 func (m *model) selectedTreeItem() *treeItem {
@@ -465,31 +496,31 @@ type errConfig struct{ msg string }
 
 func (e *errConfig) Error() string { return e.msg }
 
-const draftChatTitle = "(draft)"
+const draftThreadTitle = "(draft)"
 
-func (m *model) ensureDraftChat() bool {
+func (m *model) ensureDraftThread() bool {
 	p := m.selectedProject()
 	if p == nil || !m.hasPromptPanel() {
 		return false
 	}
-	chats := m.projectChats[p.ID]
-	for _, c := range chats {
-		if c.Title == draftChatTitle {
+	threads := m.projectThreads[p.ID]
+	for _, c := range threads {
+		if c.Title == draftThreadTitle {
 			m.selectInTree(p.ID, c.ID)
 			return true
 		}
 	}
-	chatRow, err := m.db.CreateChat(p.ID, draftChatTitle)
+	threadRow, err := m.db.CreateThread(p.ID, draftThreadTitle)
 	if err != nil {
 		return false
 	}
-	_ = chatRow
-	m.reloadProjectChats(p.ID)
+	_ = threadRow
+	m.reloadProjectThreads(p.ID)
 	m.expanded[p.ID] = true
 	m.buildTreeItems()
-	chats = m.projectChats[p.ID]
-	for _, c := range chats {
-		if c.Title == draftChatTitle {
+	threads = m.projectThreads[p.ID]
+	for _, c := range threads {
+		if c.Title == draftThreadTitle {
 			m.selectInTree(p.ID, c.ID)
 			break
 		}
@@ -497,13 +528,13 @@ func (m *model) ensureDraftChat() bool {
 	return true
 }
 
-func (m *model) reloadProjectChats(projectID string) {
-	chats, err := m.db.ListChats(projectID)
+func (m *model) reloadProjectThreads(projectID string) {
+	threads, err := m.db.ListThreads(projectID)
 	if err != nil {
-		m.projectChats[projectID] = nil
+		m.projectThreads[projectID] = nil
 		return
 	}
-	m.projectChats[projectID] = chats
+	m.projectThreads[projectID] = threads
 }
 
 func (m *model) runDeleteProject(projectID string) tea.Cmd {
@@ -596,13 +627,13 @@ func (m *model) trySendAnswer() tea.Cmd {
 	m.waitingForAnswer = false
 	questionID := m.pendingQuestion
 	m.pendingQuestion = ""
-	m.streamingChatID = m.viewingChatID
+	m.streamingThreadID = m.viewingThreadID
 
 	// Update status to running immediately so the tree shows it
-	chatID := m.viewingChatID
-	m.db.UpdateChatStatus(chatID, "running")
+	threadID := m.viewingThreadID
+	m.db.UpdateThreadStatus(threadID, "running")
 	if p := m.selectedProject(); p != nil {
-		m.reloadProjectChats(p.ID)
+		m.reloadProjectThreads(p.ID)
 		m.buildTreeItems()
 	}
 
@@ -610,19 +641,19 @@ func (m *model) trySendAnswer() tea.Cmd {
 	// active manager connection) will read this and call SendUserAnswer.
 	select {
 	case m.answerCh <- answerPayload{
-		chatID:     chatID,
+		threadID:     threadID,
 		questionID: questionID,
 		answer:     answer,
 	}:
 	default:
 		m.promptErr = "Answer channel full"
-		m.streamingChatID = ""
+		m.streamingThreadID = ""
 	}
 	return nil
 }
 
 func (m *model) trySendPrompt() tea.Cmd {
-	if m.streamingChatID != "" && m.streamingChatID == m.viewingChatID {
+	if m.streamingThreadID != "" && m.streamingThreadID == m.viewingThreadID {
 		return nil
 	}
 	if m.waitingForAnswer {
@@ -638,56 +669,56 @@ func (m *model) trySendPrompt() tea.Cmd {
 		m.promptErr = "Select a project"
 		return nil
 	}
-	activeChat := m.selectedChat()
-	if activeChat == nil {
-		chatRow, err := m.db.CreateChat(p.ID, input)
+	activeThread := m.selectedThread()
+	if activeThread == nil {
+		threadRow, err := m.db.CreateThread(p.ID, input)
 		if err != nil {
-			m.promptErr = "Failed to create chat"
+			m.promptErr = "Failed to create thread"
 			return nil
 		}
-		activeChat = chatRow
-		m.reloadProjectChats(p.ID)
+		activeThread = threadRow
+		m.reloadProjectThreads(p.ID)
 		m.expanded[p.ID] = true
 		m.buildTreeItems()
-		m.selectInTree(p.ID, activeChat.ID)
+		m.selectInTree(p.ID, activeThread.ID)
 	}
 
 	contentJSON := db.MarshalJSON([]types.ContentBlock{{Type: "text", Text: input}})
-	if err := m.db.AddMessage(activeChat.ID, "user", contentJSON, nil); err != nil {
+	if err := m.db.AddMessage(activeThread.ID, "user", contentJSON, nil); err != nil {
 		m.promptErr = "Failed to save message"
 		return nil
 	}
-	m.db.UpdateChatStatus(activeChat.ID, "running")
+	m.db.UpdateThreadStatus(activeThread.ID, "running")
 
-	if activeChat.Title == draftChatTitle {
+	if activeThread.Title == draftThreadTitle {
 		title := input
 		if len(title) > 100 {
 			title = title[:100] + "…"
 		}
-		m.db.UpdateChatTitle(activeChat.ID, title)
-		chats := m.projectChats[p.ID]
-		for i := range chats {
-			if chats[i].ID == activeChat.ID {
-				chats[i].Title = title
+		m.db.UpdateThreadTitle(activeThread.ID, title)
+		threads := m.projectThreads[p.ID]
+		for i := range threads {
+			if threads[i].ID == activeThread.ID {
+				threads[i].Title = title
 				break
 			}
 		}
-		m.projectChats[p.ID] = chats
+		m.projectThreads[p.ID] = threads
 		m.buildTreeItems()
-		m.selectInTree(p.ID, activeChat.ID)
+		m.selectInTree(p.ID, activeThread.ID)
 	}
 
 	sessionID := ""
-	if activeChat.ClaudeSessionID != nil {
-		sessionID = *activeChat.ClaudeSessionID
+	if activeThread.ClaudeSessionID != nil {
+		sessionID = *activeThread.ClaudeSessionID
 	}
 
 	m.promptInput.Reset()
 	m.promptErr = ""
-	m.streamingChatID = activeChat.ID
-	m.viewingChatID = activeChat.ID
+	m.streamingThreadID = activeThread.ID
+	m.viewingThreadID = activeThread.ID
 
-	chatID := activeChat.ID
+	threadID := activeThread.ID
 	contentCh := m.contentUpdatedCh
 	doneCh := m.promptDoneCh
 	askCh := m.askUserCh
@@ -701,7 +732,7 @@ func (m *model) trySendPrompt() tea.Cmd {
 	}
 	onAskUser := func(cid, questionID string) {
 		select {
-		case askCh <- askUserMsg{chatID: cid, questionID: questionID}:
+		case askCh <- askUserMsg{threadID: cid, questionID: questionID}:
 		default:
 		}
 	}
@@ -714,7 +745,7 @@ func (m *model) trySendPrompt() tea.Cmd {
 		if proj := m.selectedProject(); proj != nil {
 			agentType = proj.AgentType
 		}
-		if err := m.manager.SendPrompt(chatID, input, sessionID, m.agentMode, agentType); err != nil {
+		if err := m.manager.SendPrompt(threadID, input, sessionID, m.agentMode, agentType); err != nil {
 			return promptConnectErrMsg{err: fmt.Errorf("send: %w", err)}
 		}
 
@@ -727,7 +758,7 @@ func (m *model) trySendPrompt() tea.Cmd {
 			for {
 				select {
 				case ans := <-answerCh:
-					mgr.SendUserAnswer(ans.chatID, ans.questionID, ans.answer)
+					mgr.SendUserAnswer(ans.threadID, ans.questionID, ans.answer)
 				case <-bridgeDone:
 					return
 				}
@@ -735,13 +766,13 @@ func (m *model) trySendPrompt() tea.Cmd {
 		}()
 
 		go func() {
-			chat.ProcessBridgeToDBWithCallbacks(dbCopy, mgr, chatID, chat.BridgeCallbacks{
+			thread.ProcessBridgeToDBWithCallbacks(dbCopy, mgr, threadID, thread.BridgeCallbacks{
 				OnContentUpdated: onUpdated,
 				OnAskUser:        onAskUser,
 			})
 			close(bridgeDone)
 			select {
-			case doneCh <- promptDoneMsg{chatID: chatID}:
+			case doneCh <- promptDoneMsg{threadID: threadID}:
 			default:
 			}
 		}()
@@ -749,7 +780,7 @@ func (m *model) trySendPrompt() tea.Cmd {
 	}
 
 	waitForContentUpdate := func() tea.Msg {
-		return contentUpdatedMsg{chatID: <-contentCh}
+		return contentUpdatedMsg{threadID: <-contentCh}
 	}
 
 	waitForAskUser := func() tea.Msg {
@@ -766,9 +797,9 @@ func (m *model) refreshProjects() {
 	}
 	m.projects = projects
 	for _, p := range projects {
-		if _, ok := m.projectChats[p.ID]; !ok {
-			chats, _ := m.db.ListChats(p.ID)
-			m.projectChats[p.ID] = chats
+		if _, ok := m.projectThreads[p.ID]; !ok {
+			threads, _ := m.db.ListThreads(p.ID)
+			m.projectThreads[p.ID] = threads
 		}
 		if _, ok := m.expanded[p.ID]; !ok {
 			m.expanded[p.ID] = true
@@ -779,7 +810,7 @@ func (m *model) refreshProjects() {
 
 func (m *model) waitForContentUpdateCmd() tea.Cmd {
 	return func() tea.Msg {
-		return contentUpdatedMsg{chatID: <-m.contentUpdatedCh}
+		return contentUpdatedMsg{threadID: <-m.contentUpdatedCh}
 	}
 }
 
@@ -789,12 +820,12 @@ func (m *model) waitForAskUserCmd() tea.Cmd {
 	}
 }
 
-func (m *model) loadContentForChatByID(chatID string) {
-	m.refreshContentForChatByID(chatID, true)
+func (m *model) loadContentForThreadByID(threadID string) {
+	m.refreshContentForThreadByID(threadID, true)
 }
 
-func (m *model) refreshContentForChatByID(chatID string, forceBottom bool) {
-	rows, err := m.db.GetMessages(chatID)
+func (m *model) refreshContentForThreadByID(threadID string, forceBottom bool) {
+	rows, err := m.db.GetMessages(threadID)
 	if err != nil {
 		m.viewport.SetContent("Failed to load messages")
 		return
@@ -804,13 +835,13 @@ func (m *model) refreshContentForChatByID(chatID string, forceBottom bool) {
 		return
 	}
 	wasAtBottom := m.viewport.AtBottom()
-	msgs := chat.RowsToMessages(rows)
-	content := chat.FormatChatHistory(msgs)
+	msgs := thread.RowsToMessages(rows)
+	content := thread.FormatThreadHistory(msgs)
 	m.viewport.SetContent(content)
 	if forceBottom || wasAtBottom {
 		m.viewport.GotoBottom()
 	}
-	m.viewingChatID = chatID
+	m.viewingThreadID = threadID
 }
 
 func (m *model) syncLayout() {
@@ -822,6 +853,9 @@ func (m *model) syncLayout() {
 	if rightCol < 20 {
 		rightCol = 20
 	}
+	if m.fullscreen {
+		rightCol = m.width
+	}
 
 	listHeight := m.height - 2
 	if m.hasPromptPanel() {
@@ -831,18 +865,26 @@ func (m *model) syncLayout() {
 		listHeight = 6
 	}
 
-	treeH := listHeight
-	if m.focus == focusList {
-		treeH = listHeight - 1
-		if treeH < 4 {
-			treeH = 4
+	if !m.fullscreen {
+		treeH := listHeight
+		if m.focus == focusList {
+			treeH = listHeight - 1
+			if treeH < 4 {
+				treeH = 4
+			}
 		}
+		m.treeList.SetSize(leftCol-2, treeH)
 	}
-	m.treeList.SetSize(leftCol-2, treeH)
 
 	contentH := listHeight
 	if m.focus == focusContent {
 		contentH = listHeight - 1
+		if contentH < 4 {
+			contentH = 4
+		}
+	}
+	if m.viewingThreadID != "" {
+		contentH -= 3 // header (title + separator + blank line)
 		if contentH < 4 {
 			contentH = 4
 		}
@@ -855,7 +897,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case promptConnectErrMsg:
 		m.promptErr = msg.err.Error()
-		m.streamingChatID = ""
+		m.streamingThreadID = ""
 		return m, nil
 
 	case projectCreatedMsg:
@@ -886,10 +928,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.connectedProj = ""
 		}
 		delete(m.expanded, msg.projectID)
-		delete(m.projectChats, msg.projectID)
+		delete(m.projectThreads, msg.projectID)
 		m.refreshProjects()
 		m.viewport.SetContent("Select a project")
-		m.viewingChatID = ""
+		m.viewingThreadID = ""
 		return m, nil
 
 	case projectDeleteErrMsg:
@@ -898,21 +940,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case contentUpdatedMsg:
-		if m.streamingChatID == msg.chatID && m.viewingChatID == msg.chatID {
-			m.refreshContentForChatByID(msg.chatID, false)
+		if m.streamingThreadID == msg.threadID && m.viewingThreadID == msg.threadID {
+			m.refreshContentForThreadByID(msg.threadID, false)
 		}
 		return m, m.waitForContentUpdateCmd()
 
 	case askUserMsg:
-		m.streamingChatID = ""
+		m.streamingThreadID = ""
 		m.waitingForAnswer = true
 		m.pendingQuestion = msg.questionID
 		m.promptInput.Placeholder = "Type your answer... (Enter to send)"
-		if m.viewingChatID == msg.chatID {
-			m.refreshContentForChatByID(msg.chatID, false)
+		if m.viewingThreadID == msg.threadID {
+			m.refreshContentForThreadByID(msg.threadID, false)
 		}
 		if p := m.selectedProject(); p != nil {
-			m.reloadProjectChats(p.ID)
+			m.reloadProjectThreads(p.ID)
 			m.buildTreeItems()
 		}
 		m.focus = focusPrompt
@@ -920,14 +962,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.waitForAskUserCmd()
 
 	case promptDoneMsg:
-		m.streamingChatID = ""
+		m.streamingThreadID = ""
 		m.waitingForAnswer = false
 		m.pendingQuestion = ""
-		if m.viewingChatID != "" {
-			m.loadContentForChatByID(m.viewingChatID)
+		if m.viewingThreadID != "" {
+			m.loadContentForThreadByID(m.viewingThreadID)
 		}
 		if p := m.selectedProject(); p != nil {
-			m.reloadProjectChats(p.ID)
+			m.reloadProjectThreads(p.ID)
 			m.buildTreeItems()
 		}
 		return m, nil
@@ -1021,6 +1063,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else {
 			switch msg.String() {
+			case "f":
+				if m.viewingThreadID != "" {
+					m.fullscreen = !m.fullscreen
+					if m.fullscreen {
+						m.focus = focusContent
+					} else {
+						m.focus = focusList
+					}
+					m.promptInput.Blur()
+					m.syncLayout()
+				}
+				return m, nil
+			case "esc":
+				if m.fullscreen {
+					m.fullscreen = false
+					m.focus = focusList
+					m.promptInput.Blur()
+					m.syncLayout()
+					return m, nil
+				}
 			case "ctrl+n":
 				m.creatingProject = true
 				m.projectNameInput.Reset()
@@ -1030,7 +1092,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "n":
 				if m.focus == focusList && m.hasPromptPanel() {
-					if m.ensureDraftChat() {
+					if m.ensureDraftThread() {
 						m.focus = focusPrompt
 						m.promptInput.Focus()
 						m.syncLayout()
@@ -1043,6 +1105,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, tea.Quit
 			case "tab", "shift+tab":
+				if m.fullscreen {
+					return m, nil
+				}
 				maxF := m.maxFocus()
 				if msg.String() == "tab" {
 					m.focus = (m.focus + 1) % maxF
@@ -1074,13 +1139,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if ti.isProject {
 							m.expanded[ti.project.ID] = !m.expanded[ti.project.ID]
 							if m.expanded[ti.project.ID] {
-								m.reloadProjectChats(ti.project.ID)
+								m.reloadProjectThreads(ti.project.ID)
 							}
 							m.buildTreeItems()
 							m.selectInTree(ti.project.ID, "")
 							return m, nil
 						}
-						m.loadContentForChatByID(ti.chat.ID)
+						m.loadContentForThreadByID(ti.thread.ID)
 						m.focus = focusContent
 						m.syncLayout()
 						return m, nil
@@ -1107,14 +1172,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		ti := m.selectedTreeItem()
-		if ti != nil && !ti.isProject && ti.chat.ID != m.viewingChatID {
-			m.loadContentForChatByID(ti.chat.ID)
+		if ti != nil && !ti.isProject && ti.thread.ID != m.viewingThreadID {
+			m.loadContentForThreadByID(ti.thread.ID)
 		}
 	case focusContent:
 		m.viewport, cmd = m.viewport.Update(msg)
 	case focusPrompt:
-		if m.hasPromptPanel() && m.selectedChat() == nil && m.selectedProject() != nil {
-			m.ensureDraftChat()
+		if m.hasPromptPanel() && m.selectedThread() == nil && m.selectedProject() != nil {
+			m.ensureDraftThread()
 		}
 		m.promptInput, cmd = m.promptInput.Update(msg)
 	}
@@ -1134,6 +1199,9 @@ func (m model) View() string {
 	if rightCol < 20 {
 		rightCol = 20
 	}
+	if m.fullscreen {
+		rightCol = m.width
+	}
 
 	mainHeight := m.height - 2
 	if m.hasPromptPanel() {
@@ -1143,28 +1211,59 @@ func (m model) View() string {
 		mainHeight = 6
 	}
 
-	// Left panel: project/chat tree
-	treeContent := m.treeList.View()
-	if m.focus == focusList {
-		focusLine := m.focusLineStyle.Width(leftCol - 2).Render(strings.Repeat("─", leftCol-2))
-		treeContent = lipgloss.JoinVertical(lipgloss.Left, treeContent, focusLine)
+	// Right panel: thread header + content viewport
+	var header string
+	if vt := m.viewingThread(); vt != nil {
+		titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+		shortID := vt.ID
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+		meta := dimStyle.Render(shortID)
+		if label := agentTypeLabel(vt.AgentType); label != "" {
+			meta += dimStyle.Render(" · "+label)
+		}
+		symbol, symbolColor := threadStatusIndicator(vt.Status)
+		statusPart := lipgloss.NewStyle().Foreground(symbolColor).Render(symbol)
+		title := vt.Title
+		if title == "" {
+			title = "(empty)"
+		}
+		title = truncateRunes(title, rightCol-20)
+		header = statusPart + " " + titleStyle.Render(title) + "  " + meta
+		separator := dimStyle.Render(strings.Repeat("─", rightCol-4))
+		header = header + "\n" + separator
 	}
-	treeView := m.panelStyle.Width(leftCol).Height(mainHeight).MaxHeight(mainHeight).Render(treeContent)
 
-	// Right panel: content viewport
-	content := "Select a chat to view messages"
-	if m.viewingChatID != "" {
+	content := "Select a thread to view messages"
+	if m.viewingThreadID != "" {
 		content = m.viewport.View()
 	} else if m.viewport.TotalLineCount() > 0 {
 		content = m.viewport.View()
 	}
-	if m.focus == focusContent {
+	if header != "" {
+		content = header + "\n" + content
+	}
+	if m.focus == focusContent && !m.fullscreen {
 		focusLine := m.focusLineStyle.Width(rightCol - 2).Render(strings.Repeat("─", rightCol-2))
 		content = lipgloss.JoinVertical(lipgloss.Left, content, focusLine)
 	}
 	contentView := m.panelStyle.Width(rightCol).Height(mainHeight).MaxHeight(mainHeight).Render(content)
 
-	layout := lipgloss.JoinHorizontal(lipgloss.Top, treeView, contentView)
+	var layout string
+	if m.fullscreen {
+		layout = contentView
+	} else {
+		// Left panel: project/thread tree
+		treeContent := m.treeList.View()
+		if m.focus == focusList {
+			focusLine := m.focusLineStyle.Width(leftCol - 2).Render(strings.Repeat("─", leftCol-2))
+			treeContent = lipgloss.JoinVertical(lipgloss.Left, treeContent, focusLine)
+		}
+		treeView := m.panelStyle.Width(leftCol).Height(mainHeight).MaxHeight(mainHeight).Render(treeContent)
+		layout = lipgloss.JoinHorizontal(lipgloss.Top, treeView, contentView)
+	}
 
 	// Prompt panel
 	if m.hasPromptPanel() {
@@ -1173,9 +1272,9 @@ func (m model) View() string {
 			promptStyle = m.promptPanelFocused
 		}
 		statusText := ""
-		if m.waitingForAnswer && m.viewingChatID != "" && m.pendingQuestion != "" {
+		if m.waitingForAnswer && m.viewingThreadID != "" && m.pendingQuestion != "" {
 			statusText = " ? Waiting for your answer (type below, press Enter)"
-		} else if m.streamingChatID != "" && m.streamingChatID == m.viewingChatID {
+		} else if m.streamingThreadID != "" && m.streamingThreadID == m.viewingThreadID {
 			statusText = " Thinking..."
 		} else if m.promptErr != "" {
 			statusText = " " + m.promptErr
@@ -1236,9 +1335,11 @@ func (m model) View() string {
 	} else if m.projectDeleteErr != "" {
 		helpLine = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("Delete failed: " + m.projectDeleteErr)
 	} else {
-		help := " Tab: focus · Enter: expand/select · Ctrl+N: new project · Backspace: delete · ↑/↓: navigate · q: quit"
-		if m.hasPromptPanel() {
-			help = " Tab: focus · Enter: send/expand · Ctrl+N: new project · n: new chat · ↑/↓: navigate · q: quit"
+		help := " Tab: focus · Enter: expand/select · f: fullscreen · Ctrl+N: new project · Backspace: delete · q: quit"
+		if m.fullscreen {
+			help = " f/Esc: exit fullscreen · ↑/↓: scroll · q: quit"
+		} else if m.hasPromptPanel() {
+			help = " Tab: focus · Enter: send/expand · f: fullscreen · Ctrl+N: new project · n: new thread · q: quit"
 		}
 		helpLine = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(help)
 	}

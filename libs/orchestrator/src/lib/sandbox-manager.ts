@@ -332,35 +332,37 @@ export class SandboxManager extends EventEmitter {
   async sendPrompt(
     sandboxId: string,
     prompt: string,
-    chatId?: string,
+    threadId?: string,
     sessionId?: string | null,
     mode?: string,
     model?: string,
     agentType?: string,
+    forceRestart?: boolean,
   ): Promise<void> {
     const session = await this.ensureConnected(sandboxId);
     session.ws!.send(
       JSON.stringify({
         type: "start_claude",
         prompt,
-        chatId,
+        threadId,
         sessionId: sessionId || undefined,
         mode: mode || undefined,
         model: model || undefined,
         agentType: agentType || undefined,
+        forceRestart: forceRestart || undefined,
       }),
     );
     session.status = "running";
     this.emit("status", sandboxId, "running");
   }
 
-  /** Stop (kill) the Claude process for a chat. Used for testing or manual cancellation. */
-  async stopClaude(sandboxId: string, chatId?: string): Promise<void> {
+  /** Stop (kill) the Claude process for a thread. Used for testing or manual cancellation. */
+  async stopClaude(sandboxId: string, threadId?: string): Promise<void> {
     const session = await this.ensureConnected(sandboxId);
     session.ws!.send(
       JSON.stringify({
         type: "stop_claude",
-        chatId: chatId || undefined,
+        threadId: threadId || undefined,
       }),
     );
   }
@@ -368,7 +370,7 @@ export class SandboxManager extends EventEmitter {
   /** Send a user's answer to an AskUserQuestion back to the running Claude process. */
   async sendUserAnswer(
     sandboxId: string,
-    chatId: string,
+    threadId: string,
     toolUseId: string,
     answer: string,
   ): Promise<void> {
@@ -376,7 +378,7 @@ export class SandboxManager extends EventEmitter {
     session.ws!.send(
       JSON.stringify({
         type: "claude_user_answer",
-        chatId,
+        threadId,
         toolUseId,
         answer,
       }),
@@ -1503,10 +1505,20 @@ export class SandboxManager extends EventEmitter {
         "/home/daytona/.claude/CLAUDE.md",
       );
     } else if (effectiveAgentType === "codex") {
-      // Codex uses codex login for auth and codex mcp for MCP servers
+      // Update Codex CLI to latest before login/config
+      await sandbox.process.executeCommand(
+        `npm install -g @openai/codex@latest 2>/dev/null || true`,
+      );
       if (this.config.openaiApiKey) {
-        await sandbox.process.executeCommand(
-          `echo "${this.config.openaiApiKey}" | codex login --with-api-key 2>/dev/null || true`,
+        // Write auth.json directly — more reliable than `codex login` across versions
+        const codexAuth = JSON.stringify({
+          auth_mode: 'apikey',
+          OPENAI_API_KEY: this.config.openaiApiKey,
+        });
+        await sandbox.process.executeCommand(`mkdir -p /home/daytona/.codex`);
+        await sandbox.fs.uploadFile(
+          Buffer.from(codexAuth),
+          '/home/daytona/.codex/auth.json',
         );
       }
       // Register MCP terminal server so Codex can use ask_user, terminals, etc.
@@ -1527,11 +1539,16 @@ export class SandboxManager extends EventEmitter {
         `cd ${projectDir} && HOME=/home/daytona /home/daytona/.opencode/bin/opencode session list 2>&1; echo "opencode pre-warm done"`,
       );
       // Write OpenCode config with MCP terminal server
+      // timeout must be high enough for ask_user (bridge blocks up to 5 min)
       const openCodeConfig = JSON.stringify({
+        experimental: {
+          mcp_timeout: 300000,
+        },
         mcp: {
           "terminal-server": {
             type: "local",
             command: ["node", `${BRIDGE_DIR}/mcp-terminal-server.js`],
+            timeout: 300000,
           },
         },
       });

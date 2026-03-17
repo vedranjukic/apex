@@ -116,7 +116,7 @@ The `SourceControlPanel` renders (top to bottom):
    - "Commit All" when only unstaged/untracked changes (uses `stageAll` flag on backend)
    - "Sync Changes N↑ M↓" when clean with ahead/behind
    - Disabled "No Changes" when tree is clean
-4. **File sections or Too-Many-Files warning** — When total changed files (staged + unstaged + untracked + conflicted) exceed the display limit (default 100), the panel shows a warning instead of the file list to prevent UI freezes. The warning offers "Analyze .gitignore with AI" to create a new agent chat that analyzes sample paths and creates/updates `.gitignore` (e.g. when `node_modules` is not ignored). The limit is configurable via `localStorage.git_files_display_limit`. When under the limit, collapsible file sections render (Merge Conflicts, Staged Changes, Changes, Untracked) with bulk actions and per-file rows (filename, path, status badge, hover actions).
+4. **File sections or Too-Many-Files warning** — When total changed files (staged + unstaged + untracked + conflicted) exceed the display limit (default 100), the panel shows a warning instead of the file list to prevent UI freezes. The warning offers "Analyze .gitignore with AI" to create a new agent thread that analyzes sample paths and creates/updates `.gitignore` (e.g. when `node_modules` is not ignored). The limit is configurable via `localStorage.git_files_display_limit`. When under the limit, collapsible file sections render (Merge Conflicts, Staged Changes, Changes, Untracked) with bulk actions and per-file rows (filename, path, status badge, hover actions).
 
 ---
 
@@ -154,7 +154,7 @@ When the total number of changed files exceeds `getGitFilesDisplayLimit()` (defa
 - Explanation that missing `.gitignore` entries are a common cause (e.g. `node_modules`, build outputs)
 - "Analyze .gitignore with AI" button
 
-Clicking the button builds a prompt from sample path prefixes (up to 30 unique top-level patterns), creates a new chat via `createChat`, and executes it in agent mode. The agent reads `.gitignore` if present, identifies patterns to ignore from the sample paths, and creates/updates `.gitignore` with common exclusions.
+Clicking the button builds a prompt from sample path prefixes (up to 30 unique top-level patterns), creates a new thread via `createThread`, and executes it in agent mode. The agent reads `.gitignore` if present, identifies patterns to ignore from the sample paths, and creates/updates `.gitignore` with common exclusions.
 
 **Config**: `apps/dashboard/src/lib/git-source-control-config.ts` exports `getGitFilesDisplayLimit()`. Users can override via `localStorage.setItem('git_files_display_limit', '200')` (or any positive number).
 
@@ -164,11 +164,11 @@ Clicking the button builds a prompt from sample path prefixes (up to 30 unique t
 
 The Sparkles button inside the commit input triggers AI-powered commit message generation:
 
-1. **Context gathering**: Fetches recent chats for the project, scans messages for references to staged files (via `metadata.referencedFiles` or basename text matching), aggregates up to 4000 chars of relevant excerpts
+1. **Context gathering**: Fetches recent threads for the project, scans messages for references to staged files (via `metadata.referencedFiles` or basename text matching), aggregates up to 4000 chars of relevant excerpts
 2. **Prompt construction**: Lists staged files + conversation context, asks for a single conventional commit message line
-3. **Execution**: Creates a temporary chat, sends prompt via existing `send_prompt` socket in `ask` mode
-4. **Streaming**: Listens for `agent_message` events matching the temp chat ID, streams assistant text into the commit message textarea
-5. **Cleanup**: On `result` message, removes listener, deletes temp chat, clears generating state. 60s safety timeout.
+3. **Execution**: Creates a temporary thread, sends prompt via existing `send_prompt` socket in `ask` mode
+4. **Streaming**: Listens for `agent_message` events matching the temp thread ID, streams assistant text into the commit message textarea
+5. **Cleanup**: On `result` message, removes listener, deletes temp thread, clears generating state. 60s safety timeout.
 
 ---
 

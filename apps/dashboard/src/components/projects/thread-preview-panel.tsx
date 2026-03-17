@@ -1,32 +1,32 @@
 import { useEffect, useRef, useState } from 'react';
 import { X, Maximize2, Minimize2 } from 'lucide-react';
-import { AgentChat } from '../agent/agent-chat';
-import { useChatsStore } from '../../stores/tasks-store';
+import { AgentThread } from '../agent/agent-thread';
+import { useThreadsStore } from '../../stores/tasks-store';
 import type { CodeSelection } from '../../stores/editor-store';
 
 interface Props {
   projectId: string;
-  chatId: string;
+  threadId: string;
   projectName: string;
   onClose: () => void;
-  onSendPrompt: (chatId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => void;
-  onSendSilentPrompt: (chatId: string, prompt: string, mode?: string, model?: string) => void;
-  onExecuteChat: (chatId: string, mode?: string, model?: string) => void;
-  onSendUserAnswer: (chatId: string, toolUseId: string, answer: string) => void;
+  onSendPrompt: (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => void;
+  onSendSilentPrompt: (threadId: string, prompt: string, mode?: string, model?: string) => void;
+  onExecuteThread: (threadId: string, mode?: string, model?: string) => void;
+  onSendUserAnswer: (threadId: string, toolUseId: string, answer: string) => void;
 }
 
-export function ChatPreviewPanel({
+export function ThreadPreviewPanel({
   projectId,
-  chatId,
+  threadId,
   projectName,
   onClose,
   onSendPrompt,
   onSendSilentPrompt,
-  onExecuteChat,
+  onExecuteThread,
   onSendUserAnswer,
 }: Props) {
-  const fetchChats = useChatsStore((s) => s.fetchChats);
-  const setActiveChat = useChatsStore((s) => s.setActiveChat);
+  const fetchThreads = useThreadsStore((s) => s.fetchThreads);
+  const setActiveThread = useThreadsStore((s) => s.setActiveThread);
   const prevProjectRef = useRef<string | null>(null);
   const [expanded, setExpanded] = useState(false);
 
@@ -35,11 +35,11 @@ export function ChatPreviewPanel({
     prevProjectRef.current = projectId;
 
     if (isNewProject) {
-      fetchChats(projectId).then(() => setActiveChat(chatId));
+      fetchThreads(projectId).then(() => setActiveThread(threadId));
     } else {
-      setActiveChat(chatId);
+      setActiveThread(threadId);
     }
-  }, [projectId, chatId, fetchChats, setActiveChat]);
+  }, [projectId, threadId, fetchThreads, setActiveThread]);
 
   return (
     <div className={expanded
@@ -67,11 +67,11 @@ export function ChatPreviewPanel({
         </div>
       </div>
       <div className="flex-1 overflow-hidden flex flex-col">
-        <AgentChat
+        <AgentThread
           projectId={projectId}
           onSendPrompt={onSendPrompt}
           onSendSilentPrompt={onSendSilentPrompt}
-          onExecuteChat={onExecuteChat}
+          onExecuteThread={onExecuteThread}
           onSendUserAnswer={onSendUserAnswer}
         />
       </div>

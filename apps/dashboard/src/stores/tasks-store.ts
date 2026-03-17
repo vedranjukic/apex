@@ -1,56 +1,56 @@
 import { create } from 'zustand';
-import { chatsApi, type Chat, type Message } from '../api/client';
+import { threadsApi, type Thread, type Message } from '../api/client';
 
-interface ChatsState {
+interface ThreadsState {
   projectId: string | null;
-  chats: Chat[];
-  activeChatId: string | null;
+  threads: Thread[];
+  activeThreadId: string | null;
   composingNew: boolean;
   messages: Message[];
   loading: boolean;
   error: string | null;
   searchQuery: string;
-  chatScrollOffsets: Record<string, number>;
+  threadScrollOffsets: Record<string, number>;
   setSearchQuery: (q: string) => void;
-  fetchChats: (projectId: string) => Promise<void>;
-  setActiveChat: (chatId: string) => Promise<void>;
-  startNewChat: () => void;
-  createChat: (
+  fetchThreads: (projectId: string) => Promise<void>;
+  setActiveThread: (threadId: string) => Promise<void>;
+  startNewThread: () => void;
+  createThread: (
     projectId: string,
-    data: { prompt: string },
-  ) => Promise<Chat>;
+    data: { prompt: string; agentType?: string },
+  ) => Promise<Thread>;
   addMessage: (msg: Message) => void;
-  updateChatStatus: (chatId: string, status: string) => void;
-  deleteChat: (id: string) => Promise<void>;
-  setChatScrollOffset: (chatId: string, offset: number) => void;
+  updateThreadStatus: (threadId: string, status: string) => void;
+  deleteThread: (id: string) => Promise<void>;
+  setThreadScrollOffset: (threadId: string, offset: number) => void;
   reset: () => void;
 }
 
-export const useChatsStore = create<ChatsState>((set, get) => ({
+export const useThreadsStore = create<ThreadsState>((set, get) => ({
   projectId: null,
-  chats: [],
-  activeChatId: null,
+  threads: [],
+  activeThreadId: null,
   composingNew: false,
   messages: [],
   loading: false,
   error: null,
   searchQuery: '',
-  chatScrollOffsets: {},
+  threadScrollOffsets: {},
 
   setSearchQuery: (q) => set({ searchQuery: q }),
 
-  fetchChats: async (projectId) => {
+  fetchThreads: async (projectId) => {
     const isNewProject = get().projectId !== projectId;
     if (isNewProject) {
-      const restoredChatId = get().activeChatId;
+      const restoredThreadId = get().activeThreadId;
       set({
         projectId,
-        chats: [],
-        activeChatId: restoredChatId,
-        composingNew: !restoredChatId,
-        messages: restoredChatId ? get().messages : [],
+        threads: [],
+        activeThreadId: restoredThreadId,
+        composingNew: !restoredThreadId,
+        messages: restoredThreadId ? get().messages : [],
         searchQuery: '',
-        chatScrollOffsets: restoredChatId ? get().chatScrollOffsets : {},
+        threadScrollOffsets: restoredThreadId ? get().threadScrollOffsets : {},
         loading: true,
         error: null,
       });
@@ -58,15 +58,15 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
       set({ loading: true, error: null });
     }
     try {
-      const chats = await chatsApi.listByProject(projectId, get().searchQuery || undefined);
+      const threads = await threadsApi.listByProject(projectId, get().searchQuery || undefined);
       if (get().projectId !== projectId) return;
-      set({ chats, loading: false });
+      set({ threads, loading: false });
 
-      if (!get().activeChatId && chats.length > 0) {
-        const mostRecent = chats.reduce((latest, chat) =>
-          new Date(chat.updatedAt) > new Date(latest.updatedAt) ? chat : latest,
+      if (!get().activeThreadId && threads.length > 0) {
+        const mostRecent = threads.reduce((latest, thread) =>
+          new Date(thread.updatedAt) > new Date(latest.updatedAt) ? thread : latest,
         );
-        get().setActiveChat(mostRecent.id);
+        get().setActiveThread(mostRecent.id);
       }
     } catch (err) {
       if (get().projectId !== projectId) return;
@@ -74,75 +74,75 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
     }
   },
 
-  setActiveChat: async (chatId) => {
-    set({ activeChatId: chatId, composingNew: false, loading: true });
+  setActiveThread: async (threadId) => {
+    set({ activeThreadId: threadId, composingNew: false, loading: true });
     try {
-      const [chat, messages] = await Promise.all([
-        get().chats.find((c) => c.id === chatId)
+      const [thread, messages] = await Promise.all([
+        get().threads.find((c) => c.id === threadId)
           ? Promise.resolve(null)
-          : chatsApi.get(chatId),
-        chatsApi.messages(chatId),
+          : threadsApi.get(threadId),
+        threadsApi.messages(threadId),
       ]);
-      const chats = chat && !get().chats.find((c) => c.id === chatId)
-        ? [chat, ...get().chats]
-        : get().chats;
+      const threads = thread && !get().threads.find((c) => c.id === threadId)
+        ? [thread, ...get().threads]
+        : get().threads;
 
-      set({ chats, messages, loading: false });
+      set({ threads, messages, loading: false });
     } catch (err) {
       set({ error: String(err), loading: false });
     }
   },
 
-  startNewChat: () => {
-    set({ activeChatId: null, composingNew: true, messages: [] });
+  startNewThread: () => {
+    set({ activeThreadId: null, composingNew: true, messages: [] });
   },
 
-  createChat: async (projectId, data) => {
-    const chat = await chatsApi.create(projectId, data);
+  createThread: async (projectId, data) => {
+    const thread = await threadsApi.create(projectId, data);
     set({
-      chats: [chat, ...get().chats],
-      activeChatId: chat.id,
+      threads: [thread, ...get().threads],
+      activeThreadId: thread.id,
       composingNew: false,
-      messages: chat.messages || [],
+      messages: thread.messages || [],
     });
-    return chat;
+    return thread;
   },
 
   addMessage: (msg) => {
-    if (msg.taskId === get().activeChatId) {
+    if (msg.taskId === get().activeThreadId) {
       set({ messages: [...get().messages, msg] });
     }
   },
 
-  updateChatStatus: (chatId, status) => {
-    const chats = get().chats.map((c) =>
-      c.id === chatId ? { ...c, status } : c,
+  updateThreadStatus: (threadId, status) => {
+    const threads = get().threads.map((c) =>
+      c.id === threadId ? { ...c, status } : c,
     );
-    set({ chats });
+    set({ threads });
   },
 
-  deleteChat: async (id) => {
-    await chatsApi.delete(id);
-    const chats = get().chats.filter((c) => c.id !== id);
-    const activeChatId = get().activeChatId === id ? null : get().activeChatId;
-    set({ chats, activeChatId, messages: activeChatId ? get().messages : [] });
+  deleteThread: async (id) => {
+    await threadsApi.delete(id);
+    const threads = get().threads.filter((c) => c.id !== id);
+    const activeThreadId = get().activeThreadId === id ? null : get().activeThreadId;
+    set({ threads, activeThreadId, messages: activeThreadId ? get().messages : [] });
   },
 
-  setChatScrollOffset: (chatId, offset) =>
+  setThreadScrollOffset: (threadId, offset) =>
     set((state) => ({
-      chatScrollOffsets: { ...state.chatScrollOffsets, [chatId]: offset },
+      threadScrollOffsets: { ...state.threadScrollOffsets, [threadId]: offset },
     })),
 
   reset: () =>
     set({
       projectId: null,
-      chats: [],
-      activeChatId: null,
+      threads: [],
+      activeThreadId: null,
       composingNew: true,
       messages: [],
       loading: false,
       error: null,
       searchQuery: '',
-      chatScrollOffsets: {},
+      threadScrollOffsets: {},
     }),
 }));

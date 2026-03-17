@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useRef, useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import { useTerminalStore } from '../stores/terminal-store';
-import { useChatsStore } from '../stores/tasks-store';
+import { useThreadsStore } from '../stores/tasks-store';
 import { usePanelsStore } from '../stores/panels-store';
 import { useEditorStore, type OpenFile } from '../stores/editor-store';
 
@@ -15,14 +15,14 @@ interface LayoutData {
   terminalPanelOpen: boolean;
   terminalPanelHeight: number;
   activeTerminalId: string | null;
-  activeChatId: string | null;
+  activeThreadId: string | null;
   leftSidebarOpen?: boolean;
   rightSidebarOpen?: boolean;
-  chatScrollOffset?: number;
-  chatScrollOffsets?: Record<string, number>;
+  threadScrollOffset?: number;
+  threadScrollOffsets?: Record<string, number>;
   openFiles?: OpenFile[];
   activeFilePath?: string | null;
-  activeView?: 'chat' | 'editor';
+  activeView?: 'thread' | 'editor';
   fileScrollOffsets?: Record<string, number>;
 }
 
@@ -53,8 +53,8 @@ export function useLayoutSocket(
   socketRef: { current: Socket | null },
 ) {
   const applyTerminalLayout = useTerminalStore((s) => s.applyLayout);
-  const setActiveChat = useChatsStore((s) => s.setActiveChat);
-  const setChatScrollOffset = useChatsStore((s) => s.setChatScrollOffset);
+  const setActiveThread = useThreadsStore((s) => s.setActiveThread);
+  const setThreadScrollOffset = useThreadsStore((s) => s.setThreadScrollOffset);
   const setLeftSidebar = usePanelsStore((s) => s.setLeftSidebar);
   const setRightSidebar = usePanelsStore((s) => s.setRightSidebar);
   const applyEditorLayout = useEditorStore((s) => s.applyLayout);
@@ -65,8 +65,8 @@ export function useLayoutSocket(
   const applyLayout = useCallback(
     (layout: LayoutData) => {
       applyTerminalLayout(layout);
-      if (layout.activeChatId) {
-        setActiveChat(layout.activeChatId);
+      if (layout.activeThreadId) {
+        setActiveThread(layout.activeThreadId);
       }
       if (layout.leftSidebarOpen !== undefined) {
         setLeftSidebar(layout.leftSidebarOpen);
@@ -74,12 +74,12 @@ export function useLayoutSocket(
       if (layout.rightSidebarOpen !== undefined) {
         setRightSidebar(layout.rightSidebarOpen);
       }
-      if (layout.chatScrollOffsets) {
-        for (const [chatId, offset] of Object.entries(layout.chatScrollOffsets)) {
-          setChatScrollOffset(chatId, offset);
+      if (layout.threadScrollOffsets) {
+        for (const [threadId, offset] of Object.entries(layout.threadScrollOffsets)) {
+          setThreadScrollOffset(threadId, offset);
         }
-      } else if (layout.chatScrollOffset !== undefined && layout.activeChatId) {
-        setChatScrollOffset(layout.activeChatId, layout.chatScrollOffset);
+      } else if (layout.threadScrollOffset !== undefined && layout.activeThreadId) {
+        setThreadScrollOffset(layout.activeThreadId, layout.threadScrollOffset);
       }
       applyEditorLayout({
         openFiles: layout.openFiles,
@@ -88,7 +88,7 @@ export function useLayoutSocket(
         fileScrollOffsets: layout.fileScrollOffsets,
       });
     },
-    [applyTerminalLayout, setActiveChat, setChatScrollOffset, setLeftSidebar, setRightSidebar, applyEditorLayout],
+    [applyTerminalLayout, setActiveThread, setThreadScrollOffset, setLeftSidebar, setRightSidebar, applyEditorLayout],
   );
 
   // ── Listen for layout_data from server, with localStorage fallback ──
@@ -177,15 +177,15 @@ export function useLayoutSocket(
 
   const getLayoutSnapshot = useCallback((): LayoutData => {
     const term = useTerminalStore.getState();
-    const chats = useChatsStore.getState();
+    const threads = useThreadsStore.getState();
     const panels = usePanelsStore.getState();
     const editor = useEditorStore.getState();
     return {
       terminalPanelOpen: term.panelOpen,
       terminalPanelHeight: term.panelHeight,
       activeTerminalId: term.activeTerminalId,
-      activeChatId: chats.activeChatId,
-      chatScrollOffsets: chats.chatScrollOffsets,
+      activeThreadId: threads.activeThreadId,
+      threadScrollOffsets: threads.threadScrollOffsets,
       leftSidebarOpen: panels.leftSidebarOpen,
       rightSidebarOpen: panels.rightSidebarOpen,
       openFiles: editor.openFiles,
@@ -207,10 +207,10 @@ export function useLayoutSocket(
       }
     });
 
-    const unsubChats = useChatsStore.subscribe((state, prevState) => {
+    const unsubThreads = useThreadsStore.subscribe((state, prevState) => {
       if (
-        state.activeChatId !== prevState.activeChatId ||
-        state.chatScrollOffsets !== prevState.chatScrollOffsets
+        state.activeThreadId !== prevState.activeThreadId ||
+        state.threadScrollOffsets !== prevState.threadScrollOffsets
       ) {
         saveLayout(getLayoutSnapshot());
       }
@@ -238,7 +238,7 @@ export function useLayoutSocket(
 
     return () => {
       unsubTerminal();
-      unsubChats();
+      unsubThreads();
       unsubPanels();
       unsubEditor();
       if (debounceTimer.current) {

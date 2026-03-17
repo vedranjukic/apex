@@ -41,19 +41,19 @@ function log(emoji, msg) {
 }
 
 // ── Emit helpers ─────────────────────────────────────
-function emitAgentMessage(chatId, data) {
+function emitAgentMessage(threadId, data) {
   if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify({ type: "claude_message", chatId: chatId, data: data }));
+    state.ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: data }));
   }
 }
-function emitAgentExit(chatId, code) {
+function emitAgentExit(threadId, code) {
   if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify({ type: "claude_exit", chatId: chatId, code: code }));
+    state.ws.send(JSON.stringify({ type: "claude_exit", threadId: threadId, code: code }));
   }
 }
-function emitAgentError(chatId, error) {
+function emitAgentError(threadId, error) {
   if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify({ type: "claude_error", chatId: chatId, error: error }));
+    state.ws.send(JSON.stringify({ type: "claude_error", threadId: threadId, error: error }));
   }
 }
 
@@ -65,9 +65,9 @@ const claudeAdapter = {
   name: "claude_code",
   processModel: "long-lived",
 
-  spawn(chatId, prompt, mode, model, sessionId) {
+  spawn(threadId, prompt, mode, model, sessionId) {
     const agentMode = mode || "agent";
-    log("\\u{1F916}", "Spawning Claude for chat " + chatId + " mode=" + agentMode);
+    log("\\u{1F916}", "Spawning Claude for thread " + threadId + " mode=" + agentMode);
 
     const claudeArgs = ["--verbose", "--output-format", "stream-json", "--input-format", "stream-json"];
     claudeArgs.push("--dangerously-skip-permissions");
@@ -98,17 +98,17 @@ const claudeAdapter = {
       for (const line of lines) {
         const trimmed = line.replace(/[\\x00-\\x1f\\x7f]+(\\[\\?[\\d;]*[a-zA-Z])?/g, "").trim();
         if (!trimmed) continue;
-        try { emitAgentMessage(chatId, JSON.parse(trimmed)); } catch {}
+        try { emitAgentMessage(threadId, JSON.parse(trimmed)); } catch {}
       }
     });
 
     proc.onExit(({ exitCode }) => {
       if (buffer.trim()) {
         const trimmed = buffer.replace(/[\\x00-\\x1f\\x7f]+(\\[\\?[\\d;]*[a-zA-Z])?/g, "").trim();
-        try { emitAgentMessage(chatId, JSON.parse(trimmed)); } catch {}
+        try { emitAgentMessage(threadId, JSON.parse(trimmed)); } catch {}
       }
-      emitAgentExit(chatId, exitCode);
-      agentProcesses.delete(chatId);
+      emitAgentExit(threadId, exitCode);
+      agentProcesses.delete(threadId);
     });
 
     return proc;
@@ -141,9 +141,9 @@ const openCodeAdapter = {
   name: "open_code",
   processModel: "per-prompt",
 
-  spawn(chatId, prompt, mode, model, sessionId) {
+  spawn(threadId, prompt, mode, model, sessionId) {
     const ocModel = model || "opencode/gpt-5-nano";
-    log("\\u{1F916}", "Spawning OpenCode for chat " + chatId + " model=" + ocModel);
+    log("\\u{1F916}", "Spawning OpenCode for thread " + threadId + " model=" + ocModel);
     const ocBin = "/home/daytona/.opencode/bin/opencode";
     const args = ["run", "--format", "json", "-m", ocModel];
     if (sessionId) args.push("--session", sessionId);
@@ -170,17 +170,17 @@ const openCodeAdapter = {
           const ev = JSON.parse(line);
           if (!capturedSessionId && ev.sessionID) {
             capturedSessionId = ev.sessionID;
-            const ex = agentProcesses.get(chatId);
+            const ex = agentProcesses.get(threadId);
             if (ex) ex.sessionId = capturedSessionId;
-            emitAgentMessage(chatId, { type: "system", subtype: "init", session_id: capturedSessionId, tools: [], model: ocModel, cwd: PROJECT_DIR });
+            emitAgentMessage(threadId, { type: "system", subtype: "init", session_id: capturedSessionId, tools: [], model: ocModel, cwd: PROJECT_DIR });
           }
           if (ev.type === "text") {
-            emitAgentMessage(chatId, { type: "assistant", message: { role: "assistant", model: ocModel, content: [{ type: "text", text: ev.part.text || "" }], stop_reason: "end_turn" } });
+            emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: ocModel, content: [{ type: "text", text: ev.part.text || "" }], stop_reason: "end_turn" } });
           } else if (ev.type === "tool_use") {
             const s = ev.part.state || {};
             const tn = ev.part.tool || "unknown";
             const nn = { bash: "Bash", read: "Read", glob: "Glob", grep: "Grep", apply_patch: "Write", write: "Write", edit: "Edit" }[tn] || tn;
-            emitAgentMessage(chatId, { type: "assistant", message: { role: "assistant", model: ocModel, content: [
+            emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: ocModel, content: [
               { type: "tool_use", id: ev.part.callID || ev.part.id, name: nn, input: s.input || {} },
               { type: "tool_result", tool_use_id: ev.part.callID || ev.part.id, content: typeof s.output === "string" ? s.output : JSON.stringify(s.output || "") },
             ], stop_reason: "tool_use" } });
@@ -188,10 +188,10 @@ const openCodeAdapter = {
             stepCost += ev.part.cost || 0;
             if (ev.part.reason === "stop") {
               const tk = ev.part.tokens || {};
-              emitAgentMessage(chatId, { type: "result", subtype: "success", is_error: false, duration_ms: 0, num_turns: 1, result: "", session_id: capturedSessionId || "", total_cost_usd: stepCost, usage: { input_tokens: tk.input || 0, output_tokens: tk.output || 0 } });
+              emitAgentMessage(threadId, { type: "result", subtype: "success", is_error: false, duration_ms: 0, num_turns: 1, result: "", session_id: capturedSessionId || "", total_cost_usd: stepCost, usage: { input_tokens: tk.input || 0, output_tokens: tk.output || 0 } });
             }
           } else if (ev.type === "error") {
-            emitAgentError(chatId, (ev.error && ev.error.data && ev.error.data.message) || "OpenCode error");
+            emitAgentError(threadId, (ev.error && ev.error.data && ev.error.data.message) || "OpenCode error");
           }
         } catch {}
       }
@@ -202,19 +202,19 @@ const openCodeAdapter = {
         const trimmed = buffer.replace(/[\\x00-\\x1f\\x7f]+(\\[\\?[\\d;]*[a-zA-Z])?/g, "").trim();
         try { const ev = JSON.parse(trimmed); if (ev.type) { /* process last line */ } } catch {}
       }
-      log("\\u{1F916}", "OpenCode exited for chat " + chatId + " code=" + exitCode);
+      log("\\u{1F916}", "OpenCode exited for thread " + threadId + " code=" + exitCode);
       if (!capturedSessionId && exitCode !== 0) {
-        emitAgentError(chatId, "OpenCode exited with code " + exitCode);
+        emitAgentError(threadId, "OpenCode exited with code " + exitCode);
       }
-      agentProcesses.delete(chatId);
-      emitAgentExit(chatId, exitCode || 0);
+      agentProcesses.delete(threadId);
+      emitAgentExit(threadId, exitCode || 0);
     });
     return proc;
   },
 
   isAlive(entry) { return entry.proc && entry.proc.pid > 0; },
   sendFollowUp() { return null; },
-  sendUserAnswer(entry) { emitAgentError(entry.chatId || "default", "OpenCode does not support user answers"); },
+  sendUserAnswer(entry) { emitAgentError(entry.threadId || "default", "OpenCode does not support user answers"); },
   kill(entry) { if (entry.proc) { try { entry.proc.kill(); } catch {} } },
 };
 
@@ -223,14 +223,17 @@ const codexAdapter = {
   name: "codex",
   processModel: "long-lived",
 
-  spawn(chatId, prompt, mode, model, sessionId) {
-    const cm = model || "gpt-4o";
-    log("\\u{1F916}", "Spawning Codex app-server for chat " + chatId + " model=" + cm);
+  spawn(threadId, prompt, mode, model, sessionId) {
+    const cm = model || "gpt-5.4";
+    log("\\u{1F916}", "Spawning Codex app-server for thread " + threadId + " model=" + cm);
+
+    log("\\u{1F916}", "Codex env: OPENAI_API_KEY=" + (process.env.OPENAI_API_KEY ? "set(" + process.env.OPENAI_API_KEY.length + " chars)" : "NOT_SET"));
+
     const proc = spawn("codex", ["app-server", "--listen", "stdio://"], {
       cwd: PROJECT_DIR, stdio: ["pipe", "pipe", "pipe"], env: process.env,
     });
 
-    const entry = { proc, adapter: codexAdapter, sessionId: null, threadId: null, rpcId: 100, chatId, pendingPrompt: prompt, pendingModel: cm };
+    const entry = { proc, adapter: codexAdapter, sessionId: null, threadId: null, rpcId: 100, threadId, pendingPrompt: prompt, pendingModel: cm };
     const readline = require("readline");
     const rl = readline.createInterface({ input: proc.stdout });
 
@@ -239,6 +242,9 @@ const codexAdapter = {
     let initDone = false;
     let threadStarted = false;
     let textBuf = "";
+    let errorDetails = [];
+    let stderrLines = [];
+    let turnRetryCount = 0;
 
     rl.on("line", (line) => {
       try {
@@ -258,11 +264,14 @@ const codexAdapter = {
           threadStarted = true;
           entry.threadId = msg.params.thread.id;
           entry.sessionId = entry.threadId;
-          emitAgentMessage(chatId, { type: "system", subtype: "init", session_id: entry.threadId, tools: [], model: entry.pendingModel, cwd: PROJECT_DIR });
+          emitAgentMessage(threadId, { type: "system", subtype: "init", session_id: entry.threadId, tools: [], model: entry.pendingModel, cwd: PROJECT_DIR });
           setTimeout(() => {
             entry.rpcId++;
+            entry.lastPrompt = entry.pendingPrompt;
             rpc({ method: "turn/start", id: entry.rpcId, params: { threadId: entry.threadId, input: [{ type: "text", text: entry.pendingPrompt }] } });
             entry.pendingPrompt = null;
+            var stored = agentProcesses.get(threadId);
+            if (stored) { stored.codexThreadId = entry.threadId; stored.rpcId = entry.rpcId; }
           }, 100);
           return;
         }
@@ -270,7 +279,7 @@ const codexAdapter = {
         if (msg.method === "item/started") {
           const it = msg.params?.item || {};
           if (it.type === "commandExecution" && it.status === "inProgress") {
-            emitAgentMessage(chatId, { type: "assistant", message: { role: "assistant", model: entry.pendingModel, content: [{ type: "tool_use", id: it.id, name: "Bash", input: { command: it.command || "" } }], stop_reason: "tool_use" } });
+            emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: entry.pendingModel, content: [{ type: "tool_use", id: it.id, name: "Bash", input: { command: it.command || "" } }], stop_reason: "tool_use" } });
           } else if (it.type === "agentMessage") {
             textBuf = "";
           }
@@ -283,13 +292,13 @@ const codexAdapter = {
         if (msg.method === "item/completed") {
           const it = msg.params?.item || {};
           if (it.type === "commandExecution" && it.status === "completed") {
-            emitAgentMessage(chatId, { type: "assistant", message: { role: "assistant", model: entry.pendingModel, content: [{ type: "tool_result", tool_use_id: it.id, content: it.aggregated_output || "" }], stop_reason: "tool_use" } });
+            emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: entry.pendingModel, content: [{ type: "tool_result", tool_use_id: it.id, content: it.aggregated_output || "" }], stop_reason: "tool_use" } });
           } else if (it.type === "agentMessage") {
-            emitAgentMessage(chatId, { type: "assistant", message: { role: "assistant", model: entry.pendingModel, content: [{ type: "text", text: it.text || textBuf }], stop_reason: "end_turn" } });
+            emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: entry.pendingModel, content: [{ type: "text", text: it.text || textBuf }], stop_reason: "end_turn" } });
             textBuf = "";
           } else if (it.type === "fileChange") {
             for (const ch of (it.changes || [])) {
-              emitAgentMessage(chatId, { type: "assistant", message: { role: "assistant", model: entry.pendingModel, content: [
+              emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: entry.pendingModel, content: [
                 { type: "tool_use", id: it.id + "-" + (ch.path || ""), name: "Write", input: { file_path: ch.path, diff: ch.diff } },
                 { type: "tool_result", tool_use_id: it.id + "-" + (ch.path || ""), content: "File changed: " + (ch.path || "") },
               ], stop_reason: "tool_use" } });
@@ -301,21 +310,82 @@ const codexAdapter = {
           const turn = msg.params?.turn || {};
           const usage = msg.params?.usage || {};
           const failed = turn.status === "failed";
-          if (failed) emitAgentError(chatId, turn.error?.message || "Codex turn failed");
-          emitAgentMessage(chatId, { type: "result", subtype: failed ? "error" : "success", is_error: failed, duration_ms: 0, num_turns: 1, result: "", session_id: entry.threadId || "", total_cost_usd: 0, usage: { input_tokens: usage.input_tokens || 0, output_tokens: usage.output_tokens || 0 } });
+          if (failed) {
+            var turnErr = (stderrLines.length > 0 ? stderrLines[stderrLines.length - 1] : null)
+              || turn.error?.message || "Codex turn failed";
+            var turnErrData = turn.error?.data;
+            if (turnErrData && typeof turnErrData === "object" && turnErrData.message && turnErr.indexOf(turnErrData.message) === -1) {
+              turnErr += ": " + turnErrData.message;
+            }
+            emitAgentError(threadId, turnErr);
+          }
+          errorDetails = [];
+          stderrLines = [];
+          if (!failed) turnRetryCount = 0;
+          emitAgentMessage(threadId, { type: "result", subtype: failed ? "error" : "success", is_error: failed, duration_ms: 0, num_turns: 1, result: "", session_id: entry.threadId || "", total_cost_usd: 0, usage: { input_tokens: usage.input_tokens || 0, output_tokens: usage.output_tokens || 0 } });
         }
 
-        if (msg.method === "error" && msg.params?.error && !msg.params?.willRetry) {
-          emitAgentError(chatId, msg.params.error.message || "Codex error");
+        if (msg.method === "error" && msg.params?.error) {
+          var errObj = msg.params.error;
+          var msgText = errObj.message || "";
+          var detailText = errObj.additionalDetails || "";
+          var errText = detailText.length > msgText.length ? detailText : (msgText || detailText);
+          if (errObj.codexErrorInfo && typeof errObj.codexErrorInfo === "object") {
+            var info = errObj.codexErrorInfo;
+            if (info.responseStreamDisconnected && info.responseStreamDisconnected.httpStatusCode) {
+              errText += " (HTTP " + info.responseStreamDisconnected.httpStatusCode + ")";
+            }
+          }
+          if (!errText) errText = JSON.stringify(errObj);
+          log("\\u{1F916}", "Codex error: willRetry=" + !!msg.params.willRetry + " msg=" + msgText.slice(0, 200) + " details=" + detailText.slice(0, 200));
+          if (!/^Reconnecting/i.test(errText) && errorDetails.indexOf(errText) === -1) {
+            errorDetails.push(errText);
+          }
+          if (detailText && !/^Reconnecting/i.test(detailText) && errorDetails.indexOf(detailText) === -1) {
+            errorDetails.push(detailText);
+          }
+          if (!msg.params.willRetry) {
+            var isStreamDisconnect = /error sending request for url/i.test(errText) || /error sending request for url/i.test(detailText);
+            if (isStreamDisconnect && turnRetryCount < 1 && entry.lastPrompt && entry.threadId) {
+              turnRetryCount++;
+              log("\\u{1F916}", "Stream disconnect on cold connection — silent retry " + turnRetryCount + "/1 for thread " + threadId);
+              errorDetails = [];
+              stderrLines = [];
+              entry.rpcId++;
+              rpc({ method: "turn/start", id: entry.rpcId, params: { threadId: entry.threadId, input: [{ type: "text", text: entry.lastPrompt }] } });
+            } else {
+              var bestErr = errorDetails[0] || errText;
+              for (var ei = 0; ei < errorDetails.length; ei++) {
+                if (errorDetails[ei].length > bestErr.length) bestErr = errorDetails[ei];
+              }
+              emitAgentError(threadId, bestErr + " (model: " + (entry.pendingModel || cm) + ")");
+              errorDetails = [];
+            }
+          }
+        }
+
+        if (!msg.method && msg.id && msg.error) {
+          var rpcErr = msg.error.message || JSON.stringify(msg.error);
+          log("\\u{1F916}", "Codex RPC error id=" + msg.id + ": " + rpcErr);
+          emitAgentError(threadId, rpcErr);
         }
       } catch {}
     });
 
-    proc.stderr.on("data", (d) => log("\\u{1F916}", "Codex stderr: " + d.toString().trim().slice(0, 200)));
+    proc.stderr.on("data", (d) => {
+      var text = d.toString().trim().slice(0, 500);
+      if (text) {
+        log("\\u{1F916}", "Codex stderr: " + text.slice(0, 200));
+        if (!/^Reconnecting/i.test(text)) stderrLines.push(text);
+        if (state.ws && state.ws.readyState === 1) {
+          state.ws.send(JSON.stringify({ type: "claude_stderr", threadId: threadId, data: text }));
+        }
+      }
+    });
     proc.on("exit", (code) => {
-      log("\\u{1F916}", "Codex app-server exited for chat " + chatId + " code=" + code);
-      agentProcesses.delete(chatId);
-      emitAgentExit(chatId, code || 0);
+      log("\\u{1F916}", "Codex app-server exited for thread " + threadId + " code=" + code);
+      agentProcesses.delete(threadId);
+      emitAgentExit(threadId, code || 0);
     });
 
     rpc({ method: "initialize", id: 0, params: { clientInfo: { name: "apex", title: "Apex", version: "0.1.0" } } });
@@ -325,16 +395,19 @@ const codexAdapter = {
   isAlive(entry) { return entry.proc && !entry.proc.killed && entry.proc.exitCode === null; },
 
   sendFollowUp(entry, prompt) {
-    if (!entry.proc || !entry.threadId) return null;
-    entry.rpcId = (entry.rpcId || 100) + 1;
-    entry.proc.stdin.write(JSON.stringify({ method: "turn/start", id: entry.rpcId, params: { threadId: entry.threadId, input: [{ type: "text", text: prompt }] } }) + "\\n");
+    var codexTid = entry.codexThreadId;
+    if (!entry.proc || !codexTid) return null;
+    entry.lastPrompt = prompt;
+    entry.rpcId = (entry.rpcId || 1000) + 1;
+    entry.proc.stdin.write(JSON.stringify({ method: "turn/start", id: entry.rpcId, params: { threadId: codexTid, input: [{ type: "text", text: prompt }] } }) + "\\n");
     return true;
   },
 
   sendUserAnswer(entry, toolUseId, answer) {
-    if (entry.proc && entry.threadId) {
-      entry.rpcId = (entry.rpcId || 100) + 1;
-      entry.proc.stdin.write(JSON.stringify({ method: "turn/steer", id: entry.rpcId, params: { threadId: entry.threadId, input: [{ type: "text", text: answer }] } }) + "\\n");
+    var codexTid = entry.codexThreadId;
+    if (entry.proc && codexTid) {
+      entry.rpcId = (entry.rpcId || 1000) + 1;
+      entry.proc.stdin.write(JSON.stringify({ method: "turn/steer", id: entry.rpcId, params: { threadId: codexTid, input: [{ type: "text", text: answer }] } }) + "\\n");
     }
   },
 
@@ -348,54 +421,55 @@ const adapters = { claude_code: claudeAdapter, open_code: openCodeAdapter, codex
 function getAdapter(t) { return adapters[t] || adapters.claude_code; }
 
 // ── Bridge core ──────────────────────────────────────
-function spawnAgent(chatId, prompt, mode, model, sessionId, agentType) {
+function spawnAgent(threadId, prompt, mode, model, sessionId, agentType) {
   const adapter = getAdapter(agentType || AGENT_TYPE);
   try {
-    const proc = adapter.spawn(chatId, prompt, mode, model, sessionId);
-    agentProcesses.set(chatId, { proc, adapter, sessionId, chatId });
-  } catch (e) { emitAgentError(chatId, e.message || String(e)); }
+    const proc = adapter.spawn(threadId, prompt, mode, model, sessionId);
+    agentProcesses.set(threadId, { proc, adapter, sessionId, threadId });
+  } catch (e) { emitAgentError(threadId, e.message || String(e)); }
 }
 
 function handleStartAgent(msg) {
-  const chatId = msg.chatId || "default";
+  const threadId = msg.threadId || "default";
   const at = msg.agentType || AGENT_TYPE;
   const adapter = getAdapter(at);
-  const existing = agentProcesses.get(chatId);
+  const existing = agentProcesses.get(threadId);
 
   if (existing && adapter.isAlive(existing)) {
-    if (adapter.processModel === "long-lived") {
-      log("\\u{1F916}", "Follow-up to existing " + adapter.name + " for chat " + chatId);
+    if (adapter.processModel === "long-lived" && !msg.forceRestart) {
+      log("\\u{1F916}", "Follow-up to existing " + adapter.name + " for thread " + threadId);
       const ok = adapter.sendFollowUp(existing, msg.prompt);
       if (ok !== null) return;
     }
+    log("\\u{1F916}", "Killing existing " + adapter.name + " for thread " + threadId + (msg.forceRestart ? " (forceRestart)" : ""));
     adapter.kill(existing);
-    agentProcesses.delete(chatId);
+    agentProcesses.delete(threadId);
   } else if (existing) {
     adapter.kill(existing);
-    agentProcesses.delete(chatId);
+    agentProcesses.delete(threadId);
   }
 
-  spawnAgent(chatId, msg.prompt, msg.mode, msg.model, msg.sessionId, at);
+  spawnAgent(threadId, msg.prompt, msg.mode, msg.model, msg.sessionId, at);
 }
 
 function handleUserAnswer(msg) {
   let pending = pendingAskUser.get(msg.toolUseId);
-  if (!pending && msg.chatId) {
+  if (!pending && msg.threadId) {
     for (const [, entry] of pendingAskUser) {
-      if (entry.chatId === msg.chatId) { pending = entry; break; }
+      if (entry.threadId === msg.threadId) { pending = entry; break; }
     }
   }
   if (pending) { pending.resolve(msg.answer); return; }
-  const entry = agentProcesses.get(msg.chatId);
+  const entry = agentProcesses.get(msg.threadId);
   if (entry && entry.adapter.isAlive(entry)) {
     entry.adapter.sendUserAnswer(entry, msg.toolUseId, msg.answer);
-  } else { emitAgentError(msg.chatId, "No active agent process to receive answer"); }
+  } else { emitAgentError(msg.threadId, "No active agent process to receive answer"); }
 }
 
 function handleStopAgent(msg) {
-  if (msg.chatId) {
-    const e = agentProcesses.get(msg.chatId);
-    if (e) { e.adapter.kill(e); agentProcesses.delete(msg.chatId); }
+  if (msg.threadId) {
+    const e = agentProcesses.get(msg.threadId);
+    if (e) { e.adapter.kill(e); agentProcesses.delete(msg.threadId); }
   } else {
     for (const [cid, e] of agentProcesses) { e.adapter.kill(e); agentProcesses.delete(cid); }
   }
@@ -448,12 +522,29 @@ let watcherFatalError = false;
 function startFileWatcher() {
   if (inotifyProc || watcherFatalError) return;
   try {
-    inotifyProc = spawn("inotifywait", ["-mr", "--format", "%w", "-e", "create,delete,move,modify", "--exclude", "(/\\\\.git/|/node_modules/)", PROJECT_DIR], { stdio: ["ignore", "pipe", "pipe"] });
+    inotifyProc = spawn("inotifywait", ["-mr", "--format", "%e %w%f", "-e", "create,delete,move,modify", "--exclude", "(/\\\\.git/|/node_modules/)", PROJECT_DIR], { stdio: ["ignore", "pipe", "pipe"] });
     inotifyProc.stdout.on("data", (chunk) => {
-      for (const line of chunk.toString().split("\\n")) { const d = line.trim().replace(/\\/$/, ""); if (d) changedDirs.add(d); }
+      for (const line of chunk.toString().split("\\n")) {
+        const trimmed = line.trim(); if (!trimmed) continue;
+        const sp = trimmed.indexOf(" "); if (sp === -1) continue;
+        const ev = trimmed.substring(0, sp);
+        const fp = trimmed.substring(sp + 1).replace(/\\/$/, "");
+        const pd = path.dirname(fp);
+        if (pd) changedDirs.add(pd);
+        if (ev.includes("ISDIR") && (ev.includes("CREATE") || ev.includes("MOVED_TO"))) changedDirs.add(fp);
+      }
       if (changedDirs.size > 0) { if (debounceTimer) clearTimeout(debounceTimer); debounceTimer = setTimeout(flushFileChanges, 300); }
     });
-    inotifyProc.stderr.on("data", (chunk) => { const m = chunk.toString().trim(); if (m && !m.startsWith("Setting up watches") && !m.startsWith("Watches established")) log("\\u{1F441}", "inotify stderr: " + m); });
+    inotifyProc.stderr.on("data", (chunk) => {
+      const m = chunk.toString().trim();
+      if (m && !m.startsWith("Setting up watches") && !m.startsWith("Watches established")) {
+        log("\\u{1F441}", "inotify stderr: " + m);
+        if (m.includes("No space left on device") || m.includes("upper limit on inotify")) {
+          log("\\u{26A0}", "inotify watch limit reached, restarting watcher");
+          if (inotifyProc) { try { inotifyProc.kill(); } catch(e) {} }
+        }
+      }
+    });
     inotifyProc.on("exit", (code) => { inotifyProc = null; setTimeout(() => { watcherRestartDelay = Math.min(watcherRestartDelay * 2, WATCHER_MAX_RESTART_DELAY); startFileWatcher(); }, watcherRestartDelay); });
     inotifyProc.on("error", (err) => { inotifyProc = null; watcherFatalError = true; });
     watcherRestartDelay = 1000;
@@ -461,8 +552,13 @@ function startFileWatcher() {
 }
 function flushFileChanges() {
   if (changedDirs.size === 0) return;
-  const dirs = Array.from(changedDirs); changedDirs.clear();
-  if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify({ type: "file_changed", dirs }));
+  if (state.ws && state.ws.readyState === 1) {
+    const dirs = Array.from(changedDirs); changedDirs.clear();
+    state.ws.send(JSON.stringify({ type: "file_changed", dirs }));
+  } else {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(flushFileChanges, 1000);
+  }
 }
 startFileWatcher();
 
@@ -542,24 +638,24 @@ const server = http.createServer((req, res) => {
       try {
         const payload = JSON.parse(body);
         const questionId = "ask-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-        const activeChatId = payload.chatId !== "default" ? payload.chatId : (agentProcesses.size > 0 ? Array.from(agentProcesses.keys()).pop() : "default");
-        emitAgentMessage(activeChatId, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: questionId, name: "AskUserQuestion", input: payload.input || {} }], stop_reason: "tool_use" } });
+        const activeThreadId = payload.threadId !== "default" ? payload.threadId : (agentProcesses.size > 0 ? Array.from(agentProcesses.keys()).pop() : "default");
+        emitAgentMessage(activeThreadId, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: questionId, name: "AskUserQuestion", input: payload.input || {} }], stop_reason: "tool_use" } });
         if (state.ws && state.ws.readyState === 1) {
-          state.ws.send(JSON.stringify({ type: "ask_user_pending", chatId: activeChatId, questionId: questionId }));
+          state.ws.send(JSON.stringify({ type: "ask_user_pending", threadId: activeThreadId, questionId: questionId }));
         }
         const ASK_TIMEOUT_MS = 300000;
         const entry = { resolve: null, timer: null };
         entry.timer = setTimeout(() => {
           pendingAskUser.delete(questionId);
           if (state.ws && state.ws.readyState === 1) {
-            state.ws.send(JSON.stringify({ type: "ask_user_resolved", chatId: activeChatId, questionId: questionId }));
+            state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: activeThreadId, questionId: questionId }));
           }
           res.writeHead(408, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "User did not respond in time" }));
         }, ASK_TIMEOUT_MS);
-        pendingAskUser.set(questionId, { chatId: activeChatId, resolve: (answer) => {
+        pendingAskUser.set(questionId, { threadId: activeThreadId, resolve: (answer) => {
           clearTimeout(entry.timer); pendingAskUser.delete(questionId);
           if (state.ws && state.ws.readyState === 1) {
-            state.ws.send(JSON.stringify({ type: "ask_user_resolved", chatId: activeChatId, questionId: questionId }));
+            state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: activeThreadId, questionId: questionId }));
           }
           res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ answer }));
         } });
@@ -582,7 +678,7 @@ wss.on("connection", (ws) => {
       if (msg.type === "start_claude") { handleStartAgent(msg); }
       else if (msg.type === "claude_user_answer") { handleUserAnswer(msg); }
       else if (msg.type === "claude_input") {
-        const e = agentProcesses.get(msg.chatId);
+        const e = agentProcesses.get(msg.threadId);
         if (e && e.proc) { if (e.proc.write) e.proc.write(msg.data); else if (e.proc.stdin) e.proc.stdin.write(msg.data); }
       }
       else if (msg.type === "stop_claude") { handleStopAgent(msg); }
@@ -600,7 +696,7 @@ wss.on("connection", (ws) => {
       else if (msg.type === "ping") { ws.send(JSON.stringify({ type: "pong" })); }
     } catch (e) {
       log("\\u{274C}", "Message handler error: " + e);
-      try { const p = JSON.parse(data.toString()); if (p.terminalId) ws.send(JSON.stringify({ type: "terminal_error", terminalId: p.terminalId, error: String(e) })); else if (p.chatId) ws.send(JSON.stringify({ type: "claude_error", chatId: p.chatId, error: String(e) })); } catch {}
+      try { const p = JSON.parse(data.toString()); if (p.terminalId) ws.send(JSON.stringify({ type: "terminal_error", terminalId: p.terminalId, error: String(e) })); else if (p.threadId) ws.send(JSON.stringify({ type: "claude_error", threadId: p.threadId, error: String(e) })); } catch {}
     }
   });
 

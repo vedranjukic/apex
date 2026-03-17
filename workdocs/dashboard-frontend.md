@@ -26,16 +26,16 @@ apps/dashboard/src/
 │   │   ├── left-sidebar.tsx        # Left sidebar wrapper — combines ActivityBar + SidePanel
 │   │   ├── activity-bar.tsx        # Narrow icon strip (leftmost) — category selector (explorer, git, search, settings)
 │   │   ├── side-panel.tsx          # Wider panel showing content for the active activity category
-│   │   ├── sidebar.tsx             # Right sidebar — chat list, search, new-chat button
+│   │   ├── sidebar.tsx             # Right sidebar — thread list, search, new-thread button
 │   │   ├── sandbox-status.tsx      # Inline status indicator (creating/running/stopped/error)
 │   │   ├── project-status-bar.tsx  # Bottom status bar (project name, git branch picker, sync status, sandbox status, VS Code button)
 │   │   └── branch-picker.tsx      # Branch picker dropdown (create/checkout/list branches)
 │   ├── agent/
-│   │   ├── agent-chat.tsx          # Main chat area (header, message list, prompt input, welcome screen)
+│   │   ├── agent-thread.tsx          # Main thread area (header, message list, prompt input, welcome screen)
 │   │   ├── message-bubble.tsx      # Message grouping + rendering (user / agent / result / system bubbles)
 │   │   ├── plan-block.tsx          # Collapsible inline card for plan-mode responses (markdown + Build button)
 │   │   ├── markdown-block.tsx      # Collapsible inline card for structured markdown (task overviews, summaries)
-│   │   ├── chat-actions-context.ts # React context for chat actions (sendPrompt, sendSilentPrompt, sendUserAnswer)
+│   │   ├── thread-actions-context.ts # React context for thread actions (sendPrompt, sendSilentPrompt, sendUserAnswer)
 │   │   └── prompt-input.tsx        # Reusable textarea + send-button form
 │   ├── projects/
 │   │   ├── project-list.tsx        # Card grid of projects with create/open/delete actions
@@ -59,7 +59,7 @@ apps/dashboard/src/
 │   └── use-ports-socket.ts         # Port scanning & preview URL requests
 ├── stores/
 │   ├── projects-store.ts           # Zustand store — project CRUD
-│   ├── tasks-store.ts              # Zustand store — chats, messages, active chat
+│   ├── tasks-store.ts              # Zustand store — threads, messages, active thread
 │   ├── terminal-store.ts           # Zustand store — terminal list, panel visibility, height
 │   ├── panels-store.ts             # Zustand store — left/right sidebar visibility toggles
 │   ├── editor-store.ts             # Zustand store — open files, active file, dirty tracking, code selections
@@ -119,16 +119,16 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 ┌─[◧]──────────────────────────────────────────────[⬓][◨]─┐
 ├────┬──────────┬──────────────────────────────────┬────────┤
 │    │          │                                  │        │
-│ A  │  Side    │  AgentChat or CodeViewer          │  Chat  │
+│ A  │  Side    │  AgentThread or CodeViewer          │  Thread  │
 │ c  │  Panel   │  ┌────────────────────────────┐  │  Side  │
-│ t  │          │  │ Chat header / File tab bar  │  │  bar   │
+│ t  │          │  │ Thread header / File tab bar  │  │  bar   │
 │ i  │ (content │  ├────────────────────────────┤  │        │
 │ v  │  for the │  │ Message list / Monaco      │  │──────  │
 │ i  │  active  │  │ editor (syntax highlight,  │  │ Search │
 │ t  │  cate-   │  │  line numbers, save)       │  │──────  │
 │ y  │  gory)   │  ├────────────────────────────┤  │  +New  │
 │    │          │  │ PromptInput                │  │──────  │
-│ B  │ Explorer │  └────────────────────────────┘  │  chat  │
+│ B  │ Explorer │  └────────────────────────────┘  │  thread  │
 │ a  │ Git      ├──────────────────────────────────│  list  │
 │ r  │ Search   │  TerminalPanel (drag-resizable)  │  with  │
 │    │ Settings │  ┌────────────────────────────┐  │  status│
@@ -143,13 +143,13 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 
 - **Top bar** (32px): thin strip with toggle icons — left sidebar (◧), terminal panel (⬓), right sidebar (◨). Left toggle on the left edge, bottom + right toggles on the right edge.
 - **Left sidebar** (VS Code–style): narrow `ActivityBar` (48px icons) + wider `SidePanel` (240px content). Toggled via top bar or `usePanelsStore`.
-- **Right sidebar**: chat list (288px). Toggled via top bar or `usePanelsStore`.
+- **Right sidebar**: thread list (288px). Toggled via top bar or `usePanelsStore`.
 - **Terminal panel**: toggled via top bar or `useTerminalStore.togglePanel`.
 - Full `AppShell` with all slots: `leftSidebar`, `sidebar`, `terminalPanel`, `statusBar`, `children`.
 - The **status bar** combines project info (left) with sandbox status + VS Code button (right).
 - While layout or terminals are restoring, a **full-screen loading overlay** is shown.
-- **Central panel** switches between `AgentChat` (default) and `CodeViewer` based on `useEditorStore.activeView`. Clicking a file in the explorer opens it in the Monaco editor; the chat button returns to the chat view.
-- Welcome/empty state: large prompt box with suggestion chips (if no chats exist).
+- **Central panel** switches between `AgentThread` (default) and `CodeViewer` based on `useEditorStore.activeView`. Clicking a file in the explorer opens it in the Monaco editor; the thread button returns to the thread view.
+- Welcome/empty state: large prompt box with suggestion chips (if no threads exist).
 
 ---
 
@@ -164,21 +164,21 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 | **LeftSidebar**      | Wrapper that composes `ActivityBar` + `SidePanel` side by side. Owns the `active` category state. |
 | **ActivityBar**      | 48px (`w-12`) narrow dark strip on the far left. Top-aligned icons: Explorer, Git, Search. Bottom-aligned: Settings. Active item has a left accent bar + highlighted background. |
 | **SidePanel**        | 240px (`w-60`) panel next to the activity bar. Displays content for the active category (Explorer, Source Control, Search, Settings). Currently placeholder panels. |
-| **Sidebar**          | 288px (`w-72`) dark sidebar on the **right**. Contains a search input, "New Chat" button, and scrollable chat list. Each chat item shows a `MessageSquare` icon, truncated title, and a `StatusDot` (color-coded: yellow = running, green = completed, red = error, gray = idle). |
+| **Sidebar**          | 288px (`w-72`) dark sidebar on the **right**. Contains a search input, "New Thread" button, and scrollable thread list. Each thread item shows a `MessageSquare` icon, truncated title, and a `StatusDot` (color-coded: yellow = running, green = completed, red = error, gray = idle). |
 | **SandboxStatus**    | Compact inline indicator. States: **creating** (spinner + yellow), **running** (pulsing green dot), **stopped** (gray dot), **error** (red dot). Tooltip shows the sandbox ID. |
 | **ProjectStatusBar** | 28px footer bar. **Left**: project name, clickable git branch button (opens `BranchPicker` dropdown), sync status button (refresh icon + ↓N ↑M ahead/behind counts). **Right**: `SandboxStatus` indicator + "VS Code" button (opens browser IDE via API, disabled when sandbox isn't ready). Branch name reads from `useGitStore.branch` (stable) with fallbacks to `info.gitBranch` and `project.gitRepo`. |
 | **BranchPicker**     | Dropdown positioned above status bar. Top section: command items (Create new branch, Create new branch from, Checkout detached) that switch to inline input fields. Separator. Bottom section: scrollable branch list (max 10 visible, `max-h-[320px]`) sorted by last used timestamp. Current branch marked with green checkmark. Fetches fresh branch list on open via `gitActions.listBranches()`. |
 
-### 4.2 Agent / Chat Components (`components/agent/`)
+### 4.2 Agent / Thread Components (`components/agent/`)
 
 | Component            | Purpose |
 | -------------------- | ------- |
-| **AgentChat**        | Orchestrates the chat view. Three states: **(1)** No active chat & not composing → `WelcomePrompt` (centered hero with sparkle icon, textarea, suggestion chips). **(2)** Composing new → minimal prompt UI. **(3)** Active chat → header + scrollable message list + `PromptInput`. Input is disabled while chat status is `running`. Provides `ChatActionsContext` with `sendPrompt`, `sendSilentPrompt`, `sendUserAnswer`. |
-| **MessageBubble**    | Message grouping logic (`groupMessages`) + rendering. Groups flat messages into: **user** (single message), **agent** (consecutive assistant messages merged, with thinking-time indicator), **result** (metadata-only: cost, duration, turns), **system** (errors/info). `AgentGroup` detects plan-mode chats and renders `PlanBlock` instead of raw text. `UserBubble` hides build-prompt messages. |
+| **AgentThread**        | Orchestrates the thread view. Three states: **(1)** No active thread & not composing → `WelcomePrompt` (centered hero with sparkle icon, textarea, suggestion chips). **(2)** Composing new → minimal prompt UI. **(3)** Active thread → header + scrollable message list + `PromptInput`. Input is disabled while thread status is `running`. Provides `ThreadActionsContext` with `sendPrompt`, `sendSilentPrompt`, `sendUserAnswer`. |
+| **MessageBubble**    | Message grouping logic (`groupMessages`) + rendering. Groups flat messages into: **user** (single message), **agent** (consecutive assistant messages merged, with thinking-time indicator), **result** (metadata-only: cost, duration, turns), **system** (errors/info). `AgentGroup` detects plan-mode threads and renders `PlanBlock` instead of raw text. `UserBubble` hides build-prompt messages. |
 | **ContentBlockView** | Renders individual content blocks: `text` → `MarkdownBlock` card if the text has headings and is ≥200 chars, otherwise preformatted text with URL linking. `tool_use` → `ToolUseBlock` card. `tool_result` → bordered card with scrollable output. |
 | **PlanBlock**        | Collapsible inline card for plan-mode responses. Header with filename (slug + timestamp, e.g. `todo-app-plan_20260224T0700.md`), spinner/READY badge. Body renders markdown via `react-markdown` + `remark-gfm`. Footer has collapse toggle + **Build** button (sends plan to agent in `agent` mode via `sendSilentPrompt`). Build button states: active → building (spinner) → built (grayed checkmark). |
 | **MarkdownBlock**    | Collapsible inline card for structured text (task summaries, overviews). Same markdown rendering as PlanBlock but no Build button. Used automatically for text blocks with headings. |
-| **PromptInput**      | Reusable form: auto-sizing textarea + purple send button. Submit on Enter (Shift+Enter for newline). Supports `disabled` and `autoFocus` props. |
+| **PromptInput**      | Reusable form: auto-sizing textarea + purple send button. Toolbar includes `AgentDropdown` (per-thread agent selector), `ModeDropdown` (agent/plan/ask), and `ModelDropdown` (agent-aware model list). Submit on Enter (Shift+Enter for newline). Supports `disabled` and `autoFocus` props. |
 
 ### 4.3 Project Components (`components/projects/`)
 
@@ -219,22 +219,22 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 | `createProject(…)` | POST `/api/projects` — prepends to list |
 | `deleteProject(id)`| DELETE `/api/projects/:id` — removes from list |
 
-### 5.2 `useChatsStore` (`stores/tasks-store.ts`)
+### 5.2 `useThreadsStore` (`stores/tasks-store.ts`)
 
 | Field / Action          | Type / Description |
 | ----------------------- | ------------------ |
-| `chats`                 | `Chat[]` — chats for the active project |
-| `activeChatId`          | `string \| null` |
-| `composingNew`          | `boolean` — true when "New Chat" is clicked |
-| `messages`              | `Message[]` — messages for the active chat |
+| `threads`                 | `Thread[]` — threads for the active project |
+| `activeThreadId`          | `string \| null` |
+| `composingNew`          | `boolean` — true when "New Thread" is clicked |
+| `messages`              | `Message[]` — messages for the active thread |
 | `searchQuery`           | `string` — sidebar search filter |
-| `fetchChats(projectId)` | GET `/api/projects/:id/chats` |
-| `setActiveChat(chatId)` | Fetches messages, sets active |
-| `startNewChat()`        | Clears active, enters compose mode |
-| `createChat(…)`         | POST `/api/projects/:id/chats` |
-| `addMessage(msg)`       | Appends message (if for active chat) |
-| `updateChatStatus(…)`   | Updates a chat's status in the list |
-| `deleteChat(id)`        | DELETE `/api/chats/:id` |
+| `fetchThreads(projectId)` | GET `/api/projects/:id/threads` |
+| `setActiveThread(threadId)` | Fetches messages, sets active |
+| `startNewThread()`        | Clears active, enters compose mode |
+| `createThread(…)`         | POST `/api/projects/:id/threads` |
+| `addMessage(msg)`       | Appends message (if for active thread) |
+| `updateThreadStatus(…)`   | Updates a thread's status in the list |
+| `deleteThread(id)`        | DELETE `/api/threads/:id` |
 | `reset()`               | Clears all state (called by `resetProjectStores()` on HomePage mount) |
 
 ### 5.3 `useTerminalStore` (`stores/terminal-store.ts`)
@@ -256,25 +256,31 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 
 | Field / Action           | Type / Description |
 | ------------------------ | ------------------ |
-| `plans`                  | `Plan[]` — `{ id, chatId, title, filename, content, isComplete, createdAt }` |
-| `planChatIds`            | `Set<string>` — chats that were started in plan mode |
-| `markChatAsPlan(chatId)` | Flags a chat as plan-mode (called when sending with `mode='plan'`) |
-| `isChatPlan(chatId)`     | Returns true if the chat was started in plan mode |
-| `createPlan(chatId, rawContent)` | Extracts plan body from first heading onward, generates slug+timestamp filename. Returns `null` if no heading found yet. |
+| `plans`                  | `Plan[]` — `{ id, threadId, title, filename, content, isComplete, createdAt }` |
+| `planThreadIds`            | `Set<string>` — threads that were started in plan mode |
+| `markThreadAsPlan(threadId)` | Flags a thread as plan-mode (called when sending with `mode='plan'`) |
+| `isThreadPlan(threadId)`     | Returns true if the thread was started in plan mode |
+| `createPlan(threadId, rawContent)` | Extracts plan body from first heading onward, generates slug+timestamp filename. Returns `null` if no heading found yet. |
 | `updatePlanContent(planId, rawContent)` | Updates plan content (re-extracts from heading). No-op if no heading found. |
 | `completePlan(planId)`   | Marks plan as complete (enables Build button) |
-| `getPlanByChatId(chatId)` | Lookup by chat ID |
+| `getPlanByThreadId(threadId)` | Lookup by thread ID |
 
-**Content-based detection**: After page refresh the plan store is empty (in-memory only). `AgentGroup` derives plans from message content by scanning for markdown headings. The build-prompt message (`BUILD_PROMPT_PREFIX`) in user messages serves as proof that a chat was in plan mode, enabling plan card rendering from history.
+**Content-based detection**: After page refresh the plan store is empty (in-memory only). `AgentGroup` derives plans from message content by scanning for markdown headings. The build-prompt message (`BUILD_PROMPT_PREFIX`) in user messages serves as proof that a thread was in plan mode, enabling plan card rendering from history.
 
 ### 5.5 `useAgentSettingsStore` (`stores/agent-settings-store.ts`)
 
-| Field / Action   | Type / Description |
-| ---------------- | ------------------ |
-| `mode`           | `AgentMode` — `'agent' \| 'plan' \| 'ask'` (default `'agent'`) |
-| `model`          | `AgentModel` — `'sonnet' \| 'opus' \| 'haiku'` (default `'sonnet'`) |
-| `setMode(mode)`  | Change agent mode |
-| `setModel(model)` | Change agent model |
+| Field / Action          | Type / Description |
+| ----------------------- | ------------------ |
+| `agentType`             | `AgentTypeId` — `'claude_code' \| 'open_code' \| 'codex'` (default `'claude_code'`) |
+| `mode`                  | `AgentMode` — `'agent' \| 'plan' \| 'ask'` (default `'agent'`) |
+| `model`                 | `AgentModel` — agent-specific model string (default `'sonnet'`) |
+| `setAgentType(type)`    | Change agent type; also resets `model` to `DEFAULT_MODEL_BY_TYPE[type]` |
+| `setMode(mode)`         | Change agent mode |
+| `setModel(model)`       | Change agent model |
+
+**Constants:** `AGENT_TYPES` (dropdown labels), `AGENT_MODELS_BY_TYPE` (per-agent model lists), `DEFAULT_MODEL_BY_TYPE` (default model per agent).
+
+When switching to a thread that has a stored `agentType`, `AgentThread` calls `setAgentType()` to restore the dropdowns.
 
 ### 5.6 `usePanelsStore` (`stores/panels-store.ts`)
 
@@ -319,15 +325,15 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 | `activeFilePath`              | `string \| null` — currently viewed file |
 | `fileContents`                | `Record<string, string>` — cached file content keyed by path |
 | `fileScrollOffsets`           | `Record<string, number>` — scroll positions per file |
-| `activeView`                  | `'chat' \| 'editor'` (default `'chat'`) — switches central panel |
+| `activeView`                  | `'thread' \| 'editor'` (default `'thread'`) — switches central panel |
 | `codeSelection`               | `CodeSelection \| null` — last copied code snippet metadata |
 | `dirtyFiles`                  | `Set<string>` — files with unsaved changes |
 | `openFile(path, name)`        | Adds file to tabs (if not already open), activates it, switches to `editor` view |
-| `closeFile(path)`             | Removes tab, falls back to previous tab or switches to `chat` view |
+| `closeFile(path)`             | Removes tab, falls back to previous tab or switches to `thread` view |
 | `setFileContent(path, content)` | Updates cached content |
 | `markDirty(path)`             | Marks file as having unsaved changes (shown as dot in tab) |
 | `markClean(path)`             | Clears dirty flag (called on successful `file_write_result`) |
-| `showChat()`                  | Switches `activeView` to `'chat'` |
+| `showThread()`                  | Switches `activeView` to `'thread'` |
 | `applyLayout(data)`           | Restores open files, active file, and view from saved layout |
 | `reset()`                     | Clears all editor state |
 
@@ -352,9 +358,9 @@ All hooks share **one Socket.io connection** created by `useAgentSocket` (namesp
 
 ### 6.1 `useAgentSocket`
 
-- **Emits**: `subscribe_project`, `send_prompt`, `execute_chat`
+- **Emits**: `subscribe_project`, `send_prompt` (with optional `agentType`), `execute_thread` (with optional `agentType`)
 - **Listens**: `subscribed`, `prompt_accepted`, `agent_message` (assistant turns & result summaries), `agent_status`, `agent_error`
-- Pushes received messages into `useChatsStore` and updates chat statuses.
+- Pushes received messages into `useThreadsStore` and updates thread statuses.
 
 ### 6.2 `useTerminalSocket`
 
@@ -366,10 +372,10 @@ All hooks share **one Socket.io connection** created by `useAgentSocket` (namesp
 
 - **Emits**: `layout_load`, `layout_save`
 - **Listens**: `layout_data`
-- Persists & restores: terminal panel open/height, active terminal ID, active chat ID, sidebar open states, editor tabs, scroll offsets.
+- Persists & restores: terminal panel open/height, active terminal ID, active thread ID, sidebar open states, editor tabs, scroll offsets.
 - **Dual persistence**: every save writes to both `localStorage` (immediate, keyed `apex-layout:{projectId}`) and the server (debounced 500ms via socket).
 - **Load order**: `localStorage` is applied instantly on mount (zero-delay restore). Then `layout_load` is emitted to the server. Server response overrides local data. If the server times out (3s), the `localStorage` layout is already active.
-- Auto-saves whenever relevant store state changes (terminals, chats, panels, editor).
+- Auto-saves whenever relevant store state changes (terminals, threads, panels, editor).
 
 ### 6.4 `useProjectInfoSocket`
 
@@ -402,12 +408,12 @@ Thin `fetch` wrapper over `/api`. All requests send `Content-Type: application/j
 | --------------- | --------- |
 | `usersApi`      | `GET /users/me` |
 | `projectsApi`   | `GET /projects`, `GET /projects/:id`, `POST /projects`, `PATCH /projects/:id`, `DELETE /projects/:id`, `GET /projects/:id/vscode-url` |
-| `chatsApi`      | `GET /projects/:id/chats(?search=)`, `GET /chats/:id`, `POST /projects/:id/chats`, `GET /chats/:id/messages`, `DELETE /chats/:id` |
+| `threadsApi`      | `GET /projects/:id/threads(?search=)`, `GET /threads/:id`, `POST /projects/:id/threads`, `GET /threads/:id/messages`, `DELETE /threads/:id` |
 
 ### Key TypeScript Types
 
 - **`Project`** — `id, userId, name, description, sandboxId, sandboxSnapshot, status, agentType, gitRepo, agentConfig, createdAt, updatedAt`
-- **`Chat`** — `id, projectId, title, status, createdAt, updatedAt, messages?`
+- **`Thread`** — `id, projectId, title, status, agentType, createdAt, updatedAt, messages?`
 - **`Message`** — `id, taskId, role, content: ContentBlock[], metadata, createdAt`
 - **`ContentBlock`** — `type` (`text` | `tool_use` | `tool_result`), plus type-specific fields (`text`, `name`, `input`, `content`, `tool_use_id`)
 
@@ -446,7 +452,7 @@ Tailwind CSS v4 with custom tokens defined in `styles.css`. Values shown are for
 | `--color-activity-bar`       | `#0a0f1a`     | Activity bar (stays dark in all themes) |
 | `--color-surface`            | `#1e2132`     | Main content background |
 | `--color-surface-secondary`  | `#171a2a`     | Secondary areas, code blocks |
-| `--color-surface-chat`       | `#242840`     | Chat message background |
+| `--color-surface-thread`       | `#242840`     | Thread message background |
 | `--color-border`             | `#2e3348`     | Borders |
 | `--color-primary`            | `#6366f1`     | Indigo — buttons, focus rings, accents |
 | `--color-primary-hover`      | `#4f46e5`     | Darker indigo on hover |

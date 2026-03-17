@@ -111,12 +111,15 @@ const path = require("path");
 let inotifyProc = null;
 const changedDirs = new Set();
 let debounceTimer = null;
+let watcherRestartDelay = 1000;
+const WATCHER_MAX_RESTART_DELAY = 30000;
+let watcherFatalError = false;
 
 function startFileWatcher() {
-  if (inotifyProc) return;
+  if (inotifyProc || watcherFatalError) return;
   try {
     inotifyProc = spawn("inotifywait", [
-      "-mr", "--format", "%%w", "-e", "create,delete,move,modify",
+      "-mr", "--format", "%%e %%w%%f", "-e", "create,delete,move,modify",
       "--exclude", "(/\\.git/|/node_modules/)",
       PROJECT_DIR,
     ], { stdio: ["ignore", "pipe", "pipe"] });
@@ -124,8 +127,15 @@ function startFileWatcher() {
     inotifyProc.stdout.on("data", (chunk) => {
       const lines = chunk.toString().split("\n");
       for (const line of lines) {
-        const dir = line.trim().replace(/\/$/, "");
-        if (dir) changedDirs.add(dir);
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const sp = trimmed.indexOf(" ");
+        if (sp === -1) continue;
+        const ev = trimmed.substring(0, sp);
+        const fp = trimmed.substring(sp + 1).replace(/\/$/, "");
+        const pd = path.dirname(fp);
+        if (pd) changedDirs.add(pd);
+        if (ev.includes("ISDIR") && (ev.includes("CREATE") || ev.includes("MOVED_TO"))) changedDirs.add(fp);
       }
       if (changedDirs.size > 0) {
         if (debounceTimer) clearTimeout(debounceTimer);
@@ -137,31 +147,42 @@ function startFileWatcher() {
       const msg = chunk.toString().trim();
       if (msg && !msg.startsWith("Setting up watches") && !msg.startsWith("Watches established")) {
         log("\u{1F441}", "inotify stderr: " + msg);
+        if (msg.includes("No space left on device") || msg.includes("upper limit on inotify")) {
+          log("\u{26A0}", "inotify watch limit reached, restarting watcher");
+          if (inotifyProc) { try { inotifyProc.kill(); } catch(e) {} }
+        }
       }
     });
 
     inotifyProc.on("error", (e) => {
       log("\u{274C}", "File watcher error: " + e.message + " — is inotify-tools installed?");
       inotifyProc = null;
+      watcherFatalError = true;
     });
 
     inotifyProc.on("exit", (code) => {
       log("\u{1F441}", "inotifywait exited with code " + code);
       inotifyProc = null;
+      setTimeout(function() { watcherRestartDelay = Math.min(watcherRestartDelay * 2, WATCHER_MAX_RESTART_DELAY); startFileWatcher(); }, watcherRestartDelay);
     });
 
+    watcherRestartDelay = 1000;
     log("\u{1F441}", "File watcher (inotifywait) started for " + PROJECT_DIR);
   } catch (e) {
     log("\u{274C}", "File watcher failed: " + e.message + " — is inotify-tools installed?");
+    watcherFatalError = true;
   }
 }
 
 function flushFileChanges() {
   if (changedDirs.size === 0) return;
-  const dirs = Array.from(changedDirs);
-  changedDirs.clear();
   if (state.ws && state.ws.readyState === 1) {
+    const dirs = Array.from(changedDirs);
+    changedDirs.clear();
     state.ws.send(JSON.stringify({ type: "file_changed", dirs: dirs }));
+  } else {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(flushFileChanges, 1000);
   }
 }
 
@@ -342,17 +363,17 @@ const server = http.createServer((req, res) => {
       try {
         const payload = JSON.parse(body);
         const questionId = "ask-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-        const activeChatId = payload.chatId !== "default" ? payload.chatId : (claudeProcesses.size > 0 ? Array.from(claudeProcesses.keys()).pop() : "default");
+        const activeThreadId = payload.threadId !== "default" ? payload.threadId : (claudeProcesses.size > 0 ? Array.from(claudeProcesses.keys()).pop() : "default");
         if (state.ws && state.ws.readyState === 1) {
-          state.ws.send(JSON.stringify({ type: "claude_message", chatId: activeChatId, data: { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: questionId, name: "AskUserQuestion", input: payload.input || {} }], stop_reason: "tool_use" } } }));
-          state.ws.send(JSON.stringify({ type: "ask_user_pending", chatId: activeChatId, questionId: questionId }));
+          state.ws.send(JSON.stringify({ type: "claude_message", threadId: activeThreadId, data: { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: questionId, name: "AskUserQuestion", input: payload.input || {} }], stop_reason: "tool_use" } } }));
+          state.ws.send(JSON.stringify({ type: "ask_user_pending", threadId: activeThreadId, questionId: questionId }));
         }
         const ASK_TIMEOUT_MS = 300000;
         const entry = { resolve: null, timer: null };
         entry.timer = setTimeout(() => {
           pendingAskUser.delete(questionId);
           if (state.ws && state.ws.readyState === 1) {
-            state.ws.send(JSON.stringify({ type: "ask_user_resolved", chatId: activeChatId, questionId: questionId }));
+            state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: activeThreadId, questionId: questionId }));
           }
           res.writeHead(408, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "User did not respond in time" }));
@@ -361,7 +382,7 @@ const server = http.createServer((req, res) => {
           clearTimeout(entry.timer);
           pendingAskUser.delete(questionId);
           if (state.ws && state.ws.readyState === 1) {
-            state.ws.send(JSON.stringify({ type: "ask_user_resolved", chatId: activeChatId, questionId: questionId }));
+            state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: activeThreadId, questionId: questionId }));
           }
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ answer }));
@@ -395,9 +416,9 @@ wss.on("connection", (ws) => {
         }
       }
 
-      function spawnClaude(chatId, prompt, mode, model, sessionId) {
+      function spawnClaude(threadId, prompt, mode, model, sessionId) {
         const agentMode = mode || "agent";
-        log("\u{1F916}", "Spawning Claude for chat " + chatId + " mode=" + agentMode + ": " + prompt.slice(0, 50) + "...");
+        log("\u{1F916}", "Spawning Claude for thread " + threadId + " mode=" + agentMode + ": " + prompt.slice(0, 50) + "...");
 
         const claudeArgs = [
           "--verbose",
@@ -436,7 +457,7 @@ wss.on("connection", (ws) => {
             cwd: PROJECT_DIR,
             env: { ...process.env, ANTHROPIC_API_KEY: API_KEY },
           });
-          claudeProcesses.set(chatId, proc);
+          claudeProcesses.set(threadId, proc);
 
           let buffer = "";
           proc.onData((d) => {
@@ -448,7 +469,7 @@ wss.on("connection", (ws) => {
               if (!trimmed) continue;
               try {
                 const parsed = JSON.parse(trimmed);
-                ws.send(JSON.stringify({ type: "claude_message", chatId: chatId, data: parsed }));
+                ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: parsed }));
                 if (parsed.type === "assistant" && parsed.message?.content) {
                   const toolResults = [];
                   for (const block of parsed.message.content) {
@@ -464,7 +485,7 @@ wss.on("connection", (ws) => {
                     }
                   }
                   if (toolResults.length > 0) {
-                    ws.send(JSON.stringify({ type: "claude_message", chatId: chatId, data: { type: "user", message: { role: "user", content: toolResults } } }));
+                    ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: { type: "user", message: { role: "user", content: toolResults } } }));
                   }
                 }
               } catch {}
@@ -476,31 +497,31 @@ wss.on("connection", (ws) => {
               const trimmed = buffer.replace(/[\x00-\x1f\x7f]+(\[\?[\d;]*[a-zA-Z])?/g, "").trim();
               try {
                 const parsed = JSON.parse(trimmed);
-                ws.send(JSON.stringify({ type: "claude_message", chatId: chatId, data: parsed }));
+                ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: parsed }));
               } catch {}
             }
-            ws.send(JSON.stringify({ type: "claude_exit", chatId: chatId, code: exitCode }));
-            claudeProcesses.delete(chatId);
+            ws.send(JSON.stringify({ type: "claude_exit", threadId: threadId, code: exitCode }));
+            claudeProcesses.delete(threadId);
           });
         } catch (e) {
-          ws.send(JSON.stringify({ type: "claude_error", chatId: chatId, error: e.message || String(e) }));
-          claudeProcesses.delete(chatId);
+          ws.send(JSON.stringify({ type: "claude_error", threadId: threadId, error: e.message || String(e) }));
+          claudeProcesses.delete(threadId);
         }
       }
 
       if (msg.type === "start_claude") {
-        const chatId = msg.chatId || "default";
-        const existing = claudeProcesses.get(chatId);
+        const threadId = msg.threadId || "default";
+        const existing = claudeProcesses.get(threadId);
 
         if (existing && existing.pid > 0) {
-          log("\u{1F916}", "Piping follow-up to existing Claude for chat " + chatId + ": " + msg.prompt.slice(0, 50) + "...");
+          log("\u{1F916}", "Piping follow-up to existing Claude for thread " + threadId + ": " + msg.prompt.slice(0, 50) + "...");
           pipeToStdin(existing, {
             type: "user",
             message: { role: "user", content: msg.prompt },
           });
         } else {
-          if (existing) { try { existing.kill(); } catch {} claudeProcesses.delete(chatId); }
-          spawnClaude(chatId, msg.prompt, msg.mode, msg.model, msg.sessionId);
+          if (existing) { try { existing.kill(); } catch {} claudeProcesses.delete(threadId); }
+          spawnClaude(threadId, msg.prompt, msg.mode, msg.model, msg.sessionId);
         }
 
       } else if (msg.type === "claude_user_answer") {
@@ -508,9 +529,9 @@ wss.on("connection", (ws) => {
         if (pending) {
           pending.resolve(msg.answer);
         } else {
-          const proc = claudeProcesses.get(msg.chatId);
+          const proc = claudeProcesses.get(msg.threadId);
           if (proc && proc.pid > 0) {
-            log("\u{1F916}", "Piping user answer for chat " + msg.chatId + " tool=" + msg.toolUseId);
+            log("\u{1F916}", "Piping user answer for thread " + msg.threadId + " tool=" + msg.toolUseId);
             pipeToStdin(proc, {
               type: "user",
               message: {
@@ -519,21 +540,21 @@ wss.on("connection", (ws) => {
               },
             });
           } else {
-            ws.send(JSON.stringify({ type: "claude_error", chatId: msg.chatId, error: "No active Claude process to receive answer" }));
+            ws.send(JSON.stringify({ type: "claude_error", threadId: msg.threadId, error: "No active Claude process to receive answer" }));
           }
         }
 
       } else if (msg.type === "claude_input") {
-        const p = claudeProcesses.get(msg.chatId);
+        const p = claudeProcesses.get(msg.threadId);
         if (p) {
           p.write(msg.data);
         }
 
       } else if (msg.type === "stop_claude") {
-        const targetChatId = msg.chatId;
-        if (targetChatId) {
-          const p = claudeProcesses.get(targetChatId);
-          if (p) { p.kill(); claudeProcesses.delete(targetChatId); }
+        const targetThreadId = msg.threadId;
+        if (targetThreadId) {
+          const p = claudeProcesses.get(targetThreadId);
+          if (p) { p.kill(); claudeProcesses.delete(targetThreadId); }
         } else {
           for (const [cid, p] of claudeProcesses) { p.kill(); claudeProcesses.delete(cid); }
         }
@@ -818,7 +839,7 @@ async function handleRequest(request) {
         sendResponse(id, { content: [{ type: "text", text: instruction }] });
       } else if (toolName === "ask_user") {
         const result = await bridgeRequest("/internal/ask-user", {
-          chatId: "default",
+          threadId: "default",
           input: { questions: args.questions },
         });
         if (result.error) {

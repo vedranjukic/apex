@@ -7,27 +7,27 @@ import { ToolUseBlock, BashGroupBlock, TransientSearchBlock, type BashItem } fro
 import { PlanBlock } from './plan-block';
 import { MarkdownBlock } from './markdown-block';
 import { usePlanStore, extractTitle, extractPlanBody, BUILD_PROMPT_PREFIX, PLAN_BLOCK_REGEX, PLAN_BLOCK_START } from '../../stores/plan-store';
-import { useChatsStore } from '../../stores/tasks-store';
+import { useThreadsStore } from '../../stores/tasks-store';
 
 // ── Plan deduplication (only first agent group shows the plan) ──
 
 const PlanShownContext = createContext<() => boolean>(() => true);
 
 export function PlanShownProvider({
-  chatId,
+  threadId,
   children,
 }: {
-  chatId: string | null;
+  threadId: string | null;
   children: React.ReactNode;
 }) {
   const planShownRef = useRef(false);
-  const prevChatIdRef = useRef<string | null>(null);
+  const prevThreadIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (prevChatIdRef.current !== chatId) {
-      prevChatIdRef.current = chatId;
+    if (prevThreadIdRef.current !== threadId) {
+      prevThreadIdRef.current = threadId;
       planShownRef.current = false;
     }
-  }, [chatId]);
+  }, [threadId]);
 
   const shouldShowPlanAndMark = useMemo(
     () => () => {
@@ -158,7 +158,7 @@ function UserBubble({ message }: { message: Message }) {
   if (isToolResultOnly(message)) return null;
 
   return (
-    <div className="flex gap-3 px-4 py-3 bg-surface-chat">
+    <div className="flex gap-3 px-4 py-3 bg-surface-thread">
       <div className="shrink-0 mt-0.5">
         <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center">
           <User className="w-4 h-4 text-primary" />
@@ -182,6 +182,14 @@ function UserBubble({ message }: { message: Message }) {
 // ── Agent group (consecutive assistant messages merged) ──
 
 const DEDUP_TOOLS = new Set(['TodoWrite', 'AskUserQuestion', 'mcp__terminal-server__ask_user']);
+
+const DEDUP_ALIASES: Record<string, string> = {
+  'mcp__terminal-server__ask_user': 'AskUserQuestion',
+};
+
+function dedupKey(name: string): string {
+  return DEDUP_ALIASES[name] ?? name;
+}
 
 /** Tools that are transient: only shown live, not rendered on refresh (Bash is always rendered) */
 const TRANSIENT_TOOLS = new Set(['Glob', 'Grep']);
@@ -270,21 +278,25 @@ function groupConsecutiveBash(
  * card appears once, in-place, with the latest state.
  */
 function deduplicateBlocks(blocks: ContentBlock[]): ContentBlock[] {
-  const lastByName = new Map<string, ContentBlock>();
+  const bestByKey = new Map<string, ContentBlock>();
   for (const b of blocks) {
     if (b.type === 'tool_use' && b.name && DEDUP_TOOLS.has(b.name)) {
-      lastByName.set(b.name, b);
+      const key = dedupKey(b.name);
+      const existing = bestByKey.get(key);
+      if (existing && existing.name !== b.name) continue;
+      bestByKey.set(key, b);
     }
   }
-  if (lastByName.size === 0) return blocks;
+  if (bestByKey.size === 0) return blocks;
 
   const seen = new Set<string>();
   const out: ContentBlock[] = [];
   for (const b of blocks) {
     if (b.type === 'tool_use' && b.name && DEDUP_TOOLS.has(b.name)) {
-      if (!seen.has(b.name)) {
-        seen.add(b.name);
-        out.push(lastByName.get(b.name)!);
+      const key = dedupKey(b.name);
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(bestByKey.get(key)!);
       }
     } else {
       out.push(b);
@@ -344,13 +356,13 @@ function AgentGroup({
   thinkingSec: number | null;
 }) {
   const shouldShowPlanAndMark = useContext(PlanShownContext);
-  const chatId = messages[0]?.taskId;
-  const storePlan = usePlanStore((s) => chatId ? s.getPlanByChatId(chatId) : undefined);
-  const chat = useChatsStore(
-    (s) => chatId ? s.chats.find((c) => c.id === chatId) : undefined,
+  const threadId = messages[0]?.taskId;
+  const storePlan = usePlanStore((s) => threadId ? s.getPlanByThreadId(threadId) : undefined);
+  const thread = useThreadsStore(
+    (s) => threadId ? s.threads.find((c) => c.id === threadId) : undefined,
   );
-  const chatStatus = chat?.status;
-  const buildPromptTime = useChatsStore((s) => {
+  const threadStatus = thread?.status;
+  const buildPromptTime = useThreadsStore((s) => {
     const msg = s.messages.find(
       (m) => m.role === 'user' && m.content.some(
         (b) => b.type === 'text' && b.text?.startsWith(BUILD_PROMPT_PREFIX),
@@ -498,7 +510,7 @@ function AgentGroup({
   }, [derivedPlan, allBlocks, shouldShowPlanAndMark]);
 
   return (
-    <div className="bg-surface-chat/60">
+    <div className="bg-surface-thread/60">
       {/* Thinking indicator */}
       {thinkingSec != null && (
         <div className="flex items-center gap-1.5 px-4 pt-3 pb-1 text-xs text-text-muted">
@@ -523,7 +535,7 @@ function AgentGroup({
                     content={derivedPlan.content}
                     isComplete={derivedPlan.isComplete}
                     wasBuilt={wasBuilt}
-                    chatStatus={chatStatus}
+                    threadStatus={threadStatus}
                   />
                 : <ContentBlockView key={i} block={item.block} />
             )
@@ -558,7 +570,7 @@ function AgentGroup({
                         content={fallbackPlanBody}
                         isComplete={true}
                         wasBuilt={wasBuilt}
-                        chatStatus={chatStatus}
+                        threadStatus={threadStatus}
                       />
                     );
                   }
@@ -580,7 +592,7 @@ function ResultSummary({ message }: { message: Message }) {
   if (!meta) return null;
 
   return (
-    <div className="flex items-center justify-center gap-4 px-4 py-2 text-xs text-text-muted bg-surface-chat/40">
+    <div className="flex items-center justify-center gap-4 px-4 py-2 text-xs text-text-muted bg-surface-thread/40">
       {meta.costUsd != null && (
         <span>Cost: ${Number(meta.costUsd).toFixed(4)}</span>
       )}
@@ -602,7 +614,7 @@ function ResultSummary({ message }: { message: Message }) {
 
 function SystemBubble({ message }: { message: Message }) {
   return (
-    <div className="flex gap-3 px-4 py-3 bg-surface-chat/60">
+    <div className="flex gap-3 px-4 py-3 bg-surface-thread/60">
       <div className="shrink-0 mt-0.5">
         <div className="w-7 h-7 rounded-full bg-white/5 flex items-center justify-center">
           <Info className="w-4 h-4 text-text-muted" />

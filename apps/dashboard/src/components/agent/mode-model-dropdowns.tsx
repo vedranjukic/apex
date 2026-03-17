@@ -4,8 +4,10 @@ import { cn } from '../../lib/cn';
 import {
   useAgentSettingsStore,
   AGENT_MODES,
-  AGENT_MODELS,
+  AGENT_TYPES,
+  AGENT_MODELS_BY_TYPE,
   type AgentMode,
+  type AgentTypeId,
 } from '../../stores/agent-settings-store';
 
 const MODE_ICONS: Record<AgentMode, React.ReactNode> = {
@@ -84,12 +86,12 @@ export function ModeDropdown() {
   );
 }
 
-export function ModelDropdown() {
-  const model = useAgentSettingsStore((s) => s.model);
-  const setModel = useAgentSettingsStore((s) => s.setModel);
+export function AgentDropdown() {
+  const agentType = useAgentSettingsStore((s) => s.agentType);
+  const setAgentType = useAgentSettingsStore((s) => s.setAgentType);
   const { open, ref, toggle, close } = useDropdown();
 
-  const current = AGENT_MODELS.find((m) => m.value === model)!;
+  const current = AGENT_TYPES.find((a) => a.value === agentType)!;
 
   return (
     <div ref={ref} className="relative">
@@ -108,7 +110,55 @@ export function ModelDropdown() {
 
       {open && (
         <div className="absolute bottom-full left-0 mb-1 w-48 rounded-lg border border-border bg-sidebar shadow-xl z-50 py-1">
-          {AGENT_MODELS.map((m) => (
+          {AGENT_TYPES.map((a) => (
+            <button
+              key={a.value}
+              type="button"
+              onClick={() => { setAgentType(a.value); close(); }}
+              className={cn(
+                'w-full px-3 py-1.5 text-left text-xs transition-colors',
+                'hover:bg-sidebar-hover',
+                a.value === agentType
+                  ? 'text-text-primary font-medium bg-sidebar-active'
+                  : 'text-text-secondary',
+              )}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ModelDropdown() {
+  const agentType = useAgentSettingsStore((s) => s.agentType);
+  const model = useAgentSettingsStore((s) => s.model);
+  const setModel = useAgentSettingsStore((s) => s.setModel);
+  const { open, ref, toggle, close } = useDropdown();
+
+  const models = AGENT_MODELS_BY_TYPE[agentType] ?? AGENT_MODELS_BY_TYPE.claude_code;
+  const current = models.find((m) => m.value === model) ?? models[0];
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={toggle}
+        className={cn(
+          'flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-colors',
+          'text-text-secondary hover:text-text-primary hover:bg-sidebar-hover',
+          open && 'bg-sidebar-hover text-text-primary',
+        )}
+      >
+        <span>{current.label}</span>
+        <ChevronDown className="w-3 h-3 opacity-50" />
+      </button>
+
+      {open && (
+        <div className="absolute bottom-full left-0 mb-1 w-48 rounded-lg border border-border bg-sidebar shadow-xl z-50 py-1">
+          {models.map((m) => (
             <button
               key={m.value}
               type="button"

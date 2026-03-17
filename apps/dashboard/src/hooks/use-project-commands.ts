@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useCommandStore, type Command } from '../stores/command-store';
 import { useTerminalStore } from '../stores/terminal-store';
-import { useChatsStore } from '../stores/tasks-store';
+import { useThreadsStore } from '../stores/tasks-store';
 import { usePanelsStore } from '../stores/panels-store';
 import { useEditorStore } from '../stores/editor-store';
 import { useThemeStore } from '../stores/theme-store';
@@ -13,7 +13,7 @@ interface UseProjectCommandsDeps {
     rows: number,
     name?: string,
   ) => void;
-  sendPrompt: (chatId: string, prompt: string) => void;
+  sendPrompt: (threadId: string, prompt: string) => void;
   writeFile: (path: string, content: string) => void;
 }
 
@@ -21,15 +21,15 @@ function buildAgentCommand(
   id: string,
   label: string,
   slashCommand: string,
-  sendPrompt: (chatId: string, prompt: string) => void,
+  sendPrompt: (threadId: string, prompt: string) => void,
 ): Command {
   return {
     id,
     label,
     category: 'Agent',
     execute: () => {
-      const chatId = useChatsStore.getState().activeChatId;
-      if (chatId) sendPrompt(chatId, slashCommand);
+      const threadId = useThreadsStore.getState().activeThreadId;
+      if (threadId) sendPrompt(threadId, slashCommand);
     },
   };
 }
@@ -90,7 +90,7 @@ export function useProjectCommands({ createTerminal, sendPrompt, writeFile }: Us
       buildAgentCommand('agent.config', 'Agent: Settings', '/config', sendPrompt),
       buildAgentCommand('agent.context', 'Agent: Show Context', '/context', sendPrompt),
       buildAgentCommand('agent.status', 'Agent: Status', '/status', sendPrompt),
-      buildAgentCommand('agent.export', 'Agent: Export Chat', '/export', sendPrompt),
+      buildAgentCommand('agent.export', 'Agent: Export Thread', '/export', sendPrompt),
       buildAgentCommand('agent.debug', 'Agent: Debug Session', '/debug', sendPrompt),
       buildAgentCommand('agent.permissions', 'Agent: Permissions', '/permissions', sendPrompt),
       buildAgentCommand('agent.plan', 'Agent: Plan Mode', '/plan', sendPrompt),

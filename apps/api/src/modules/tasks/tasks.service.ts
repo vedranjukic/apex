@@ -5,16 +5,16 @@ import { TaskEntity } from '../../database/entities/task.entity';
 import { MessageEntity } from '../../database/entities/message.entity';
 
 @Injectable()
-export class ChatsService implements OnModuleInit {
+export class ThreadsService implements OnModuleInit {
   constructor(
     @InjectRepository(TaskEntity)
-    private readonly chatRepo: Repository<TaskEntity>,
+    private readonly threadRepo: Repository<TaskEntity>,
     @InjectRepository(MessageEntity)
     private readonly messageRepo: Repository<MessageEntity>,
   ) {}
 
   async onModuleInit() {
-    await this.chatRepo
+    await this.threadRepo
       .createQueryBuilder()
       .update()
       .set({ status: 'completed' })
@@ -23,42 +23,43 @@ export class ChatsService implements OnModuleInit {
   }
 
   async findByProject(projectId: string): Promise<TaskEntity[]> {
-    return this.chatRepo.find({
+    return this.threadRepo.find({
       where: { projectId },
       order: { createdAt: 'DESC' },
     });
   }
 
   async findById(id: string): Promise<TaskEntity> {
-    const chat = await this.chatRepo.findOne({
+    const thread = await this.threadRepo.findOne({
       where: { id },
       relations: ['messages'],
     });
-    if (!chat) throw new NotFoundException(`Chat ${id} not found`);
-    if (chat.messages) {
-      chat.messages.sort(
+    if (!thread) throw new NotFoundException(`Thread ${id} not found`);
+    if (thread.messages) {
+      thread.messages.sort(
         (a, b) =>
           new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
       );
     }
-    return chat;
+    return thread;
   }
 
   async create(
     projectId: string,
-    data: { prompt: string },
+    data: { prompt: string; agentType?: string },
   ): Promise<TaskEntity> {
     const title =
       data.prompt.length > 100
         ? data.prompt.substring(0, 100) + '…'
         : data.prompt;
 
-    const chat = this.chatRepo.create({
+    const thread = this.threadRepo.create({
       projectId,
       title,
       status: 'completed',
+      agentType: data.agentType ?? null,
     });
-    const saved = await this.chatRepo.save(chat);
+    const saved = await this.threadRepo.save(thread);
 
     await this.addMessage(saved.id, {
       role: 'user',
@@ -70,20 +71,24 @@ export class ChatsService implements OnModuleInit {
   }
 
   async updateStatus(id: string, status: string): Promise<TaskEntity> {
-    await this.chatRepo.update(id, { status });
+    await this.threadRepo.update(id, { status });
     return this.findById(id);
   }
 
-  async updateClaudeSessionId(chatId: string, sessionId: string): Promise<void> {
-    await this.chatRepo.update(chatId, { claudeSessionId: sessionId });
+  async updateClaudeSessionId(threadId: string, sessionId: string): Promise<void> {
+    await this.threadRepo.update(threadId, { claudeSessionId: sessionId });
   }
 
-  async updateMode(chatId: string, mode: string): Promise<void> {
-    await this.chatRepo.update(chatId, { mode });
+  async updateMode(threadId: string, mode: string): Promise<void> {
+    await this.threadRepo.update(threadId, { mode });
+  }
+
+  async updateAgentType(threadId: string, agentType: string): Promise<void> {
+    await this.threadRepo.update(threadId, { agentType });
   }
 
   async addMessage(
-    chatId: string,
+    threadId: string,
     data: {
       role: string;
       content: Record<string, unknown>[];
@@ -91,7 +96,7 @@ export class ChatsService implements OnModuleInit {
     },
   ): Promise<MessageEntity> {
     const msg = this.messageRepo.create({
-      taskId: chatId, // DB column is still 'taskId'
+      taskId: threadId, // DB column is still 'taskId'
       role: data.role,
       content: data.content,
       metadata: data.metadata || null,
@@ -99,15 +104,15 @@ export class ChatsService implements OnModuleInit {
     return this.messageRepo.save(msg);
   }
 
-  async getMessages(chatId: string): Promise<MessageEntity[]> {
+  async getMessages(threadId: string): Promise<MessageEntity[]> {
     return this.messageRepo.find({
-      where: { taskId: chatId },
+      where: { taskId: threadId },
       order: { createdAt: 'ASC' },
     });
   }
 
   async remove(id: string): Promise<void> {
-    const chat = await this.findById(id);
-    await this.chatRepo.remove(chat);
+    const thread = await this.findById(id);
+    await this.threadRepo.remove(thread);
   }
 }

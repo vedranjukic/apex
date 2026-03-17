@@ -17,12 +17,13 @@ type Project struct {
 	UpdatedAt   string  `json:"updatedAt"`
 }
 
-// Chat mirrors the DB tasks table.
-type Chat struct {
+// Thread mirrors the DB tasks table.
+type Thread struct {
 	ID              string  `json:"id"`
 	ProjectID       string  `json:"projectId"`
 	Title           string  `json:"title"`
 	Status          string  `json:"status"`
+	AgentType       *string `json:"agentType,omitempty"`
 	ClaudeSessionID *string `json:"claudeSessionId,omitempty"`
 	CreatedAt       string  `json:"createdAt"`
 	UpdatedAt       string  `json:"updatedAt"`

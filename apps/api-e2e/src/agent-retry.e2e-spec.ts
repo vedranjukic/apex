@@ -22,7 +22,7 @@ const describeE2e = hasSandboxKeys ? describe : describe.skip;
 
 describeE2e('Agent auto-restart E2E (real sandbox)', () => {
   let projectId: string;
-  let chatId: string;
+  let threadId: string;
   let socket: Socket;
 
   beforeAll(async () => {
@@ -64,13 +64,13 @@ describeE2e('Agent auto-restart E2E (real sandbox)', () => {
     throw new Error('Sandbox did not become ready in time');
   }, 6 * 60 * 1000);
 
-  it('should create chat and connect to agent socket', async () => {
-    const res = await axios.post(`/api/projects/${projectId}/chats`, {
+  it('should create thread and connect to agent socket', async () => {
+    const res = await axios.post(`/api/projects/${projectId}/threads`, {
       prompt: 'Reply with exactly: OK',
     });
     expect([200, 201]).toContain(res.status);
-    chatId = res.data.id;
-    expect(chatId).toBeDefined();
+    threadId = res.data.id;
+    expect(threadId).toBeDefined();
 
     socket = io(`${baseUrl}/ws/agent`, {
       path: '/ws/socket.io',
@@ -108,7 +108,7 @@ describeE2e('Agent auto-restart E2E (real sandbox)', () => {
       },
     );
 
-    socket.emit('send_prompt', { chatId, prompt, mode: 'agent' });
+    socket.emit('send_prompt', { threadId, prompt, mode: 'agent' });
 
     await new Promise<void>((resolve) => {
       socket.once('prompt_accepted', () => resolve());
@@ -118,7 +118,7 @@ describeE2e('Agent auto-restart E2E (real sandbox)', () => {
     expect(first.type).toBe('assistant');
 
     // Deliberately crash the agent
-    socket.emit('crash_agent', { chatId });
+    socket.emit('crash_agent', { threadId });
 
     // Wait for retry message
     const retryMessage = await new Promise<{ type: string; subtype?: string }>(

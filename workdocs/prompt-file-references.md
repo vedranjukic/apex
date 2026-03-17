@@ -1,6 +1,6 @@
 # Prompt Input, File References & Code Snippets
 
-The chat prompt uses a `contentEditable` div instead of a plain `<textarea>` so that inline reference tags can be mixed with text. Two reference types are supported:
+The thread prompt uses a `contentEditable` div instead of a plain `<textarea>` so that inline reference tags can be mixed with text. Two reference types are supported:
 
 1. **File/folder references** -- triggered by typing `@`, selecting from a file picker popup
 2. **Code snippet references** -- created by copying text in the code editor and pasting into the prompt
@@ -11,8 +11,8 @@ The chat prompt uses a `contentEditable` div instead of a plain `<textarea>` so 
 |------|---------|
 | `apps/dashboard/src/components/agent/prompt-input.tsx` | `PromptInput` component: contentEditable editor, `@` detection, tag insertion/removal, paste interception, submit serialization |
 | `apps/dashboard/src/components/agent/file-picker.tsx` | `FilePicker` popup: filter input, directory navigation, file/folder selection |
-| `apps/dashboard/src/components/agent/agent-chat.tsx` | `AgentChat` + `WelcomePrompt`: wire `requestListing` and `onSend` to `PromptInput` |
-| `apps/dashboard/src/pages/project-page.tsx` | Threads `fileActions.requestListing` to chat; formats files and snippets into the WebSocket prompt |
+| `apps/dashboard/src/components/agent/agent-thread.tsx` | `AgentThread` + `WelcomePrompt`: wire `requestListing` and `onSend` to `PromptInput` |
+| `apps/dashboard/src/pages/project-page.tsx` | Threads `fileActions.requestListing` to thread; formats files and snippets into the WebSocket prompt |
 | `apps/dashboard/src/stores/file-tree-store.ts` | Zustand store caching `FileEntry[]` per directory; `getAllCachedFiles()` flattens all cached files |
 | `apps/dashboard/src/stores/editor-store.ts` | `CodeSelection` interface; `codeSelection` state set on copy in the code editor |
 | `apps/dashboard/src/components/editor/code-viewer.tsx` | `onCopy` handler captures selection metadata + writes custom clipboard MIME type |
@@ -24,7 +24,7 @@ The chat prompt uses a `contentEditable` div instead of a plain `<textarea>` so 
 ProjectPage
   └─ CentralPanel
       ├─ CodeViewer  (onCopy → editorStore.codeSelection + clipboard)
-      └─ AgentChat  (receives requestListing prop)
+      └─ AgentThread  (receives requestListing prop)
           ├─ WelcomePrompt  (uses PromptInput)
           └─ PromptInput
               ├─ contentEditable div  (text + inline file/snippet tags)
@@ -87,7 +87,7 @@ ProjectPage
 
 ### Concept
 
-When the user selects text in the CodeViewer and copies it (Ctrl+C), the selection metadata is captured. When pasted into the chat prompt, a compact snippet tag is inserted instead of raw code. The tag shows `filename:startLine-endLine`. On submit, the selection coordinates are sent to the backend -- the actual code content is not duplicated in the prompt.
+When the user selects text in the CodeViewer and copies it (Ctrl+C), the selection metadata is captured. When pasted into the thread prompt, a compact snippet tag is inserted instead of raw code. The tag shows `filename:startLine-endLine`. On submit, the selection coordinates are sent to the backend -- the actual code content is not duplicated in the prompt.
 
 ### CodeSelection interface
 
@@ -116,7 +116,7 @@ Defined in `editor-store.ts` and exported.
    f. Stores CodeSelection in editorStore.codeSelection
    g. Calls e.preventDefault() to avoid copying line numbers
 
-3. User pastes into the chat prompt (Ctrl+V)
+3. User pastes into the thread prompt (Ctrl+V)
 4. handlePaste() in PromptInput:
    a. Checks clipboardData for application/x-codeany-snippet
    b. If found, parses the JSON → CodeSelection
@@ -158,7 +158,7 @@ Defined in `editor-store.ts` and exported.
 ### Custom clipboard MIME type
 
 The `application/x-codeany-snippet` MIME type carries the `CodeSelection` JSON alongside the normal `text/plain`. This allows:
-- Pasting into the chat prompt creates a snippet tag
+- Pasting into the thread prompt creates a snippet tag
 - Pasting into any other application pastes the code as plain text
 
 The `editorStore.codeSelection` field serves as a fallback for browsers that strip custom MIME types.
@@ -220,14 +220,14 @@ Both file and snippet tags can be removed by:
 When the user submits a prompt with references:
 
 1. `PromptInput.onSend(text, files, mode, model, snippets)` is called.
-2. `AgentChat` forwards to `onSendPrompt(chatId, text, files, mode, model, snippets)`.
+2. `AgentThread` forwards to `onSendPrompt(threadId, text, files, mode, model, snippets)`.
 3. `ProjectPage.handleSendPrompt()`:
    - Creates a local message with original text for display.
    - Stores `metadata.referencedFiles` and `metadata.codeSnippets`.
    - Constructs `fullPrompt` by prepending reference blocks:
      - `"Referenced files:\n- /path\n\n"` for file references
      - `"Referenced code selections:\n- /path lines L:C-L:C\n\n"` for snippets
-   - Sends `fullPrompt` over WebSocket via `sendPrompt(chatId, fullPrompt)`.
+   - Sends `fullPrompt` over WebSocket via `sendPrompt(threadId, fullPrompt)`.
 
 The backend receives a single string prompt with coordinate-based references. The WebSocket protocol is unchanged.
 
@@ -247,4 +247,4 @@ Edit the `className` string and SVG icon constants (`FILE_ICON_SVG`, `FOLDER_ICO
 
 ### Changing how references are sent to the backend
 
-Edit `handleSendPrompt` in `project-page.tsx` and `handleNewChatPrompt` in `agent-chat.tsx`. Currently they prepend text blocks to the prompt string. To send references as structured data, modify the WebSocket `send_prompt` event payload and the corresponding backend handler in `agent.gateway.ts`.
+Edit `handleSendPrompt` in `project-page.tsx` and `handleNewThreadPrompt` in `agent-thread.tsx`. Currently they prepend text blocks to the prompt string. To send references as structured data, modify the WebSocket `send_prompt` event payload and the corresponding backend handler in `agent.gateway.ts`.

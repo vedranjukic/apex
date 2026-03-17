@@ -12,7 +12,7 @@ import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { ProjectsService } from '../projects/projects.service';
 import { ProjectsGateway } from '../projects/projects.gateway';
-import { ChatsService } from '../tasks/tasks.service';
+import { ThreadsService } from '../tasks/tasks.service';
 import { BridgeMessage, LayoutData, FileEntry, SearchResult } from '@apex/orchestrator';
 import { execFile } from 'child_process';
 
@@ -56,23 +56,23 @@ export class AgentGateway
   constructor(
     private readonly projectsService: ProjectsService,
     private readonly projectsGateway: ProjectsGateway,
-    private readonly chatsService: ChatsService,
+    private readonly threadsService: ThreadsService,
   ) {}
 
   /**
-   * Update chat status and broadcast the parent project so the
-   * project list reflects chat activity changes in real time.
+   * Update thread status and broadcast the parent project so the
+   * project list reflects thread activity changes in real time.
    */
-  private async updateChatStatusAndNotify(
-    chatId: string,
+  private async updateThreadStatusAndNotify(
+    threadId: string,
     status: string,
   ): Promise<void> {
-    const chat = await this.chatsService.updateStatus(chatId, status);
+    const thread = await this.threadsService.updateStatus(threadId, status);
     try {
-      const project = await this.projectsService.findById(chat.projectId);
+      const project = await this.projectsService.findById(thread.projectId);
       this.projectsGateway.notifyUpdated(project);
     } catch (err) {
-      this.logger.debug(`Failed to notify project for chat ${chatId}: ${err}`);
+      this.logger.debug(`Failed to notify project for thread ${threadId}: ${err}`);
     }
   }
 
@@ -92,52 +92,58 @@ export class AgentGateway
     }
   }
 
-  // ── Chat / Agent Events ────────────────────────────────
+  // ── Thread / Agent Events ────────────────────────────────
 
   @SubscribeMessage('send_prompt')
   async handleSendPrompt(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: { chatId: string; prompt: string; mode?: string; model?: string },
+    @MessageBody() payload: { threadId: string; prompt: string; mode?: string; model?: string; agentType?: string },
   ) {
-    const { chatId, prompt, mode, model } = payload;
-    this.logger.log(`send_prompt: chatId=${chatId} mode=${mode ?? 'agent'} model=${model ?? 'default'} prompt="${prompt.slice(0, 60)}..."`);
+    const { threadId, prompt, mode, model, agentType } = payload;
+    this.logger.log(`send_prompt: threadId=${threadId} mode=${mode ?? 'agent'} model=${model ?? 'default'} agentType=${agentType ?? 'default'} prompt="${prompt.slice(0, 60)}..."`);
 
     try {
       if (mode === 'plan') {
-        await this.chatsService.updateMode(chatId, mode);
+        await this.threadsService.updateMode(threadId, mode);
+      }
+      if (agentType) {
+        await this.threadsService.updateAgentType(threadId, agentType);
       }
 
-      await this.chatsService.addMessage(chatId, {
+      await this.threadsService.addMessage(threadId, {
         role: 'user',
         content: [{ type: 'text', text: prompt }],
       });
 
-      await this.executeAgainstSandbox(client, chatId, prompt, mode, model);
+      await this.executeAgainstSandbox(client, threadId, prompt, mode, model);
     } catch (err) {
       this.logger.error(`send_prompt error: ${err}`);
-      client.emit('agent_error', { chatId, error: String(err) });
+      client.emit('agent_error', { threadId, error: String(err) });
     }
   }
 
-  @SubscribeMessage('execute_chat')
-  async handleExecuteChat(
+  @SubscribeMessage('execute_thread')
+  async handleExecuteThread(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: { chatId: string; mode?: string; model?: string },
+    @MessageBody() payload: { threadId: string; mode?: string; model?: string; agentType?: string },
   ) {
-    const { chatId, mode, model } = payload;
-    this.logger.log(`execute_chat: chatId=${chatId}`);
+    const { threadId, mode, model, agentType } = payload;
+    this.logger.log(`execute_thread: threadId=${threadId}`);
 
     try {
       if (mode === 'plan') {
-        await this.chatsService.updateMode(chatId, mode);
+        await this.threadsService.updateMode(threadId, mode);
+      }
+      if (agentType) {
+        await this.threadsService.updateAgentType(threadId, agentType);
       }
 
-      const chat = await this.chatsService.findById(chatId);
+      const thread = await this.threadsService.findById(threadId);
 
-      const firstUserMsg = chat.messages?.find((m) => m.role === 'user');
+      const firstUserMsg = thread.messages?.find((m) => m.role === 'user');
       if (!firstUserMsg) {
-        this.logger.warn(`execute_chat: no user message for chat ${chatId}`);
-        client.emit('agent_error', { chatId, error: 'No user message found' });
+        this.logger.warn(`execute_thread: no user message for thread ${threadId}`);
+        client.emit('agent_error', { threadId, error: 'No user message found' });
         return;
       }
 
@@ -148,16 +154,16 @@ export class AgentGateway
           .join('\n') || '';
 
       if (!prompt) {
-        this.logger.warn(`execute_chat: empty prompt for chat ${chatId}`);
-        client.emit('agent_error', { chatId, error: 'Empty prompt' });
+        this.logger.warn(`execute_thread: empty prompt for thread ${threadId}`);
+        client.emit('agent_error', { threadId, error: 'Empty prompt' });
         return;
       }
 
-      this.logger.log(`execute_chat: extracted prompt "${prompt.slice(0, 60)}..."`);
-      await this.executeAgainstSandbox(client, chatId, prompt, mode, model);
+      this.logger.log(`execute_thread: extracted prompt "${prompt.slice(0, 60)}..."`);
+      await this.executeAgainstSandbox(client, threadId, prompt, mode, model);
     } catch (err) {
-      this.logger.error(`execute_chat error: ${err}`);
-      client.emit('agent_error', { chatId, error: String(err) });
+      this.logger.error(`execute_thread error: ${err}`);
+      client.emit('agent_error', { threadId, error: String(err) });
     }
   }
 
@@ -165,33 +171,33 @@ export class AgentGateway
   async handleUserAnswer(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: {
-      chatId: string;
+      threadId: string;
       toolUseId: string;
       answer: string;
     },
   ) {
-    const { chatId, toolUseId, answer } = payload;
-    this.logger.log(`user_answer: chatId=${chatId} toolUseId=${toolUseId}`);
+    const { threadId, toolUseId, answer } = payload;
+    this.logger.log(`user_answer: threadId=${threadId} toolUseId=${toolUseId}`);
 
     try {
-      const chat = await this.chatsService.findById(chatId);
-      const project = await this.projectsService.findById(chat.projectId);
+      const thread = await this.threadsService.findById(threadId);
+      const project = await this.projectsService.findById(thread.projectId);
 
       if (!project.sandboxId) {
-        client.emit('agent_error', { chatId, error: 'No sandbox for this project' });
+        client.emit('agent_error', { threadId, error: 'No sandbox for this project' });
         return;
       }
 
       const manager = this.projectsService.getSandboxManager();
       if (!manager) {
-        client.emit('agent_error', { chatId, error: 'Sandbox manager not available' });
+        client.emit('agent_error', { threadId, error: 'Sandbox manager not available' });
         return;
       }
 
-      await manager.sendUserAnswer(project.sandboxId, chatId, toolUseId, answer);
+      await manager.sendUserAnswer(project.sandboxId, threadId, toolUseId, answer);
 
       // Persist the user's answer so it survives refresh
-      await this.chatsService.addMessage(chatId, {
+      await this.threadsService.addMessage(threadId, {
         role: 'user',
         content: [
           {
@@ -204,7 +210,7 @@ export class AgentGateway
       });
     } catch (err) {
       this.logger.error(`user_answer error: ${err}`);
-      client.emit('agent_error', { chatId, error: String(err) });
+      client.emit('agent_error', { threadId, error: String(err) });
     }
   }
 
@@ -212,31 +218,31 @@ export class AgentGateway
   @SubscribeMessage('crash_agent')
   async handleCrashAgent(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: { chatId: string },
+    @MessageBody() payload: { threadId: string },
   ) {
     if (process.env.APEX_E2E_TEST !== '1') {
       this.logger.warn('crash_agent ignored (APEX_E2E_TEST not set)');
       return;
     }
-    const { chatId } = payload;
-    this.logger.log(`crash_agent: chatId=${chatId} (e2e test)`);
+    const { threadId } = payload;
+    this.logger.log(`crash_agent: threadId=${threadId} (e2e test)`);
     try {
-      const chat = await this.chatsService.findById(chatId);
-      const project = await this.projectsService.findById(chat.projectId);
+      const thread = await this.threadsService.findById(threadId);
+      const project = await this.projectsService.findById(thread.projectId);
       if (!project.sandboxId) {
-        client.emit('agent_error', { chatId, error: 'No sandbox for this project' });
+        client.emit('agent_error', { threadId, error: 'No sandbox for this project' });
         return;
       }
       const manager = this.projectsService.getSandboxManager();
       if (!manager) {
-        client.emit('agent_error', { chatId, error: 'Sandbox manager not available' });
+        client.emit('agent_error', { threadId, error: 'Sandbox manager not available' });
         return;
       }
-      await manager.stopClaude(project.sandboxId, chatId);
-      this.logger.log(`crash_agent: stopped Claude for chat ${chatId}`);
+      await manager.stopClaude(project.sandboxId, threadId);
+      this.logger.log(`crash_agent: stopped Claude for thread ${threadId}`);
     } catch (err) {
       this.logger.error(`crash_agent error: ${err}`);
-      client.emit('agent_error', { chatId, error: String(err) });
+      client.emit('agent_error', { threadId, error: String(err) });
     }
   }
 
@@ -977,18 +983,19 @@ export class AgentGateway
 
   private async executeAgainstSandbox(
     client: Socket,
-    chatId: string,
+    threadId: string,
     prompt: string,
     mode?: string,
     model?: string,
   ): Promise<void> {
-    const chat = await this.chatsService.findById(chatId);
-    const project = await this.projectsService.findById(chat.projectId);
+    const thread = await this.threadsService.findById(threadId);
+    const project = await this.projectsService.findById(thread.projectId);
+    const effectiveAgentType = thread.agentType ?? project.agentType;
 
     if (!project.sandboxId) {
       this.logger.warn(`No sandbox for project ${project.id}`);
       client.emit('agent_error', {
-        chatId,
+        threadId,
         error: 'Project sandbox not ready – is it still provisioning?',
       });
       return;
@@ -998,7 +1005,7 @@ export class AgentGateway
     if (!manager) {
       this.logger.warn('SandboxManager not available');
       client.emit('agent_error', {
-        chatId,
+        threadId,
         error: 'Sandbox manager not available – check Daytona configuration',
       });
       return;
@@ -1007,20 +1014,20 @@ export class AgentGateway
     manager.registerProjectName(project.sandboxId, project.name);
     this.subscribeTo(project.sandboxId, client.id);
 
-    await this.updateChatStatusAndNotify(chatId, 'running');
+    await this.updateThreadStatusAndNotify(threadId, 'running');
     this.emitToSubscribers(project.sandboxId, 'agent_status', {
-      chatId,
+      threadId,
       status: 'running',
     });
 
-    const prevHandler = this.activeHandlers.get(chatId);
+    const prevHandler = this.activeHandlers.get(threadId);
     if (prevHandler) {
       manager.removeListener('message', prevHandler);
-      this.activeHandlers.delete(chatId);
+      this.activeHandlers.delete(threadId);
     }
 
     // Clear any previous timeout
-    const prevTimeout = this.activeTimeouts.get(chatId);
+    const prevTimeout = this.activeTimeouts.get(threadId);
     if (prevTimeout) clearTimeout(prevTimeout);
 
     const stderrChunks: string[] = [];
@@ -1029,28 +1036,28 @@ export class AgentGateway
 
     const cleanupHandler = () => {
       manager.removeListener('message', messageHandler);
-      this.activeHandlers.delete(chatId);
-      const t = this.activeTimeouts.get(chatId);
-      if (t) { clearTimeout(t); this.activeTimeouts.delete(chatId); }
+      this.activeHandlers.delete(threadId);
+      const t = this.activeTimeouts.get(threadId);
+      if (t) { clearTimeout(t); this.activeTimeouts.delete(threadId); }
     };
 
     const resetTimeout = (timeoutMs: number) => {
-      const prev = this.activeTimeouts.get(chatId);
+      const prev = this.activeTimeouts.get(threadId);
       if (prev) clearTimeout(prev);
 
       const timer = setTimeout(async () => {
-        this.logger.error(`Agent timeout for chat ${chatId} (${timeoutMs}ms with no activity)`);
+        this.logger.error(`Agent timeout for thread ${threadId} (${timeoutMs}ms with no activity)`);
 
         // Auto-retry once before giving up (restart agent if it crashed or hung)
         if (retryCount < 1) {
           retryCount++;
-          this.logger.log(`Agent timeout for chat ${chatId}: attempting auto-retry (${retryCount}/1)`);
+          this.logger.log(`Agent timeout for thread ${threadId}: attempting auto-retry (${retryCount}/1)`);
           this.emitToSubscribers(project.sandboxId!, 'agent_status', {
-            chatId,
+            threadId,
             status: 'retrying',
           });
           this.emitToSubscribers(project.sandboxId!, 'agent_message', {
-            chatId,
+            threadId,
             message: {
               type: 'system',
               subtype: 'retry',
@@ -1058,23 +1065,24 @@ export class AgentGateway
             },
           });
           try {
-            const freshChat = await this.chatsService.findById(chatId);
+            const freshThread = await this.threadsService.findById(threadId);
             const resumePrompt = receivedFirstMessage
               ? 'Continue from where you left off. You had stopped responding after a long pause.'
               : prompt;
             await manager.sendPrompt(
               project.sandboxId!,
               resumePrompt,
-              chatId,
-              freshChat.claudeSessionId ?? chat.claudeSessionId,
+              threadId,
+              freshThread.claudeSessionId ?? thread.claudeSessionId,
               mode,
               model,
-              project.agentType,
+              effectiveAgentType,
+              true,
             );
             resetTimeout(AgentGateway.AGENT_ACTIVITY_TIMEOUT_MS);
             return;
           } catch (retryErr) {
-            this.logger.error(`Agent retry failed for chat ${chatId}: ${retryErr}`);
+            this.logger.error(`Agent retry failed for thread ${threadId}: ${retryErr}`);
           }
         }
 
@@ -1087,13 +1095,13 @@ export class AgentGateway
           ? `Agent stopped responding (no activity for ${Math.round(timeoutMs / 1000)}s)${stderrHint}`
           : `Agent did not respond within ${Math.round(timeoutMs / 1000)}s — the CLI process may have failed to start${stderrHint}`;
 
-        await this.updateChatStatusAndNotify(chatId, 'error');
+        await this.updateThreadStatusAndNotify(threadId, 'error');
         this.emitToSubscribers(project.sandboxId!, 'agent_error', {
-          chatId,
+          threadId,
           error: errorMsg,
         });
       }, timeoutMs);
-      this.activeTimeouts.set(chatId, timer);
+      this.activeTimeouts.set(threadId, timer);
     };
 
     // Start with the initial (shorter) timeout
@@ -1105,17 +1113,17 @@ export class AgentGateway
     ) => {
       if (sandboxId !== project.sandboxId) return;
 
-      // Filter by chatId so messages from other chats don't leak
-      const msgChatId = (msg as any).chatId;
-      if (msgChatId && msgChatId !== chatId) return;
+      // Filter by threadId so messages from other threads don't leak
+      const msgThreadId = (msg as any).threadId;
+      if (msgThreadId && msgThreadId !== threadId) return;
 
-      this.logger.debug(`Bridge msg for chat ${chatId}: ${msg.type}`);
+      this.logger.debug(`Bridge msg for thread ${threadId}: ${msg.type}`);
 
       // Capture stderr output for diagnostics
       if (msg.type === 'claude_stderr') {
         const text = (msg as any).data || '';
         stderrChunks.push(text);
-        this.logger.warn(`Claude stderr for chat ${chatId}: ${text.slice(0, 200)}`);
+        this.logger.warn(`Claude stderr for thread ${threadId}: ${text.slice(0, 500)}`);
         resetTimeout(AgentGateway.AGENT_ACTIVITY_TIMEOUT_MS);
         return;
       }
@@ -1129,24 +1137,31 @@ export class AgentGateway
         // Capture Claude session_id from the init message (first prompt only).
         // On --resume, Claude reports a new forked UUID — don't overwrite the
         // original because it's the one that accumulates full conversation history.
-        if (data.type === 'system' && data.subtype === 'init' && data.session_id && !chat.claudeSessionId) {
-          this.logger.log(`Captured Claude session_id for chat ${chatId}: ${data.session_id}`);
-          await this.chatsService.updateClaudeSessionId(chatId, data.session_id);
+        if (data.type === 'system' && data.subtype === 'init' && data.session_id && !thread.claudeSessionId) {
+          this.logger.log(`Captured Claude session_id for thread ${threadId}: ${data.session_id}`);
+          await this.threadsService.updateClaudeSessionId(threadId, data.session_id);
         }
 
         if (data.type === 'assistant' && data.message?.content) {
-          this.logger.log(
-            `Agent response for chat ${chatId}: ${data.message.content.length} blocks`,
-          );
-          await this.chatsService.addMessage(chatId, {
-            role: 'assistant',
-            content: data.message.content,
-            metadata: {
-              model: data.message.model,
-              stopReason: data.message.stop_reason,
-              usage: data.message.usage,
-            },
-          });
+          const content = data.message.content as Array<{ type?: string; name?: string }>;
+          const isSyntheticAskUser =
+            content.length === 1 &&
+            content[0]?.type === 'tool_use' &&
+            content[0]?.name === 'AskUserQuestion';
+          if (!isSyntheticAskUser) {
+            this.logger.log(
+              `Agent response for thread ${threadId}: ${data.message.content.length} blocks`,
+            );
+            await this.threadsService.addMessage(threadId, {
+              role: 'assistant',
+              content: data.message.content,
+              metadata: {
+                model: data.message.model,
+                stopReason: data.message.stop_reason,
+                usage: data.message.usage,
+              },
+            });
+          }
         }
 
         // Persist tool results (Bash output, etc.) from CLI stream so they survive refresh and are available on all devices
@@ -1155,7 +1170,7 @@ export class AgentGateway
             (b: { type?: string }) => b?.type === 'tool_result',
           );
           if (hasToolResult) {
-            await this.chatsService.addMessage(chatId, {
+            await this.threadsService.addMessage(threadId, {
               role: 'user',
               content: data.message.content,
               metadata: null,
@@ -1165,15 +1180,15 @@ export class AgentGateway
 
         if (data.type === 'result') {
           this.logger.log(
-            `Agent completed chat ${chatId}: ${data.is_error ? 'error' : 'success'}`,
+            `Agent completed thread ${threadId}: ${data.is_error ? 'error' : 'success'}`,
           );
 
           // Capture session_id from result as fallback (first prompt only)
-          if (data.session_id && !chat.claudeSessionId) {
-            await this.chatsService.updateClaudeSessionId(chatId, data.session_id);
+          if (data.session_id && !thread.claudeSessionId) {
+            await this.threadsService.updateClaudeSessionId(threadId, data.session_id);
           }
 
-          await this.chatsService.addMessage(chatId, {
+          await this.threadsService.addMessage(threadId, {
             role: 'system',
             content: [],
             metadata: {
@@ -1187,12 +1202,12 @@ export class AgentGateway
 
           // Don't override waiting_for_input with completed -- the bridge
           // manages the status transition via ask_user_resolved.
-          const currentChat = await this.chatsService.findById(chatId);
-          if (currentChat.status !== 'waiting_for_input') {
+          const currentThread = await this.threadsService.findById(threadId);
+          if (currentThread.status !== 'waiting_for_input') {
             const finalStatus = data.is_error ? 'error' : 'completed';
-            await this.updateChatStatusAndNotify(chatId, finalStatus);
+            await this.updateThreadStatusAndNotify(threadId, finalStatus);
             this.emitToSubscribers(project.sandboxId!, 'agent_status', {
-              chatId,
+              threadId,
               status: finalStatus,
             });
             cleanupHandler();
@@ -1200,23 +1215,23 @@ export class AgentGateway
         }
 
         this.emitToSubscribers(project.sandboxId!, 'agent_message', {
-          chatId,
+          threadId,
           message: msg.data,
         });
       } else if (msg.type === 'claude_exit') {
         const status = msg.code === 0 ? 'completed' : 'error';
-        this.logger.log(`Claude exited for chat ${chatId}: code=${msg.code}`);
+        this.logger.log(`Claude exited for thread ${threadId}: code=${msg.code}`);
 
         // Auto-retry once on crash (non-zero exit) before giving up
         if (status === 'error' && retryCount < 1) {
           retryCount++;
-          this.logger.log(`Agent crash for chat ${chatId}: attempting auto-retry (${retryCount}/1)`);
+          this.logger.log(`Agent crash for thread ${threadId}: attempting auto-retry (${retryCount}/1)`);
           this.emitToSubscribers(project.sandboxId!, 'agent_status', {
-            chatId,
+            threadId,
             status: 'retrying',
           });
           this.emitToSubscribers(project.sandboxId!, 'agent_message', {
-            chatId,
+            threadId,
             message: {
               type: 'system',
               subtype: 'retry',
@@ -1224,85 +1239,86 @@ export class AgentGateway
             },
           });
           try {
-            const freshChat = await this.chatsService.findById(chatId);
+            const freshThread = await this.threadsService.findById(threadId);
             const resumePrompt = receivedFirstMessage
               ? 'Continue from where you left off. You had crashed and were restarted.'
               : prompt;
             await manager.sendPrompt(
               project.sandboxId!,
               resumePrompt,
-              chatId,
-              freshChat.claudeSessionId ?? chat.claudeSessionId,
+              threadId,
+              freshThread.claudeSessionId ?? thread.claudeSessionId,
               mode,
               model,
-              project.agentType,
+              effectiveAgentType,
+              true,
             );
             resetTimeout(AgentGateway.AGENT_ACTIVITY_TIMEOUT_MS);
             return;
           } catch (retryErr) {
-            this.logger.error(`Agent retry failed for chat ${chatId}: ${retryErr}`);
+            this.logger.error(`Agent retry failed for thread ${threadId}: ${retryErr}`);
           }
         }
 
         if (status === 'error' && stderrChunks.length) {
           const stderrHint = stderrChunks.join('').slice(0, 500);
           this.emitToSubscribers(project.sandboxId!, 'agent_error', {
-            chatId,
+            threadId,
             error: `Agent exited with code ${msg.code}\n\n${stderrHint}`,
           });
         }
 
-        const exitChat = await this.chatsService.findById(chatId);
-        if (exitChat.status !== 'waiting_for_input') {
-          await this.updateChatStatusAndNotify(chatId, status);
+        const exitThread = await this.threadsService.findById(threadId);
+        if (exitThread.status !== 'waiting_for_input') {
+          await this.updateThreadStatusAndNotify(threadId, status);
           this.emitToSubscribers(project.sandboxId!, 'agent_status', {
-            chatId,
+            threadId,
             status,
           });
           cleanupHandler();
         }
       } else if (msg.type === 'ask_user_pending') {
-        this.logger.log(`Agent waiting for user input on chat ${chatId}`);
-        await this.updateChatStatusAndNotify(chatId, 'waiting_for_input');
+        this.logger.log(`Agent waiting for user input on thread ${threadId}`);
+        await this.updateThreadStatusAndNotify(threadId, 'waiting_for_input');
         this.emitToSubscribers(project.sandboxId!, 'agent_status', {
-          chatId,
+          threadId,
           status: 'waiting_for_input',
         });
       } else if (msg.type === 'ask_user_resolved') {
-        this.logger.log(`User answered question on chat ${chatId}`);
-        await this.updateChatStatusAndNotify(chatId, 'running');
+        this.logger.log(`User answered question on thread ${threadId}`);
+        await this.updateThreadStatusAndNotify(threadId, 'running');
         this.emitToSubscribers(project.sandboxId!, 'agent_status', {
-          chatId,
+          threadId,
           status: 'running',
         });
       } else if (msg.type === 'claude_error') {
-        this.logger.error(`Claude error for chat ${chatId}: ${msg.error}`);
-        await this.updateChatStatusAndNotify(chatId, 'error');
+        this.logger.error(`Claude error for thread ${threadId}: ${msg.error}`);
+        await this.updateThreadStatusAndNotify(threadId, 'error');
         this.emitToSubscribers(project.sandboxId!, 'agent_error', {
-          chatId,
+          threadId,
           error: msg.error,
         });
         cleanupHandler();
       }
     };
 
-    this.activeHandlers.set(chatId, messageHandler);
+    this.activeHandlers.set(threadId, messageHandler);
     manager.on('message', messageHandler);
 
     this.logger.log(
-      `Sending prompt to sandbox ${project.sandboxId} for chat ${chatId}` +
-        (chat.claudeSessionId ? ` (resuming session ${chat.claudeSessionId})` : ' (new session)'),
+      `Sending prompt to sandbox ${project.sandboxId} for thread ${threadId}` +
+        (thread.claudeSessionId ? ` (resuming session ${thread.claudeSessionId})` : ' (new session)'),
     );
     try {
-      await manager.sendPrompt(project.sandboxId, prompt, chatId, chat.claudeSessionId, mode, model, project.agentType);
-      this.logger.log(`Prompt sent successfully for chat ${chatId}`);
-      client.emit('prompt_accepted', { chatId });
+      await manager.sendPrompt(project.sandboxId, prompt, threadId, thread.claudeSessionId, mode, model, effectiveAgentType);
+      this.logger.log(`Prompt sent successfully for thread ${threadId}`);
+      client.emit('prompt_accepted', { threadId });
     } catch (err) {
       this.logger.error(`Failed to send prompt to sandbox: ${err}`);
       cleanupHandler();
-      await this.updateChatStatusAndNotify(chatId, 'error');
+      await this.updateThreadStatusAndNotify(threadId, 'error');
       client.emit('agent_error', {
-        chatId,
+        threadId,
         error: `Failed to send to sandbox: ${err}`,
       });
     }

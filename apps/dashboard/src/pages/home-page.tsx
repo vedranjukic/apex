@@ -1,53 +1,63 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AppShell } from '../components/layout/app-shell';
 import { ProjectList } from '../components/projects/project-list';
-import { ChatPreviewPanel } from '../components/projects/chat-preview-panel';
+import { ThreadPreviewPanel } from '../components/projects/thread-preview-panel';
 import { openProject } from '../lib/open-project';
 import { resetProjectStores } from '../lib/reset-project-stores';
 import { useAgentSocket } from '../hooks/use-agent-socket';
-import { useChatsStore } from '../stores/tasks-store';
+import { useThreadsStore } from '../stores/tasks-store';
+import { useProjectsStore } from '../stores/projects-store';
 import type { CodeSelection } from '../stores/editor-store';
 
 export function HomePage() {
   const [previewProjectId, setPreviewProjectId] = useState<string | null>(null);
-  const [previewChatId, setPreviewChatId] = useState<string | null>(null);
+  const [previewThreadId, setPreviewThreadId] = useState<string | null>(null);
   const [previewProjectName, setPreviewProjectName] = useState<string>('');
+
+  const projects = useProjectsStore((s) => s.projects);
 
   useEffect(() => {
     resetProjectStores();
   }, []);
 
-  const { sendPrompt, executeChat, sendUserAnswer } = useAgentSocket(
+  useEffect(() => {
+    if (previewProjectId && !projects.some((p) => p.id === previewProjectId)) {
+      setPreviewProjectId(null);
+      setPreviewThreadId(null);
+    }
+  }, [projects, previewProjectId]);
+
+  const { sendPrompt, executeThread, sendUserAnswer } = useAgentSocket(
     previewProjectId ?? undefined,
   );
 
-  const addMessage = useChatsStore((s) => s.addMessage);
+  const addMessage = useThreadsStore((s) => s.addMessage);
 
   const handleOpenProject = useCallback((id: string) => {
     openProject(id);
   }, []);
 
-  const handleSelectChat = useCallback(
-    (projectId: string, chatId: string, projectName: string) => {
-      if (previewProjectId === projectId && previewChatId === chatId) {
+  const handleSelectThread = useCallback(
+    (projectId: string, threadId: string, projectName: string) => {
+      if (previewProjectId === projectId && previewThreadId === threadId) {
         setPreviewProjectId(null);
-        setPreviewChatId(null);
+        setPreviewThreadId(null);
         return;
       }
       setPreviewProjectId(projectId);
-      setPreviewChatId(chatId);
+      setPreviewThreadId(threadId);
       setPreviewProjectName(projectName);
     },
-    [previewProjectId, previewChatId],
+    [previewProjectId, previewThreadId],
   );
 
   const handleClosePreview = useCallback(() => {
     setPreviewProjectId(null);
-    setPreviewChatId(null);
+    setPreviewThreadId(null);
   }, []);
 
   const handleSendPrompt = useCallback(
-    (chatId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => {
+    (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => {
       let fullPrompt = prompt;
       if (files && files.length > 0) {
         fullPrompt = `Referenced files:\n${files.map((f) => `- ${f}`).join('\n')}\n\n${fullPrompt}`;
@@ -63,22 +73,22 @@ export function HomePage() {
       if (snippets && snippets.length > 0) metadata.codeSnippets = snippets;
       addMessage({
         id: crypto.randomUUID(),
-        taskId: chatId,
+        taskId: threadId,
         role: 'user',
         content: [{ type: 'text', text: prompt }],
         metadata: Object.keys(metadata).length > 0 ? metadata : null,
         createdAt: new Date().toISOString(),
       });
-      sendPrompt(chatId, fullPrompt, mode, model);
+      sendPrompt(threadId, fullPrompt, mode, model);
     },
     [sendPrompt, addMessage],
   );
 
-  const handleExecuteChat = useCallback(
-    (chatId: string, mode?: string, model?: string) => {
-      executeChat(chatId, mode, model);
+  const handleExecuteThread = useCallback(
+    (threadId: string, mode?: string, model?: string) => {
+      executeThread(threadId, mode, model);
     },
-    [executeChat],
+    [executeThread],
   );
 
   return (
@@ -86,17 +96,17 @@ export function HomePage() {
       <div className="flex flex-1 overflow-hidden relative">
         <ProjectList
           onOpenProject={handleOpenProject}
-          onSelectChat={handleSelectChat}
+          onSelectThread={handleSelectThread}
         />
-        {previewProjectId && previewChatId && (
-          <ChatPreviewPanel
+        {previewProjectId && previewThreadId && (
+          <ThreadPreviewPanel
             projectId={previewProjectId}
-            chatId={previewChatId}
+            threadId={previewThreadId}
             projectName={previewProjectName}
             onClose={handleClosePreview}
             onSendPrompt={handleSendPrompt}
             onSendSilentPrompt={sendPrompt}
-            onExecuteChat={handleExecuteChat}
+            onExecuteThread={handleExecuteThread}
             onSendUserAnswer={sendUserAnswer}
           />
         )}

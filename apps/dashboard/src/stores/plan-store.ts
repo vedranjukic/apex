@@ -14,7 +14,7 @@ export const PLAN_BLOCK_REGEX = /```plan\s*\n?([\s\S]*?)```/;
 
 export interface Plan {
   id: string;
-  chatId: string;
+  threadId: string;
   title: string;
   filename: string;
   content: string;
@@ -24,14 +24,14 @@ export interface Plan {
 
 interface PlanState {
   plans: Plan[];
-  planChatIds: Set<string>;
+  planThreadIds: Set<string>;
 
-  markChatAsPlan: (chatId: string) => void;
-  isChatPlan: (chatId: string) => boolean;
-  createPlan: (chatId: string, content: string) => Plan | null;
+  markThreadAsPlan: (threadId: string) => void;
+  isThreadPlan: (threadId: string) => boolean;
+  createPlan: (threadId: string, content: string) => Plan | null;
   updatePlanContent: (planId: string, content: string) => void;
   completePlan: (planId: string) => void;
-  getPlanByChatId: (chatId: string) => Plan | undefined;
+  getPlanByThreadId: (threadId: string) => Plan | undefined;
   getPlanById: (planId: string) => Plan | undefined;
 }
 
@@ -80,20 +80,20 @@ export function generateFilename(title: string): string {
 
 export const usePlanStore = create<PlanState>((set, get) => ({
   plans: [],
-  planChatIds: new Set(),
+  planThreadIds: new Set(),
 
-  markChatAsPlan: (chatId) => {
+  markThreadAsPlan: (threadId) => {
     set((state) => {
-      const next = new Set(state.planChatIds);
-      next.add(chatId);
-      return { planChatIds: next };
+      const next = new Set(state.planThreadIds);
+      next.add(threadId);
+      return { planThreadIds: next };
     });
   },
 
-  isChatPlan: (chatId) => get().planChatIds.has(chatId),
+  isThreadPlan: (threadId) => get().planThreadIds.has(threadId),
 
-  createPlan: (chatId, rawContent) => {
-    const existing = get().plans.find((p) => p.chatId === chatId);
+  createPlan: (threadId, rawContent) => {
+    const existing = get().plans.find((p) => p.threadId === threadId);
     if (existing) {
       get().updatePlanContent(existing.id, rawContent);
       return existing;
@@ -105,7 +105,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     const title = extractTitle(content);
     const plan: Plan = {
       id: crypto.randomUUID(),
-      chatId,
+      threadId,
       title,
       filename: generateFilename(title),
       content,
@@ -143,7 +143,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     }));
   },
 
-  getPlanByChatId: (chatId) => get().plans.find((p) => p.chatId === chatId),
+  getPlanByThreadId: (threadId) => get().plans.find((p) => p.threadId === threadId),
 
   getPlanById: (planId) => get().plans.find((p) => p.id === planId),
 }));

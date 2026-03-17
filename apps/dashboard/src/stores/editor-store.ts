@@ -18,7 +18,7 @@ interface EditorState {
   activeFilePath: string | null;
   fileContents: Record<string, string>;
   fileScrollOffsets: Record<string, number>;
-  activeView: 'chat' | 'editor';
+  activeView: 'thread' | 'editor';
   codeSelection: CodeSelection | null;
   /** Plain text that was on the clipboard when codeSelection was set */
   codeSelectionText: string | null;
@@ -36,12 +36,12 @@ interface EditorState {
   setCodeSelection: (sel: CodeSelection | null, text?: string | null) => void;
   markDirty: (path: string) => void;
   markClean: (path: string) => void;
-  showChat: () => void;
+  showThread: () => void;
   reset: () => void;
   applyLayout: (data: {
     openFiles?: OpenFile[];
     activeFilePath?: string | null;
-    activeView?: 'chat' | 'editor';
+    activeView?: 'thread' | 'editor';
     fileScrollOffsets?: Record<string, number>;
   }) => void;
 }
@@ -51,7 +51,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   activeFilePath: null,
   fileContents: {},
   fileScrollOffsets: {},
-  activeView: 'chat',
+  activeView: 'thread',
   codeSelection: null,
   codeSelectionText: null,
   dirtyFiles: new Set<string>(),
@@ -89,7 +89,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       activeFilePath: needSwitch
         ? remaining.length > 0 ? remaining[remaining.length - 1].path : null
         : activeFilePath,
-      activeView: needSwitch && remaining.length === 0 ? 'chat' : get().activeView,
+      activeView: needSwitch && remaining.length === 0 ? 'thread' : get().activeView,
     });
   },
 
@@ -123,7 +123,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return { dirtyFiles: next };
     }),
 
-  showChat: () => set({ activeView: 'chat' }),
+  showThread: () => set({ activeView: 'thread' }),
 
   reset: () =>
     set({
@@ -131,7 +131,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       activeFilePath: null,
       fileContents: {},
       fileScrollOffsets: {},
-      activeView: 'chat',
+      activeView: 'thread',
       codeSelection: null,
       codeSelectionText: null,
       dirtyFiles: new Set<string>(),
@@ -142,7 +142,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({
       openFiles: data.openFiles ?? [],
       activeFilePath: data.activeFilePath ?? null,
-      activeView: data.activeView ?? 'chat',
+      activeView: data.activeView ?? 'thread',
       fileScrollOffsets: data.fileScrollOffsets ?? {},
     }),
 }));

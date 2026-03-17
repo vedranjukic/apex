@@ -1,4 +1,4 @@
-package chat
+package thread
 
 import (
 	"context"
@@ -17,17 +17,17 @@ import (
 	"github.com/fatih/color"
 )
 
-// REPL manages the interactive chat session.
+// REPL manages the interactive thread session.
 type REPL struct {
 	database  *db.DB
 	manager   *sandbox.Manager
 	projectID string
 	project   *types.Project
 
-	activeChatID    string
+	activeThreadID    string
 	activeSessionID string
 	activeModel     string
-	isNewChat       bool
+	isNewThread       bool
 
 	lastCost *types.ClaudeOutput
 
@@ -44,7 +44,7 @@ func NewREPL(database *db.DB, manager *sandbox.Manager, projectID string, projec
 		manager:   manager,
 		projectID: projectID,
 		project:   project,
-		isNewChat: true,
+		isNewThread: true,
 	}
 }
 
@@ -113,16 +113,16 @@ func (r *REPL) RunSinglePrompt(prompt string) error {
 }
 
 // RunCommand executes a single slash command or prompt against an existing
-// chat, then exits. Used for non-interactive `cmd` invocations.
-func (r *REPL) RunCommand(chatID, input string) error {
+// thread, then exits. Used for non-interactive `cmd` invocations.
+func (r *REPL) RunCommand(threadID, input string) error {
 	r.spin = spinner.New(spinner.CharSets[14], 100*time.Millisecond)
 	r.spin.Suffix = " Thinking..."
 	r.spin.Writer = ProgressOut
 
-	if chatID != "" {
-		r.openChatByPrefix(chatID)
-		if r.activeChatID == "" {
-			return fmt.Errorf("chat not found: %s", chatID)
+	if threadID != "" {
+		r.openThreadByPrefix(threadID)
+		if r.activeThreadID == "" {
+			return fmt.Errorf("thread not found: %s", threadID)
 		}
 	}
 
@@ -135,16 +135,16 @@ func (r *REPL) RunCommand(chatID, input string) error {
 	return nil
 }
 
-// openChatByPrefix resolves a chat ID prefix and sets it as active.
-func (r *REPL) openChatByPrefix(idPrefix string) {
-	chats, err := r.database.ListChats(r.projectID)
+// openThreadByPrefix resolves a thread ID prefix and sets it as active.
+func (r *REPL) openThreadByPrefix(idPrefix string) {
+	threads, err := r.database.ListThreads(r.projectID)
 	if err != nil {
 		return
 	}
-	for _, c := range chats {
+	for _, c := range threads {
 		if strings.HasPrefix(c.ID, idPrefix) {
-			r.activeChatID = c.ID
-			r.isNewChat = false
+			r.activeThreadID = c.ID
+			r.isNewThread = false
 			if c.ClaudeSessionID != nil {
 				r.activeSessionID = *c.ClaudeSessionID
 			}
@@ -181,20 +181,20 @@ func (r *REPL) handleCLICommand(input string) (quit bool) {
 		return true
 
 	case ":new", ":n":
-		r.activeChatID = ""
+		r.activeThreadID = ""
 		r.activeSessionID = ""
-		r.isNewChat = true
-		successStyle.Println("  Starting new chat")
+		r.isNewThread = true
+		successStyle.Println("  Starting new thread")
 
-	case ":chats", ":c":
-		r.listChats()
+	case ":threads", ":c":
+		r.listThreads()
 
 	case ":open", ":o":
 		if len(parts) < 2 {
-			errorStyle.Println("  Usage: :open <chat-id>")
+			errorStyle.Println("  Usage: :open <thread-id>")
 			return false
 		}
-		r.openChat(parts[1])
+		r.openThread(parts[1])
 
 	case ":help":
 		r.printCLIHelp()
@@ -208,9 +208,9 @@ func (r *REPL) handleCLICommand(input string) (quit bool) {
 func (r *REPL) printCLIHelp() {
 	fmt.Println()
 	dimStyle.Println("  Session commands (: prefix)")
-	fmt.Println("    :new, :n          Start a new chat")
-	fmt.Println("    :chats, :c        List chats for this project")
-	fmt.Println("    :open, :o <id>    Switch to an existing chat")
+	fmt.Println("    :new, :n          Start a new thread")
+	fmt.Println("    :threads, :c      List threads for this project")
+	fmt.Println("    :open, :o <id>    Switch to an existing thread")
 	fmt.Println("    :quit, :q         Exit")
 	fmt.Println("    :help             Show this help")
 	fmt.Println()
@@ -283,7 +283,7 @@ func (r *REPL) handleSlashCommand(input string) (quit bool) {
 		dimStyle.Println("  Tip: use /diff to see changes and /undo to revert")
 
 	case "/resume":
-		dimStyle.Println("  Sessions are resumed automatically within a chat. Use :open <id> to switch chats.")
+		dimStyle.Println("  Sessions are resumed automatically within a thread. Use :open <id> to switch threads.")
 
 	default:
 		errorStyle.Printf("  Unknown command: %s (type /help)\n", cmd)
@@ -320,11 +320,11 @@ func (r *REPL) showStatus() {
 	if r.activeModel != "" {
 		fmt.Printf("  Model:     %s\n", r.activeModel)
 	}
-	chatLabel := "(new)"
-	if r.activeChatID != "" {
-		chatLabel = r.activeChatID[:8]
+	threadLabel := "(new)"
+	if r.activeThreadID != "" {
+		threadLabel = r.activeThreadID[:8]
 	}
-	fmt.Printf("  Chat:      %s\n", chatLabel)
+	fmt.Printf("  Thread:    %s\n", threadLabel)
 	sessionLabel := "(none)"
 	if r.activeSessionID != "" {
 		sessionLabel = r.activeSessionID[:min(len(r.activeSessionID), 12)] + "…"
@@ -458,72 +458,86 @@ func (r *REPL) projectDir() string {
 	return "/home/daytona"
 }
 
-// ── Chat operations ─────────────────────────────────────
+// ── Thread operations ─────────────────────────────────────
 
-func (r *REPL) listChats() {
-	chats, err := r.database.ListChats(r.projectID)
+func (r *REPL) listThreads() {
+	threads, err := r.database.ListThreads(r.projectID)
 	if err != nil {
-		errorStyle.Printf("  Failed to list chats: %v\n", err)
+		errorStyle.Printf("  Failed to list threads: %v\n", err)
 		return
 	}
-	if len(chats) == 0 {
-		dimStyle.Println("  No chats yet")
+	if len(threads) == 0 {
+		dimStyle.Println("  No threads yet")
 		return
 	}
 
 	fmt.Println()
-	for _, c := range chats {
+	for _, c := range threads {
 		marker := " "
-		if c.ID == r.activeChatID {
+		if c.ID == r.activeThreadID {
 			marker = "*"
 		}
 		status := statusIndicator(c.Status)
 		dimID := dimStyle.Sprintf("%.8s", c.ID)
-		fmt.Printf("  %s %s %s  %s\n", marker, status, dimID, c.Title)
+		agentLabel := ""
+		if c.AgentType != nil && *c.AgentType != "" {
+			switch *c.AgentType {
+			case "claude_code":
+				agentLabel = dimStyle.Sprint("[claude]")
+			case "open_code":
+				agentLabel = dimStyle.Sprint("[opencode]")
+			case "codex":
+				agentLabel = dimStyle.Sprint("[codex]")
+			default:
+				agentLabel = dimStyle.Sprintf("[%s]", *c.AgentType)
+			}
+			agentLabel = " " + agentLabel
+		}
+		fmt.Printf("  %s %s %s%s  %s\n", marker, status, dimID, agentLabel, c.Title)
 	}
 	fmt.Println()
 }
 
-func (r *REPL) openChat(idPrefix string) {
-	chats, err := r.database.ListChats(r.projectID)
+func (r *REPL) openThread(idPrefix string) {
+	threads, err := r.database.ListThreads(r.projectID)
 	if err != nil {
-		errorStyle.Printf("  Failed to list chats: %v\n", err)
+		errorStyle.Printf("  Failed to list threads: %v\n", err)
 		return
 	}
 
-	var match *db.ChatRow
-	for _, c := range chats {
+	var match *db.ThreadRow
+	for _, c := range threads {
 		if strings.HasPrefix(c.ID, idPrefix) {
-			chatCopy := c
-			match = &chatCopy
+			threadCopy := c
+			match = &threadCopy
 			break
 		}
 	}
 
 	if match == nil {
-		errorStyle.Printf("  No chat found matching: %s\n", idPrefix)
+		errorStyle.Printf("  No thread found matching: %s\n", idPrefix)
 		return
 	}
 
-	r.activeChatID = match.ID
-	r.isNewChat = false
+	r.activeThreadID = match.ID
+	r.isNewThread = false
 	if match.ClaudeSessionID != nil {
 		r.activeSessionID = *match.ClaudeSessionID
 	} else {
 		r.activeSessionID = ""
 	}
-	successStyle.Printf("  Opened chat: %s\n", match.Title)
+	successStyle.Printf("  Opened thread: %s\n", match.Title)
 
 	r.showHistory()
 }
 
 func (r *REPL) showHistory() {
-	if r.activeChatID == "" {
-		dimStyle.Println("  No active chat")
+	if r.activeThreadID == "" {
+		dimStyle.Println("  No active thread")
 		return
 	}
 
-	rows, err := r.database.GetMessages(r.activeChatID)
+	rows, err := r.database.GetMessages(r.activeThreadID)
 	if err != nil {
 		errorStyle.Printf("  Failed to load messages: %v\n", err)
 		return
@@ -535,7 +549,7 @@ func (r *REPL) showHistory() {
 	}
 
 	msgs := RowsToMessages(rows)
-	RenderChatHistory(msgs)
+	RenderThreadHistory(msgs)
 }
 
 // ── Prompt handling ─────────────────────────────────────
@@ -545,39 +559,39 @@ func (r *REPL) handleUserInput(input string) {
 	r.streaming = true
 	r.mu.Unlock()
 
-	chatID := r.activeChatID
+	threadID := r.activeThreadID
 	sessionID := r.activeSessionID
 
-	if r.isNewChat || chatID == "" {
-		chatRow, err := r.database.CreateChat(r.projectID, input)
+	if r.isNewThread || threadID == "" {
+		threadRow, err := r.database.CreateThread(r.projectID, input)
 		if err != nil {
-			errorStyle.Fprintf(ProgressOut, "  Failed to create chat: %v\n", err)
+			errorStyle.Fprintf(ProgressOut, "  Failed to create thread: %v\n", err)
 			r.mu.Lock()
 			r.streaming = false
 			r.mu.Unlock()
 			return
 		}
-		chatID = chatRow.ID
-		r.activeChatID = chatID
-		r.isNewChat = false
+		threadID = threadRow.ID
+		r.activeThreadID = threadID
+		r.isNewThread = false
 		sessionID = ""
 
 		contentJSON := db.MarshalJSON([]types.ContentBlock{{Type: "text", Text: input}})
-		if err := r.database.AddMessage(chatID, "user", contentJSON, nil); err != nil {
+		if err := r.database.AddMessage(threadID, "user", contentJSON, nil); err != nil {
 			errorStyle.Fprintf(ProgressOut, "  Failed to save message: %v\n", err)
 		}
 	} else {
 		contentJSON := db.MarshalJSON([]types.ContentBlock{{Type: "text", Text: input}})
-		if err := r.database.AddMessage(chatID, "user", contentJSON, nil); err != nil {
+		if err := r.database.AddMessage(threadID, "user", contentJSON, nil); err != nil {
 			errorStyle.Fprintf(ProgressOut, "  Failed to save message: %v\n", err)
 		}
 	}
 
-	r.database.UpdateChatStatus(chatID, "running")
+	r.database.UpdateThreadStatus(threadID, "running")
 
 	r.spin.Start()
 
-	if err := r.manager.SendPrompt(chatID, input, sessionID, "", r.project.AgentType); err != nil {
+	if err := r.manager.SendPrompt(threadID, input, sessionID, "", r.project.AgentType); err != nil {
 		r.spin.Stop()
 		errorStyle.Fprintf(ProgressOut, "  Failed to send prompt: %v\n", err)
 		r.mu.Lock()
@@ -586,10 +600,10 @@ func (r *REPL) handleUserInput(input string) {
 		return
 	}
 
-	r.processBridgeMessages(chatID)
+	r.processBridgeMessages(threadID)
 }
 
-func (r *REPL) processBridgeMessages(chatID string) {
+func (r *REPL) processBridgeMessages(threadID string) {
 	messages := r.manager.Messages()
 	done := r.manager.Done()
 
@@ -605,13 +619,13 @@ func (r *REPL) processBridgeMessages(chatID string) {
 				return
 			}
 
-			if msg.ChatID != "" && msg.ChatID != chatID {
+			if msg.ThreadID != "" && msg.ThreadID != threadID {
 				continue
 			}
 
 			switch msg.Type {
 			case "claude_message":
-				r.handleClaudeMessage(chatID, msg.Data)
+				r.handleClaudeMessage(threadID, msg.Data)
 
 			case "claude_exit":
 				r.spin.Stop()
@@ -619,7 +633,7 @@ func (r *REPL) processBridgeMessages(chatID string) {
 				if msg.Code != nil && *msg.Code != 0 {
 					status = "error"
 				}
-				r.database.UpdateChatStatus(chatID, status)
+				r.database.UpdateThreadStatus(threadID, status)
 				r.mu.Lock()
 				r.streaming = false
 				r.mu.Unlock()
@@ -627,7 +641,7 @@ func (r *REPL) processBridgeMessages(chatID string) {
 
 			case "claude_error":
 				r.spin.Stop()
-				r.database.UpdateChatStatus(chatID, "error")
+				r.database.UpdateThreadStatus(threadID, "error")
 				RenderError(msg.Error)
 				r.mu.Lock()
 				r.streaming = false
@@ -639,11 +653,11 @@ func (r *REPL) processBridgeMessages(chatID string) {
 
 			case "ask_user_pending":
 				r.spin.Stop()
-				r.database.UpdateChatStatus(chatID, "waiting_for_input")
-				r.promptForAnswer(chatID, msg.QuestionID)
+				r.database.UpdateThreadStatus(threadID, "waiting_for_input")
+				r.promptForAnswer(threadID, msg.QuestionID)
 
 			case "ask_user_resolved":
-				r.database.UpdateChatStatus(chatID, "running")
+				r.database.UpdateThreadStatus(threadID, "running")
 			}
 
 		case <-done:
@@ -657,7 +671,7 @@ func (r *REPL) processBridgeMessages(chatID string) {
 	}
 }
 
-func (r *REPL) handleClaudeMessage(chatID string, raw json.RawMessage) {
+func (r *REPL) handleClaudeMessage(threadID string, raw json.RawMessage) {
 	output, err := types.ParseClaudeOutput(raw)
 	if err != nil {
 		return
@@ -668,7 +682,7 @@ func (r *REPL) handleClaudeMessage(chatID string, raw json.RawMessage) {
 		r.spin.Stop()
 		if output.Subtype == "init" && output.SessionID != "" {
 			r.activeSessionID = output.SessionID
-			r.database.UpdateChatSessionID(chatID, output.SessionID)
+			r.database.UpdateThreadSessionID(threadID, output.SessionID)
 			if output.Model != "" {
 				r.activeModel = output.Model
 			}
@@ -690,7 +704,7 @@ func (r *REPL) handleClaudeMessage(chatID string, raw json.RawMessage) {
 				"stopReason": output.Message.StopReason,
 				"usage":      output.Message.Usage,
 			})
-			r.database.AddMessage(chatID, "assistant", contentJSON, metaJSON)
+			r.database.AddMessage(threadID, "assistant", contentJSON, metaJSON)
 
 			fmt.Fprintln(ProgressOut)
 			RenderAssistantBlocks(output.Message.Content)
@@ -701,7 +715,7 @@ func (r *REPL) handleClaudeMessage(chatID string, raw json.RawMessage) {
 
 		if output.SessionID != "" && r.activeSessionID == "" {
 			r.activeSessionID = output.SessionID
-			r.database.UpdateChatSessionID(chatID, output.SessionID)
+			r.database.UpdateThreadSessionID(threadID, output.SessionID)
 		}
 
 		r.lastCost = output
@@ -722,13 +736,13 @@ func (r *REPL) handleClaudeMessage(chatID string, raw json.RawMessage) {
 				"outputTokens": output.Usage.OutputTokens,
 			})
 		}
-		r.database.AddMessage(chatID, "system", "[]", metaJSON)
+		r.database.AddMessage(threadID, "system", "[]", metaJSON)
 
 		isErr := output.IsError != nil && *output.IsError
 		if isErr {
-			r.database.UpdateChatStatus(chatID, "error")
+			r.database.UpdateThreadStatus(threadID, "error")
 		} else {
-			r.database.UpdateChatStatus(chatID, "completed")
+			r.database.UpdateThreadStatus(threadID, "completed")
 		}
 
 		RenderResult(*output)
@@ -777,7 +791,7 @@ func (r *REPL) renderAskUserQuestion(block types.ContentBlock) {
 	}
 }
 
-func (r *REPL) promptForAnswer(chatID string, questionID string) {
+func (r *REPL) promptForAnswer(threadID string, questionID string) {
 	fmt.Fprintln(ProgressOut)
 	r.rl.SetPrompt(color.New(color.FgCyan).Sprint("  answer> "))
 	answer, err := r.rl.Readline()
@@ -786,7 +800,7 @@ func (r *REPL) promptForAnswer(chatID string, questionID string) {
 		return
 	}
 
-	if err := r.manager.SendUserAnswer(chatID, questionID, strings.TrimSpace(answer)); err != nil {
+	if err := r.manager.SendUserAnswer(threadID, questionID, strings.TrimSpace(answer)); err != nil {
 		errorStyle.Fprintf(ProgressOut, "  Failed to send answer: %v\n", err)
 		return
 	}

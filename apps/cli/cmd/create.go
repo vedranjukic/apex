@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/apex/cli/internal/chat"
+	"github.com/apex/cli/internal/thread"
 	"github.com/apex/cli/internal/db"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -20,9 +20,9 @@ var (
 
 var createCmd = &cobra.Command{
 	Use:   "create [project-name]",
-	Short: "Create a new project with a sandbox and start a chat session",
+	Short: "Create a new project with a sandbox and start a thread session",
 	Long: `Create a named project, provision a Daytona sandbox, and open an
-interactive chat session.
+interactive thread session.
 
 When run without arguments, prompts for project details first.
 Use --non-interactive to create the project and exit without opening a session.`,
@@ -82,12 +82,12 @@ Use --non-interactive to create the project and exit without opening a session.`
 			fmt.Printf("  Status:  %s\n", projectRow.Status)
 			fmt.Printf("  Created: %s\n", projectRow.CreatedAt)
 			fmt.Println()
-			color.New(color.Faint).Fprintf(chat.ProgressOut, "  Open with: apex open %s\n\n", name)
+			color.New(color.Faint).Fprintf(thread.ProgressOut, "  Open with: apex open %s\n\n", name)
 			return nil
 		}
 
 		project := rowToProject(projectRow)
-		repl := chat.NewREPL(database, manager, project.ID, project)
+		repl := thread.NewREPL(database, manager, project.ID, project)
 		return repl.Run()
 	},
 }

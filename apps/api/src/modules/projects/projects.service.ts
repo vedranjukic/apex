@@ -125,14 +125,14 @@ export class ProjectsService implements OnModuleInit {
     return this.repo.find({
       where: { userId },
       order: { createdAt: 'DESC' },
-      relations: ['chats'],
+      relations: ['threads'],
     });
   }
 
   async findById(id: string): Promise<ProjectEntity> {
     const project = await this.repo.findOne({
       where: { id },
-      relations: ['chats'],
+      relations: ['threads'],
     });
     if (!project) throw new NotFoundException(`Project ${id} not found`);
     return project;
@@ -344,7 +344,7 @@ export class ProjectsService implements OnModuleInit {
         { forkedFromId: rootId },
       ],
       order: { createdAt: 'ASC' },
-      relations: ['chats'],
+      relations: ['threads'],
     });
   }
 

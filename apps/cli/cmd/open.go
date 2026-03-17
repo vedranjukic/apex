@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/briandowns/spinner"
-	"github.com/apex/cli/internal/chat"
+	"github.com/apex/cli/internal/thread"
 	"github.com/apex/cli/internal/db"
 	"github.com/apex/cli/internal/sandbox"
 	"github.com/apex/cli/internal/types"
@@ -92,11 +92,11 @@ For throwaway one-shot tasks, use "apex run" instead.`,
 		defer manager.Close()
 
 		if openStream {
-			chat.ProgressOut = os.Stderr
+			thread.ProgressOut = os.Stderr
 		}
 
 		project := rowToProject(projectRow)
-		repl := chat.NewREPL(database, manager, project.ID, project)
+		repl := thread.NewREPL(database, manager, project.ID, project)
 
 		if openPrompt != "" {
 			return repl.RunSinglePrompt(openPrompt)
@@ -153,7 +153,7 @@ func createProjectWithSandbox(database *db.DB, name, gitRepoURL string) (*db.Pro
 
 	s.Stop()
 	database.UpdateProjectStatus(projectRow.ID, "running", &sandboxID, nil)
-	color.New(color.FgGreen).Fprintln(chat.ProgressOut, "Sandbox is ready!")
+	color.New(color.FgGreen).Fprintln(thread.ProgressOut, "Sandbox is ready!")
 
 	projectRow, _ = database.GetProject(projectRow.ID)
 	return projectRow, manager, nil
@@ -195,7 +195,7 @@ func waitForSandbox(database *db.DB, row **db.ProjectRow) error {
 
 // cleanupEphemeral tears down the sandbox and removes the project record.
 func cleanupEphemeral(database *db.DB, manager *sandbox.Manager, row *db.ProjectRow) {
-	fmt.Fprintln(chat.ProgressOut)
+	fmt.Fprintln(thread.ProgressOut)
 	s := spinner.New(spinner.CharSets[14], 100*time.Millisecond)
 	s.Suffix = " Destroying ephemeral sandbox..."
 	s.Writer = os.Stderr
@@ -205,13 +205,13 @@ func cleanupEphemeral(database *db.DB, manager *sandbox.Manager, row *db.Project
 		ctx := context.Background()
 		if err := manager.DeleteSandbox(ctx, *row.SandboxID); err != nil {
 			s.Stop()
-			color.New(color.FgYellow).Fprintf(chat.ProgressOut, "Warning: failed to delete sandbox: %v\n", err)
+			color.New(color.FgYellow).Fprintf(thread.ProgressOut, "Warning: failed to delete sandbox: %v\n", err)
 		}
 	}
 
 	database.DeleteProject(row.ID)
 	s.Stop()
-	color.New(color.FgGreen).Fprintln(chat.ProgressOut, "Ephemeral sandbox destroyed.")
+	color.New(color.FgGreen).Fprintln(thread.ProgressOut, "Ephemeral sandbox destroyed.")
 }
 
 // resolveProject finds a project by exact ID or by name prefix match.

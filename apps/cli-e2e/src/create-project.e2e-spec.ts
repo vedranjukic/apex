@@ -97,7 +97,7 @@ describeE2e('CLI create project E2E (real sandbox)', () => {
     }
   }, 6 * 60 * 1000);
 
-  it('should create project, create chat, and execute simple prompt', async () => {
+  it('should create project, create thread, and execute simple prompt', async () => {
     const env = {
       ...process.env,
       APEX_DB_PATH: dbPath,
@@ -110,7 +110,7 @@ describeE2e('CLI create project E2E (real sandbox)', () => {
     );
     expect(createResult.status).toBe(0);
 
-    // 2. Create chat and run prompt (apex open -p creates a new chat)
+    // 2. Create thread and run prompt (apex open -p creates a new thread)
     const promptResult = spawnSync(
       apexBin,
       ['open', projectName, '-p', 'how are you?', '-s'],
@@ -123,7 +123,7 @@ describeE2e('CLI create project E2E (real sandbox)', () => {
     expect(output).toMatch(/\S/);
   }, 4 * 60 * 1000);
 
-  it('should send prompt via apex cmd to new chat', async () => {
+  it('should send prompt via apex cmd to new thread', async () => {
     const env = {
       ...process.env,
       APEX_DB_PATH: dbPath,
@@ -142,7 +142,7 @@ describeE2e('CLI create project E2E (real sandbox)', () => {
     }
     expect(createResult.status).toBe(0);
 
-    // 2. Send prompt via cmd (new = start fresh chat)
+    // 2. Send prompt via cmd (new = start fresh thread)
     const cmdResult = spawnSync(
       apexBin,
       ['cmd', projectName, 'new', 'how are you?'],
@@ -154,13 +154,13 @@ describeE2e('CLI create project E2E (real sandbox)', () => {
     expect(output).toMatch(/\S/);
   }, 4 * 60 * 1000);
 
-  it('should send prompt via apex cmd to existing chat', async () => {
+  it('should send prompt via apex cmd to existing thread', async () => {
     const env = {
       ...process.env,
       APEX_DB_PATH: dbPath,
     };
     const Database = require('better-sqlite3');
-    // 1. Create project and first chat
+    // 1. Create project and first thread
     const createResult = spawnSync(
       apexBin,
       ['create', projectName, '--non-interactive'],
@@ -181,13 +181,13 @@ describeE2e('CLI create project E2E (real sandbox)', () => {
       )
       .get(projectName) as { id: string } | undefined;
     db.close();
-    if (!row) throw new Error('No chat found');
-    const chatIdPrefix = row.id.slice(0, 8);
+    if (!row) throw new Error('No thread found');
+    const threadIdPrefix = row.id.slice(0, 8);
 
-    // 2. Send follow-up via cmd to existing chat
+    // 2. Send follow-up via cmd to existing thread
     const cmdResult = spawnSync(
       apexBin,
-      ['cmd', projectName, chatIdPrefix, 'what did I just ask?'],
+      ['cmd', projectName, threadIdPrefix, 'what did I just ask?'],
       { encoding: 'utf-8', env }
     );
     const output = cmdResult.stdout + cmdResult.stderr;

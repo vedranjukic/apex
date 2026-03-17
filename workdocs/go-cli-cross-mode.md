@@ -52,7 +52,7 @@ When changing the bridge protocol or sandbox interaction:
 
 When agents need to ask the user a question, they use the MCP `ask_user` tool (native `AskUserQuestion` is disallowed). The bridge emits `ask_user_pending` / `ask_user_resolved` messages. Both clients must handle these:
 
-- **NestJS API:** Gateway sets chat status to `waiting_for_input`, emits `agent_status` via Socket.io. Dashboard shows `AskQuestionBlock`. Guards prevent `result`/`claude_exit` from overwriting `waiting_for_input`.
-- **Go CLI TUI:** `ProcessBridgeToDBWithCallbacks` in `bridge.go` handles `ask_user_pending` / `ask_user_resolved`. The TUI uses an `answerCh` channel to send answers from the UI thread to the bridge goroutine (which owns the active manager connection). The TUI tracks `streamingChatID` (not a boolean) so users can switch between chats while one is streaming.
+- **NestJS API:** Gateway sets thread status to `waiting_for_input`, emits `agent_status` via Socket.io. Dashboard shows `AskQuestionBlock`. Guards prevent `result`/`claude_exit` from overwriting `waiting_for_input`.
+- **Go CLI TUI:** `ProcessBridgeToDBWithCallbacks` in `bridge.go` handles `ask_user_pending` / `ask_user_resolved`. The TUI uses an `answerCh` channel to send answers from the UI thread to the bridge goroutine (which owns the active manager connection). The TUI tracks `streamingThreadID` (not a boolean) so users can switch between threads while one is streaming.
 
 Status indicators for `waiting_for_input`: CLI uses yellow `?`, dashboard uses yellow `MessageCircleQuestion` icon.

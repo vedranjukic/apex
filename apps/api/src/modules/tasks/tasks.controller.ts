@@ -8,13 +8,17 @@ import {
   Body,
   Query,
 } from '@nestjs/common';
-import { IsString, IsNotEmpty, IsIn } from 'class-validator';
-import { ChatsService } from './tasks.service';
+import { IsString, IsNotEmpty, IsIn, IsOptional } from 'class-validator';
+import { ThreadsService } from './tasks.service';
 
-class CreateChatBody {
+class CreateThreadBody {
   @IsString()
   @IsNotEmpty()
   prompt!: string;
+
+  @IsString()
+  @IsOptional()
+  agentType?: string;
 }
 
 class UpdateStatusBody {
@@ -24,57 +28,57 @@ class UpdateStatusBody {
 }
 
 @Controller()
-export class ChatsController {
-  constructor(private readonly chatsService: ChatsService) {}
+export class ThreadsController {
+  constructor(private readonly threadsService: ThreadsService) {}
 
-  /** GET /api/projects/:projectId/chats */
-  @Get('projects/:projectId/chats')
+  /** GET /api/projects/:projectId/threads */
+  @Get('projects/:projectId/threads')
   async listByProject(
     @Param('projectId') projectId: string,
     @Query('search') search?: string,
   ) {
-    const chats = await this.chatsService.findByProject(projectId);
+    const threads = await this.threadsService.findByProject(projectId);
     if (search) {
       const q = search.toLowerCase();
-      return chats.filter((c) => c.title.toLowerCase().includes(q));
+      return threads.filter((c) => c.title.toLowerCase().includes(q));
     }
-    return chats;
+    return threads;
   }
 
-  /** POST /api/projects/:projectId/chats */
-  @Post('projects/:projectId/chats')
+  /** POST /api/projects/:projectId/threads */
+  @Post('projects/:projectId/threads')
   async create(
     @Param('projectId') projectId: string,
-    @Body() body: CreateChatBody,
+    @Body() body: CreateThreadBody,
   ) {
-    return this.chatsService.create(projectId, body);
+    return this.threadsService.create(projectId, body);
   }
 
-  /** GET /api/chats/:id – includes messages */
-  @Get('chats/:id')
+  /** GET /api/threads/:id – includes messages */
+  @Get('threads/:id')
   async findOne(@Param('id') id: string) {
-    return this.chatsService.findById(id);
+    return this.threadsService.findById(id);
   }
 
-  /** GET /api/chats/:id/messages */
-  @Get('chats/:id/messages')
+  /** GET /api/threads/:id/messages */
+  @Get('threads/:id/messages')
   async messages(@Param('id') id: string) {
-    return this.chatsService.getMessages(id);
+    return this.threadsService.getMessages(id);
   }
 
-  /** PATCH /api/chats/:id/status */
-  @Patch('chats/:id/status')
+  /** PATCH /api/threads/:id/status */
+  @Patch('threads/:id/status')
   async updateStatus(
     @Param('id') id: string,
     @Body() body: UpdateStatusBody,
   ) {
-    return this.chatsService.updateStatus(id, body.status);
+    return this.threadsService.updateStatus(id, body.status);
   }
 
-  /** DELETE /api/chats/:id */
-  @Delete('chats/:id')
+  /** DELETE /api/threads/:id */
+  @Delete('threads/:id')
   async remove(@Param('id') id: string) {
-    await this.chatsService.remove(id);
+    await this.threadsService.remove(id);
     return { ok: true };
   }
 }

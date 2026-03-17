@@ -83,56 +83,56 @@ export interface BridgeReadyMessage {
 
 export interface BridgeClaudeMessage {
   type: 'claude_message';
-  chatId?: string;
+  threadId?: string;
   data: ClaudeMessage;
 }
 
 export interface BridgeClaudeStdout {
   type: 'claude_stdout';
-  chatId?: string;
+  threadId?: string;
   data: string;
 }
 
 export interface BridgeClaudeStderr {
   type: 'claude_stderr';
-  chatId?: string;
+  threadId?: string;
   data: string;
 }
 
 export interface BridgeClaudeExit {
   type: 'claude_exit';
-  chatId?: string;
+  threadId?: string;
   code: number;
 }
 
 export interface BridgeClaudeInput {
   type: 'claude_input';
-  chatId?: string;
+  threadId?: string;
   data: string;
 }
 
 export interface BridgeClaudeError {
   type: 'claude_error';
-  chatId?: string;
+  threadId?: string;
   error: string;
 }
 
 export interface BridgeClaudeUserAnswer {
   type: 'claude_user_answer';
-  chatId: string;
+  threadId: string;
   toolUseId: string;
   answer: string;
 }
 
 export interface BridgeAskUserPending {
   type: 'ask_user_pending';
-  chatId: string;
+  threadId: string;
   questionId: string;
 }
 
 export interface BridgeAskUserResolved {
   type: 'ask_user_resolved';
-  chatId: string;
+  threadId: string;
   questionId: string;
 }
 
@@ -252,7 +252,7 @@ export interface LayoutData {
   terminalPanelOpen: boolean;
   terminalPanelHeight: number;
   activeTerminalId: string | null;
-  activeChatId: string | null;
+  activeThreadId: string | null;
 }
 
 export interface BridgeLayoutSaved {

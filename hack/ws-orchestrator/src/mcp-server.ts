@@ -130,19 +130,19 @@ ALWAYS split into at least Frontend + Backend:
 }
 \`\`\`
 
-### User says: "Build a chat app"
+### User says: "Build a messaging app"
 \`\`\`json
 {
   "tasks": [
     {
       "id": "backend",
       "name": "Backend",
-      "prompt": "Create Express.js chat API in /home/daytona/backend:\\n1. Endpoints: GET /messages, POST /messages (author, text, timestamp)\\n2. In-memory with sample messages\\n3. CORS, port 3001, start and verify"
+      "prompt": "Create Express.js messaging API in /home/daytona/backend:\\n1. Endpoints: GET /messages, POST /messages (author, text, timestamp)\\n2. In-memory with sample messages\\n3. CORS, port 3001, start and verify"
     },
     {
       "id": "frontend",
       "name": "Frontend",
-      "prompt": "Create React chat UI in /home/daytona/frontend:\\n1. Vite + React\\n2. MessageList with auto-scroll, MessageInput\\n3. Poll http://localhost:3001/messages every 2s\\n4. Chat bubbles UI, dark theme\\n5. Port 5173"
+      "prompt": "Create React messaging UI in /home/daytona/frontend:\\n1. Vite + React\\n2. MessageList with auto-scroll, MessageInput\\n3. Poll http://localhost:3001/messages every 2s\\n4. Message bubbles UI, dark theme\\n5. Port 5173"
     }
   ]
 }

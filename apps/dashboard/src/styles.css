@@ -9,7 +9,7 @@
   --color-activity-bar-hover: var(--t-activity-bar-hover);
   --color-surface: var(--t-surface);
   --color-surface-secondary: var(--t-surface-secondary);
-  --color-surface-chat: var(--t-surface-chat);
+  --color-surface-thread: var(--t-surface-thread);
   --color-border: var(--t-border);
   --color-primary: var(--t-primary);
   --color-primary-hover: var(--t-primary-hover);
@@ -38,7 +38,7 @@
   --t-activity-bar-hover: #151c2c;
   --t-surface: #1e2132;
   --t-surface-secondary: #171a2a;
-  --t-surface-chat: #242840;
+  --t-surface-thread: #242840;
   --t-border: #2e3348;
   --t-primary: #6366f1;
   --t-primary-hover: #4f46e5;
@@ -67,7 +67,7 @@
   --t-activity-bar-hover: #3c3c3c;
   --t-surface: #1e1e1e;
   --t-surface-secondary: #252526;
-  --t-surface-chat: #2d2d2d;
+  --t-surface-thread: #2d2d2d;
   --t-border: #3c3c3c;
   --t-primary: #6366f1;
   --t-primary-hover: #4f46e5;
@@ -96,7 +96,7 @@
   --t-activity-bar-hover: #383838;
   --t-surface: #ffffff;
   --t-surface-secondary: #f5f5f5;
-  --t-surface-chat: #f0f0f0;
+  --t-surface-thread: #f0f0f0;
   --t-border: #e0e0e0;
   --t-primary: #6366f1;
   --t-primary-hover: #4f46e5;
@@ -270,7 +270,7 @@ body {
   font-weight: 600;
 }
 
-/* Tighter spacing for inline markdown in chat messages */
+/* Tighter spacing for inline markdown in thread messages */
 .inline-markdown > *:last-child {
   margin-bottom: 0;
 }

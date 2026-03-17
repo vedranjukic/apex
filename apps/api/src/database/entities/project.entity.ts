@@ -76,5 +76,5 @@ export class ProjectEntity {
   user: UserEntity;
 
   @OneToMany(() => TaskEntity, (t) => t.project)
-  chats: TaskEntity[];
+  threads: TaskEntity[];
 }

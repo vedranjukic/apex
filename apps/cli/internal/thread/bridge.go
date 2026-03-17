@@ -1,4 +1,4 @@
-package chat
+package thread
 
 import (
 	"encoding/json"
@@ -20,11 +20,11 @@ func isSyntheticAskUserMessage(content []types.ContentBlock) bool {
 
 // OnContentUpdated is called whenever an assistant message is written to the DB.
 // Used by the TUI to refresh the content panel in real time.
-type OnContentUpdated func(chatID string)
+type OnContentUpdated func(threadID string)
 
 // OnAskUser is called when the agent asks a question via ask_user.
 // questionID is the tool_use ID needed to send the answer back.
-type OnAskUser func(chatID, questionID string)
+type OnAskUser func(threadID, questionID string)
 
 // BridgeCallbacks groups optional callbacks for ProcessBridgeToDB.
 type BridgeCallbacks struct {
@@ -34,14 +34,14 @@ type BridgeCallbacks struct {
 
 // ProcessBridgeToDB processes bridge messages until claude_exit, updating only
 // the database (no stdout output). Used by the dashboard TUI.
-func ProcessBridgeToDB(database *db.DB, manager *sandbox.Manager, chatID string, onContentUpdated OnContentUpdated) {
-	ProcessBridgeToDBWithCallbacks(database, manager, chatID, BridgeCallbacks{
+func ProcessBridgeToDB(database *db.DB, manager *sandbox.Manager, threadID string, onContentUpdated OnContentUpdated) {
+	ProcessBridgeToDBWithCallbacks(database, manager, threadID, BridgeCallbacks{
 		OnContentUpdated: onContentUpdated,
 	})
 }
 
 // ProcessBridgeToDBWithCallbacks processes bridge messages with full callback support.
-func ProcessBridgeToDBWithCallbacks(database *db.DB, manager *sandbox.Manager, chatID string, cb BridgeCallbacks) {
+func ProcessBridgeToDBWithCallbacks(database *db.DB, manager *sandbox.Manager, threadID string, cb BridgeCallbacks) {
 	messages := manager.Messages()
 	done := manager.Done()
 	var sessionID string
@@ -52,29 +52,29 @@ func ProcessBridgeToDBWithCallbacks(database *db.DB, manager *sandbox.Manager, c
 			if !ok {
 				return
 			}
-			if msg.ChatID != "" && msg.ChatID != chatID {
+			if msg.ThreadID != "" && msg.ThreadID != threadID {
 				continue
 			}
 			switch msg.Type {
 			case "claude_message":
-				handleClaudeMessageToDB(database, chatID, &sessionID, msg.Data, cb.OnContentUpdated)
+				handleClaudeMessageToDB(database, threadID, &sessionID, msg.Data, cb.OnContentUpdated)
 			case "claude_exit":
 				status := "completed"
 				if msg.Code != nil && *msg.Code != 0 {
 					status = "error"
 				}
-				database.UpdateChatStatus(chatID, status)
+				database.UpdateThreadStatus(threadID, status)
 				return
 			case "claude_error":
-				database.UpdateChatStatus(chatID, "error")
+				database.UpdateThreadStatus(threadID, "error")
 				return
 			case "ask_user_pending":
-				database.UpdateChatStatus(chatID, "waiting_for_input")
+				database.UpdateThreadStatus(threadID, "waiting_for_input")
 				if cb.OnAskUser != nil {
-					cb.OnAskUser(chatID, msg.QuestionID)
+					cb.OnAskUser(threadID, msg.QuestionID)
 				}
 			case "ask_user_resolved":
-				database.UpdateChatStatus(chatID, "running")
+				database.UpdateThreadStatus(threadID, "running")
 			case "claude_stderr":
 				// skip
 			}
@@ -84,7 +84,7 @@ func ProcessBridgeToDBWithCallbacks(database *db.DB, manager *sandbox.Manager, c
 	}
 }
 
-func handleClaudeMessageToDB(database *db.DB, chatID string, sessionID *string, raw json.RawMessage, onContentUpdated OnContentUpdated) {
+func handleClaudeMessageToDB(database *db.DB, threadID string, sessionID *string, raw json.RawMessage, onContentUpdated OnContentUpdated) {
 	output, err := types.ParseClaudeOutput(raw)
 	if err != nil {
 		return
@@ -93,7 +93,7 @@ func handleClaudeMessageToDB(database *db.DB, chatID string, sessionID *string, 
 	case "system":
 		if output.Subtype == "init" && output.SessionID != "" {
 			*sessionID = output.SessionID
-			database.UpdateChatSessionID(chatID, output.SessionID)
+			database.UpdateThreadSessionID(threadID, output.SessionID)
 		}
 	case "assistant":
 		if output.Message != nil {
@@ -102,7 +102,7 @@ func handleClaudeMessageToDB(database *db.DB, chatID string, sessionID *string, 
 			// in the preceding assistant message from Claude.
 			if isSyntheticAskUserMessage(output.Message.Content) {
 				if onContentUpdated != nil {
-					onContentUpdated(chatID)
+					onContentUpdated(threadID)
 				}
 				return
 			}
@@ -112,15 +112,15 @@ func handleClaudeMessageToDB(database *db.DB, chatID string, sessionID *string, 
 				"stopReason": output.Message.StopReason,
 				"usage":      output.Message.Usage,
 			})
-			database.AddMessage(chatID, "assistant", contentJSON, metaJSON)
+			database.AddMessage(threadID, "assistant", contentJSON, metaJSON)
 			if onContentUpdated != nil {
-				onContentUpdated(chatID)
+				onContentUpdated(threadID)
 			}
 		}
 	case "result":
 		if output.SessionID != "" && *sessionID == "" {
 			*sessionID = output.SessionID
-			database.UpdateChatSessionID(chatID, output.SessionID)
+			database.UpdateThreadSessionID(threadID, output.SessionID)
 		}
 		metaJSON := db.MarshalJSONPtr(map[string]interface{}{
 			"costUsd":      output.TotalCostUSD,
@@ -138,11 +138,11 @@ func handleClaudeMessageToDB(database *db.DB, chatID string, sessionID *string, 
 				"outputTokens": output.Usage.OutputTokens,
 			})
 		}
-		database.AddMessage(chatID, "system", "[]", metaJSON)
+		database.AddMessage(threadID, "system", "[]", metaJSON)
 		if output.IsError != nil && *output.IsError {
-			database.UpdateChatStatus(chatID, "error")
+			database.UpdateThreadStatus(threadID, "error")
 		} else {
-			database.UpdateChatStatus(chatID, "completed")
+			database.UpdateThreadStatus(threadID, "completed")
 		}
 	}
 }

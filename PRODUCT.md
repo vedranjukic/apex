@@ -14,18 +14,18 @@ A VS Code-inspired workspace with resizable panels and a familiar project-orient
 
 - **Activity Bar** — narrow icon strip on the far left for switching between Explorer, Source Control, Search, and Settings
 - **Side Panel** — wider content area next to the activity bar showing the active category (file tree, git status, search results, settings form)
-- **Chat Panel** — central area where you interact with the AI agent, see streamed responses, and review tool calls and code edits
+- **Thread Panel** — central area where you interact with the AI agent, see streamed responses, and review tool calls and code edits
 - **Terminal Panel** — resizable bottom panel with multiple terminal tabs, full PTY support, and Tokyo Night theme
-- **Right Sidebar** — chat list with search, new chat button, and status indicators for each session
+- **Right Sidebar** — thread list with search, new thread button, and status indicators for each session
 - **Status Bar** — project name, git branch picker, sync status, sandbox health indicator, and IDE launcher button
 
-### AI Agent Chat
+### AI Agent Thread
 
 Send prompts and watch the agent work in real time:
 
 - **Streamed responses** — every thought, tool call, code edit, and result from the agent appears live as it happens
 - **Message grouping** — consecutive assistant messages are merged into coherent agent blocks with a "Thought for Xs" timing indicator
-- **Multiple concurrent chats** — run several agent sessions in the same sandbox, each with its own conversation context
+- **Multiple concurrent threads** — run several agent sessions in the same sandbox, each with its own conversation context
 - **Session continuity** — follow-up prompts resume the agent's session with full conversational context preserved
 - **AskUserQuestion flow** — when the agent needs input, a multiple-choice UI appears inline; select your answer and the agent continues
 - **@ File References** — type `@` in the prompt to open an autocomplete file picker, inserting file/folder references as inline tags that are sent alongside your prompt
@@ -75,7 +75,7 @@ Full git integration built into the left sidebar and status bar:
 
 - **Status view** — staged, unstaged, untracked, and conflicted file sections with per-file action buttons (stage, unstage, discard)
 - **Commit** — textarea with contextual action button (Commit, Commit All, or Sync Changes) based on the current state
-- **AI commit messages** — click the sparkle icon to generate a conventional commit message from staged changes and recent chat context
+- **AI commit messages** — click the sparkle icon to generate a conventional commit message from staged changes and recent thread context
 - **Push / Pull / Sync** — one-click sync from the status bar with ahead/behind counts
 - **Branch management** — branch picker dropdown from the status bar with create, create from, checkout detached, and a scrollable branch list sorted by last used
 - **Optimistic UI** — staging, unstaging, and discarding update instantly in the UI before the server confirms
@@ -113,7 +113,7 @@ Your workspace layout saves automatically and restores across sessions and devic
 
 - Terminal panel state (open/closed, height)
 - Active terminal tab
-- Active chat session
+- Active thread session
 - State is stored on the sandbox filesystem, so it follows you to any browser or device
 
 ---
@@ -131,7 +131,7 @@ apex configure
 # Ephemeral one-shot task
 apex run "write a Python script that parses CSV files"
 
-# Create a project and start chatting
+# Create a project and start working
 apex create my-app
 
 # Open an existing project
@@ -169,7 +169,7 @@ Create a new project with a persistent sandbox:
 
 - Interactive mode prompts for name, description, and optional git repo
 - Non-interactive mode (`--non-interactive`) creates and exits without opening a session
-- Automatically provisions a sandbox and enters an interactive chat
+- Automatically provisions a sandbox and enters an interactive thread
 
 #### `apex open <project>`
 
@@ -186,13 +186,13 @@ apex open my-app -p "add user authentication with JWT"  # one-shot prompt
 apex open my-app -p "generate a Dockerfile" -s > Dockerfile  # pipe-friendly
 ```
 
-#### `apex cmd <project> <chat-id> <prompt>`
+#### `apex cmd <project> <thread-id> <prompt>`
 
-Send a prompt or slash command to an existing chat session:
+Send a prompt or slash command to an existing thread session:
 
-- Resume any previous conversation by chat ID (prefix match supported)
+- Resume any previous conversation by thread ID (prefix match supported)
 - Run slash commands: `/status`, `/diff`, `/cost`, `/mcp`, `/help`
-- Start a new chat with `new` as the chat ID
+- Start a new thread with `new` as the thread ID
 
 ```bash
 apex cmd my-app 8d300c0a "implement todo item types"
@@ -212,7 +212,7 @@ Manage your projects:
 When you `apex open` or `apex create` a project, you enter a rich terminal REPL:
 
 - **Streamed rendering** — agent thoughts, tool calls, and code edits render in real time
-- **Session commands** — `:new` (new chat), `:chats` (list chats), `:open <id>` (switch chat), `:quit`
+- **Session commands** — `:new` (new thread), `:threads` (list threads), `:open <id>` (switch thread), `:quit`
 - **Slash commands** — `/help`, `/diff`, `/undo`, `/commit`, `/status`, `/cost`, `/model`, `/history`, `/clear`, `/add <file>`, `/config`, `/mcp`
 - **Session continuity** — follow-up prompts carry full conversation context
 
@@ -236,16 +236,16 @@ Both the IDE and CLI are built on the same sandboxing layer:
 | **Daytona SDK** | Sandbox lifecycle management — create, start, stop, destroy, SSH access, port preview URLs |
 | **WebSocket Bridge** | Node.js server running inside each sandbox that spawns agents, manages PTY sessions, and streams structured JSON output |
 | **MCP Terminal Server** | Gives agents the ability to open, read, write to, and close terminals inside the sandbox |
-| **Session-per-Chat** | Each chat maintains a long-lived agent process; follow-ups pipe to stdin as JSONL, preserving full context |
-| **Multi-chat Concurrency** | Multiple chats can have concurrent agent processes in the same sandbox |
+| **Session-per-Thread** | Each thread maintains a long-lived agent process; follow-ups pipe to stdin as JSONL, preserving full context |
+| **Multi-thread Concurrency** | Multiple threads can have concurrent agent processes in the same sandbox |
 | **Git-ready Sandboxes** | Every project starts version-controlled — either cloned from a provided repo or initialized with `git init` |
-| **SQLite Database** | Projects, chats, and messages persisted locally (shared between CLI and desktop app) |
+| **SQLite Database** | Projects, threads, and messages persisted locally (shared between CLI and desktop app) |
 
 ### How It Works
 
 1. **Create a project** — optionally link a Git repository to clone into the sandbox
 2. **Sandbox provisioned** — a Daytona sandbox spins up from a snapshot with the AI agent pre-installed; a Node.js bridge is uploaded and started
-3. **Start a chat** — send a prompt; the bridge spawns the agent process and pipes structured JSON back over WebSocket
+3. **Start a thread** — send a prompt; the bridge spawns the agent process and pipes structured JSON back over WebSocket
 4. **Stream in real time** — every tool call, code edit, and thought streams back live
 5. **Interactive terminals** — open terminals alongside the agent; the agent can create its own via MCP tools
 6. **Session continuity** — follow-up prompts resume the agent's session with full context

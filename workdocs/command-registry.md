@@ -89,13 +89,13 @@ Examples: `Mod+Shift+P`, `Mod+B`, `Mod+Backquote`, `Alt+Shift+F`
 
 ## Adding Agent Slash Commands
 
-Agent commands send a slash command to the active Claude chat. Use the `buildAgentCommand` helper in `use-project-commands.ts`:
+Agent commands send a slash command to the active Claude thread. Use the `buildAgentCommand` helper in `use-project-commands.ts`:
 
 ```typescript
 buildAgentCommand('agent.myCommand', 'Agent: My Command', '/mycommand', sendPrompt)
 ```
 
-This creates a command that calls `sendPrompt(activeChatId, '/mycommand')` when executed. These are project-scoped since they require an active chat session.
+This creates a command that calls `sendPrompt(activeThreadId, '/mycommand')` when executed. These are project-scoped since they require an active thread session.
 
 ## Existing Commands
 
@@ -107,7 +107,7 @@ This creates a command that calls `sendPrompt(activeChatId, '/mycommand')` when 
 | `sidebar.toggleLeft` | Toggle Left Sidebar | `Mod+B` |
 | `sidebar.toggleRight` | Toggle Right Sidebar | `Mod+Shift+B` |
 | `terminal.togglePanel` | Toggle Terminal Panel | `Mod+Backquote` |
-| `chat.new` | New Chat | `Mod+Shift+N` |
+| `thread.new` | New Thread | `Mod+Shift+N` |
 | `explorer.focus` | Show Explorer | `Mod+Shift+E` |
 | `editor.save` | Save File | `Mod+S` |
 | `theme.cycle` | Cycle Color Theme | -- |
@@ -134,7 +134,7 @@ This creates a command that calls `sendPrompt(activeChatId, '/mycommand')` when 
 | `agent.config` | Agent: Settings | -- |
 | `agent.context` | Agent: Show Context | -- |
 | `agent.status` | Agent: Status | -- |
-| `agent.export` | Agent: Export Chat | -- |
+| `agent.export` | Agent: Export Thread | -- |
 | `agent.debug` | Agent: Debug Session | -- |
 | `agent.permissions` | Agent: Permissions | -- |
 | `agent.plan` | Agent: Plan Mode | -- |

@@ -8,7 +8,7 @@ import {
 } from 'react';
 import { Send } from 'lucide-react';
 import { FilePicker } from './file-picker';
-import { ModeDropdown, ModelDropdown } from './mode-model-dropdowns';
+import { ModeDropdown, ModelDropdown, AgentDropdown } from './mode-model-dropdowns';
 import { useAgentSettingsStore } from '../../stores/agent-settings-store';
 import { useEditorStore, type CodeSelection } from '../../stores/editor-store';
 
@@ -17,11 +17,12 @@ export interface PromptInputHandle {
 }
 
 interface Props {
-  onSend: (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => void;
+  onSend: (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string) => void;
   disabled?: boolean;
   placeholder?: string;
   autoFocus?: boolean;
   requestListing?: (path: string) => void;
+  hideAgentDropdown?: boolean;
 }
 
 const FILE_TAG_ATTR = 'data-file-path';
@@ -103,6 +104,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
       placeholder = 'Send a message to the agent…',
       autoFocus,
       requestListing,
+      hideAgentDropdown,
     },
     ref,
   ) {
@@ -147,13 +149,14 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
       if (!el || disabled) return;
       const { text, files, snippets } = extractContent(el);
       if (!text.trim()) return;
-      const { mode, model } = useAgentSettingsStore.getState();
+      const { mode, model, agentType } = useAgentSettingsStore.getState();
       onSend(
         text.trim(),
         files.length > 0 ? files : undefined,
         mode,
         model,
         snippets.length > 0 ? snippets : undefined,
+        agentType,
       );
       el.innerHTML = '';
       setEmpty(true);
@@ -331,7 +334,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
     );
 
     return (
-      <div className="border-t border-border bg-surface-chat p-4 relative">
+      <div className="border-t border-border bg-surface-thread p-4 relative">
         <div className="max-w-3xl mx-auto">
           <div className="relative">
             <div
@@ -368,6 +371,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
           {/* Toolbar row */}
           <div className="flex items-center gap-1 px-2 py-1.5 bg-sidebar border border-t-0 border-border rounded-b-xl">
             <ModeDropdown />
+            {!hideAgentDropdown && <AgentDropdown />}
             <ModelDropdown />
             <div className="flex-1" />
             <button

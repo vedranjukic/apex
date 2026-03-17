@@ -12,8 +12,8 @@ import (
 
 var dashboardCmd = &cobra.Command{
 	Use:   "dashboard",
-	Short: "Interactive overview of projects and chats",
-	Long:  `Open an interactive TUI to browse projects, chats, and chat content.`,
+	Short: "Interactive overview of projects and threads",
+	Long:  `Open an interactive TUI to browse projects, threads, and thread content.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dbPath := config.ResolveDBPath(cfgDBPath)
 		database, err := db.Open(dbPath)
@@ -36,7 +36,7 @@ var dashboardCmd = &cobra.Command{
 			return fmt.Errorf("init dashboard: %w", err)
 		}
 
-		p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+		p := tea.NewProgram(m, tea.WithAltScreen())
 		if _, err := p.Run(); err != nil {
 			return fmt.Errorf("run dashboard: %w", err)
 		}

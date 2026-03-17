@@ -5,7 +5,7 @@ import { join } from 'path';
 import { DatabaseModule } from '../database/database.module';
 import { UsersModule } from '../modules/users/users.module';
 import { ProjectsModule } from '../modules/projects/projects.module';
-import { ChatsModule } from '../modules/tasks/tasks.module';
+import { ThreadsModule } from '../modules/tasks/tasks.module';
 import { AgentModule } from '../modules/agent/agent.module';
 import { ConfigAppModule } from '../modules/config/config-app.module';
 import { SettingsModule } from '../modules/settings/settings.module';
@@ -21,7 +21,7 @@ import { SettingsModule } from '../modules/settings/settings.module';
     SettingsModule,
     UsersModule,
     ProjectsModule,
-    ChatsModule,
+    ThreadsModule,
     AgentModule,
     ConfigAppModule,
   ],

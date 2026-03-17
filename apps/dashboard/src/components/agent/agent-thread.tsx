@@ -1,27 +1,29 @@
 import { useEffect, useRef, useMemo, useCallback } from 'react';
 import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo, RotateCcw, MessageCircleQuestion } from 'lucide-react';
-import { useChatsStore } from '../../stores/tasks-store';
+import { useThreadsStore } from '../../stores/tasks-store';
 import { groupMessages, MessageGroupView, PlanShownProvider } from './message-bubble';
 import { PromptInput, type PromptInputHandle } from './prompt-input';
-import { ChatActionsContext } from './chat-actions-context';
+import { ThreadActionsContext } from './thread-actions-context';
+import { useAgentSettingsStore, AGENT_TYPES, DEFAULT_MODEL_BY_TYPE, type AgentTypeId } from '../../stores/agent-settings-store';
 import type { CodeSelection } from '../../stores/editor-store';
 
 interface Props {
   projectId: string;
-  onSendPrompt: (chatId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => void;
-  onSendSilentPrompt: (chatId: string, prompt: string, mode?: string, model?: string) => void;
-  onExecuteChat: (chatId: string, mode?: string, model?: string) => void;
-  onSendUserAnswer?: (chatId: string, toolUseId: string, answer: string) => void;
+  projectAgentType?: string;
+  onSendPrompt: (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string) => void;
+  onSendSilentPrompt: (threadId: string, prompt: string, mode?: string, model?: string) => void;
+  onExecuteThread: (threadId: string, mode?: string, model?: string, agentType?: string) => void;
+  onSendUserAnswer?: (threadId: string, toolUseId: string, answer: string) => void;
   requestListing?: (path: string) => void;
 }
 
 const SCROLL_SAVE_DEBOUNCE_MS = 300;
 const SCROLL_FOLLOW_THRESHOLD = 150;
 
-export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecuteChat, onSendUserAnswer, requestListing }: Props) {
-  const { activeChatId, composingNew, messages, chats, createChat, chatScrollOffsets, setChatScrollOffset } =
-    useChatsStore();
-  const chatScrollOffset = activeChatId ? (chatScrollOffsets[activeChatId] ?? 0) : 0;
+export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendSilentPrompt, onExecuteThread, onSendUserAnswer, requestListing }: Props) {
+  const { activeThreadId, composingNew, messages, threads, createThread, threadScrollOffsets, setThreadScrollOffset } =
+    useThreadsStore();
+  const threadScrollOffset = activeThreadId ? (threadScrollOffsets[activeThreadId] ?? 0) : 0;
   const scrollRef = useRef<HTMLDivElement>(null);
   const promptRef = useRef<PromptInputHandle>(null);
   const restoredScrollRef = useRef(false);
@@ -34,32 +36,47 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
   }, []);
 
   const sendPrompt = useCallback((text: string) => {
-    if (activeChatId) {
-      onSendPrompt(activeChatId, text);
+    if (activeThreadId) {
+      onSendPrompt(activeThreadId, text);
     }
-  }, [activeChatId, onSendPrompt]);
+  }, [activeThreadId, onSendPrompt]);
 
   const sendSilentPrompt = useCallback((text: string, mode?: string) => {
-    if (activeChatId) {
-      useChatsStore.getState().addMessage({
+    if (activeThreadId) {
+      useThreadsStore.getState().addMessage({
         id: crypto.randomUUID(),
-        taskId: activeChatId,
+        taskId: activeThreadId,
         role: 'user',
         content: [{ type: 'text', text }],
         metadata: null,
         createdAt: new Date().toISOString(),
       });
-      onSendSilentPrompt(activeChatId, text, mode);
+      onSendSilentPrompt(activeThreadId, text, mode);
     }
-  }, [activeChatId, onSendSilentPrompt]);
+  }, [activeThreadId, onSendSilentPrompt]);
 
   const sendUserAnswer = useCallback((toolUseId: string, answer: string) => {
-    if (activeChatId && onSendUserAnswer) {
-      onSendUserAnswer(activeChatId, toolUseId, answer);
+    if (activeThreadId && onSendUserAnswer) {
+      onSendUserAnswer(activeThreadId, toolUseId, answer);
     }
-  }, [activeChatId, onSendUserAnswer]);
+  }, [activeThreadId, onSendUserAnswer]);
 
-  const activeChat = chats.find((c) => c.id === activeChatId);
+  const activeThread = threads.find((c) => c.id === activeThreadId);
+
+  useEffect(() => {
+    const store = useAgentSettingsStore.getState();
+    if (activeThread?.agentType) {
+      const at = activeThread.agentType as AgentTypeId;
+      if (store.agentType !== at) {
+        store.setAgentType(at);
+      }
+    } else if (!activeThreadId && projectAgentType) {
+      const pat = projectAgentType as AgentTypeId;
+      if (store.agentType !== pat) {
+        store.setAgentType(pat);
+      }
+    }
+  }, [activeThreadId, activeThread?.id, activeThread?.agentType, projectAgentType]);
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
 
@@ -85,18 +102,18 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
     restoredScrollRef.current = false;
     prevMessageCount.current = 0;
     isFollowingRef.current = true;
-  }, [activeChatId]);
+  }, [activeThreadId]);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || restoredScrollRef.current || messages.length === 0) return;
-    if (chatScrollOffset > 0) {
-      el.scrollTop = chatScrollOffset;
+    if (threadScrollOffset > 0) {
+      el.scrollTop = threadScrollOffset;
       isFollowingRef.current =
         el.scrollTop + el.clientHeight >= el.scrollHeight - SCROLL_FOLLOW_THRESHOLD;
     }
     restoredScrollRef.current = true;
-  }, [messages.length, chatScrollOffset]);
+  }, [messages.length, threadScrollOffset]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -114,12 +131,12 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
       el.scrollTop + el.clientHeight >= el.scrollHeight - SCROLL_FOLLOW_THRESHOLD;
     clearTimeout(scrollSaveTimer.current);
     scrollSaveTimer.current = setTimeout(() => {
-      if (activeChatId) setChatScrollOffset(activeChatId, el.scrollTop);
+      if (activeThreadId) setThreadScrollOffset(activeThreadId, el.scrollTop);
     }, SCROLL_SAVE_DEBOUNCE_MS);
-  }, [activeChatId, setChatScrollOffset]);
+  }, [activeThreadId, setThreadScrollOffset]);
 
-  const handleNewChatPrompt = useCallback(
-    async (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => {
+  const handleNewThreadPrompt = useCallback(
+    async (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string) => {
       let fullPrompt = prompt;
       if (files && files.length > 0) {
         fullPrompt = `Referenced files:\n${files.map((f) => `- ${f}`).join('\n')}\n\n${fullPrompt}`;
@@ -130,25 +147,25 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
         );
         fullPrompt = `Referenced code selections:\n${snippetRefs.join('\n')}\n\n${fullPrompt}`;
       }
-      const chat = await createChat(projectId, { prompt: fullPrompt });
-      onExecuteChat(chat.id, mode, model);
+      const thread = await createThread(projectId, { prompt: fullPrompt, agentType });
+      onExecuteThread(thread.id, mode, model, agentType);
     },
-    [createChat, projectId, onExecuteChat],
+    [createThread, projectId, onExecuteThread],
   );
 
-  if (!activeChatId && !composingNew) {
+  if (!activeThreadId && !composingNew) {
     return (
       <WelcomePrompt
-        hasChats={chats.length > 0}
-        onSend={handleNewChatPrompt}
+        hasThreads={threads.length > 0}
+        onSend={handleNewThreadPrompt}
         requestListing={requestListing}
       />
     );
   }
 
-  if (composingNew && !activeChatId) {
+  if (composingNew && !activeThreadId) {
     return (
-      <div className="flex-1 flex flex-col overflow-hidden bg-surface-chat">
+      <div className="flex-1 flex flex-col overflow-hidden bg-surface-thread">
         <div className="flex-1 flex items-center justify-center text-text-muted">
           <div className="text-center">
             <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-30" />
@@ -157,7 +174,7 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
         </div>
 
         <PromptInput
-          onSend={handleNewChatPrompt}
+          onSend={handleNewThreadPrompt}
           placeholder="Describe what the agent should do…"
           autoFocus
           requestListing={requestListing}
@@ -166,29 +183,38 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
     );
   }
 
-  if (!activeChat) return null;
+  if (!activeThread) return null;
 
-  const isRunning = activeChat.status === 'running';
-  const isError = activeChat.status === 'error';
-  const isWaitingForInput = activeChat.status === 'waiting_for_input';
+  const isRunning = activeThread.status === 'running';
+  const isError = activeThread.status === 'error';
+  const isWaitingForInput = activeThread.status === 'waiting_for_input';
 
   return (
-    <ChatActionsContext.Provider value={{ fillPrompt, sendPrompt, sendSilentPrompt, sendUserAnswer }}>
-      <div className="flex-1 flex flex-col overflow-hidden bg-surface-chat">
-        {/* Chat header: title + current task inline, progress icon when running */}
-        <div className="px-4 py-3 border-b border-border bg-surface-chat flex items-center gap-2 min-h-[44px] min-w-0">
+    <ThreadActionsContext.Provider value={{ fillPrompt, sendPrompt, sendSilentPrompt, sendUserAnswer }}>
+      <div className="flex-1 flex flex-col overflow-hidden bg-surface-thread">
+        {/* Thread header: title + agent + thread id, progress icon when running */}
+        <div className="px-4 py-3 border-b border-border bg-surface-thread flex items-center gap-2 min-h-[44px] min-w-0">
           <h2 className="font-semibold text-sm truncate min-w-0">
-            {activeChat.title}
-            {currentTask && (
-              <>
-                <span className="font-normal text-text-muted mx-1.5">·</span>
-                <span className="inline-flex items-center gap-1 font-normal text-text-secondary">
-                  <ListTodo className="w-3.5 h-3.5 text-violet-400 shrink-0" />
-                  {currentTask}
-                </span>
-              </>
-            )}
+            {activeThread.title}
           </h2>
+          {(() => {
+            const agentLabel = AGENT_TYPES.find((a) => a.value === (activeThread.agentType ?? projectAgentType))?.label;
+            return agentLabel ? (
+              <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary">
+                {agentLabel}
+              </span>
+            ) : null;
+          })()}
+          <span className="shrink-0 text-[10px] text-text-muted font-mono" title={activeThread.id}>
+            {activeThread.id.slice(0, 8)}
+          </span>
+          {currentTask && (
+            <span className="inline-flex items-center gap-1 text-xs text-text-secondary truncate min-w-0">
+              <span className="text-text-muted">·</span>
+              <ListTodo className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+              {currentTask}
+            </span>
+          )}
           {isRunning && (
             <Loader2 className="w-3.5 h-3.5 animate-spin text-yellow-500 shrink-0" />
           )}
@@ -197,7 +223,7 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
               <AlertCircle className="w-3.5 h-3.5 text-red-400" />
               <button
                 type="button"
-                onClick={() => onExecuteChat(activeChatId!)}
+                onClick={() => onExecuteThread(activeThreadId!)}
                 className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-border text-text-secondary hover:bg-surface-secondary hover:text-text-primary transition-colors"
               >
                 <RotateCcw className="w-3 h-3" />
@@ -220,7 +246,7 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
               No messages yet
             </div>
           ) : (
-            <PlanShownProvider chatId={activeChatId}>
+            <PlanShownProvider threadId={activeThreadId}>
               <div className="divide-y divide-border">
                 {groups.map((group, i) => (
                   <MessageGroupView key={i} group={group} />
@@ -233,12 +259,13 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
         {/* Input */}
         <PromptInput
           ref={promptRef}
-          onSend={(prompt, files, mode, model, snippets) => onSendPrompt(activeChatId!, prompt, files, mode, model, snippets)}
+          onSend={(prompt, files, mode, model, snippets, agentType) => onSendPrompt(activeThreadId!, prompt, files, mode, model, snippets, agentType)}
           disabled={isRunning}
           requestListing={requestListing}
+          hideAgentDropdown
         />
       </div>
-    </ChatActionsContext.Provider>
+    </ThreadActionsContext.Provider>
   );
 }
 
@@ -247,12 +274,12 @@ export function AgentChat({ projectId, onSendPrompt, onSendSilentPrompt, onExecu
 /* ------------------------------------------------------------------ */
 
 function WelcomePrompt({
-  hasChats,
+  hasThreads,
   onSend,
   requestListing,
 }: {
-  hasChats: boolean;
-  onSend: (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => void;
+  hasThreads: boolean;
+  onSend: (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string) => void;
   requestListing?: (path: string) => void;
 }) {
   const suggestions = [
@@ -262,14 +289,14 @@ function WelcomePrompt({
   ];
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center px-6 bg-surface-chat">
+    <div className="flex-1 flex flex-col items-center justify-center px-6 bg-surface-thread">
       <div className="w-full max-w-2xl flex flex-col items-center gap-8">
         <div className="text-center">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary/10 mb-4">
             <Sparkles className="w-7 h-7 text-primary" />
           </div>
           <h2 className="text-xl font-semibold text-text-primary">
-            {hasChats ? 'Start a new task' : 'What would you like to build?'}
+            {hasThreads ? 'Start a new task' : 'What would you like to build?'}
           </h2>
           <p className="text-sm text-text-muted mt-1">
             Describe what you need and the agent will get to work.
@@ -285,7 +312,7 @@ function WelcomePrompt({
           />
         </div>
 
-        {!hasChats && (
+        {!hasThreads && (
           <div className="flex flex-wrap justify-center gap-2">
             {suggestions.map((s) => (
               <button

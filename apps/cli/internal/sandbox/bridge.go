@@ -14,7 +14,7 @@ import (
 // BridgeMessage represents a message from the bridge running inside the sandbox.
 type BridgeMessage struct {
 	Type       string          `json:"type"`
-	ChatID     string          `json:"chatId,omitempty"`
+	ThreadID   string          `json:"threadId,omitempty"`
 	Data       json.RawMessage `json:"data,omitempty"`
 	Code       *int            `json:"code,omitempty"`
 	Error      string          `json:"error,omitempty"`
@@ -102,11 +102,11 @@ func (b *bridgeConn) send(v interface{}) error {
 // sendPrompt sends a start_claude message to the bridge.
 // mode is "agent", "plan", or "ask"; empty defaults to "agent".
 // agentType is "claude_code", "open_code", or "codex"; empty uses the bridge default.
-func (b *bridgeConn) sendPrompt(chatID, prompt, sessionID, mode, agentType string) error {
+func (b *bridgeConn) sendPrompt(threadID, prompt, sessionID, mode, agentType string) error {
 	msg := map[string]interface{}{
-		"type":   "start_claude",
-		"prompt": prompt,
-		"chatId": chatID,
+		"type":     "start_claude",
+		"prompt":   prompt,
+		"threadId": threadID,
 	}
 	if sessionID != "" {
 		msg["sessionId"] = sessionID
@@ -121,10 +121,10 @@ func (b *bridgeConn) sendPrompt(chatID, prompt, sessionID, mode, agentType strin
 }
 
 // sendUserAnswer sends a claude_user_answer message to the bridge.
-func (b *bridgeConn) sendUserAnswer(chatID, toolUseID, answer string) error {
+func (b *bridgeConn) sendUserAnswer(threadID, toolUseID, answer string) error {
 	return b.send(map[string]interface{}{
 		"type":      "claude_user_answer",
-		"chatId":    chatID,
+		"threadId":  threadID,
 		"toolUseId": toolUseID,
 		"answer":    answer,
 	})

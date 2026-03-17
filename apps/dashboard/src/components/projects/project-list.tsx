@@ -9,9 +9,9 @@ import { useProjectsStore } from '../../stores/projects-store';
 import { useProjectsSocket } from '../../hooks/use-projects-socket';
 import { CreateProjectDialog } from './create-project-dialog';
 import { settingsApi } from '../../api/client';
-import type { Project, Chat } from '../../api/client';
+import type { Project, Thread } from '../../api/client';
 
-function ChatStatusIcon({ status, className }: { status: string; className?: string }) {
+function ThreadStatusIcon({ status, className }: { status: string; className?: string }) {
   const size = className ?? 'w-3 h-3';
   switch (status) {
     case 'waiting_for_input':
@@ -76,10 +76,10 @@ function groupByForkFamily(projects: Project[]): ForkGroup[] {
 
 interface Props {
   onOpenProject: (id: string) => void;
-  onSelectChat?: (projectId: string, chatId: string, projectName: string) => void;
+  onSelectThread?: (projectId: string, threadId: string, projectName: string) => void;
 }
 
-export function ProjectList({ onOpenProject, onSelectChat }: Props) {
+export function ProjectList({ onOpenProject, onSelectThread }: Props) {
   const { projects, loading, fetchProjects, deleteProject } = useProjectsStore();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
@@ -140,7 +140,7 @@ export function ProjectList({ onOpenProject, onSelectChat }: Props) {
                   project={group.root}
                   onOpen={() => onOpenProject(group.root.id)}
                   onDelete={() => deleteProject(group.root.id)}
-                  onSelectChat={onSelectChat}
+                  onSelectThread={onSelectThread}
                 />
               ) : (
                 <ForkGroupCard
@@ -148,7 +148,7 @@ export function ProjectList({ onOpenProject, onSelectChat }: Props) {
                   group={group}
                   onOpenProject={onOpenProject}
                   onDeleteProject={deleteProject}
-                  onSelectChat={onSelectChat}
+                  onSelectThread={onSelectThread}
                 />
               ),
             )}
@@ -165,24 +165,24 @@ export function ProjectList({ onOpenProject, onSelectChat }: Props) {
   );
 }
 
-function ChatList({
-  chats,
+function ThreadList({
+  threads,
   projectId,
   projectName,
-  onSelectChat,
+  onSelectThread,
 }: {
-  chats: Chat[];
+  threads: Thread[];
   projectId: string;
   projectName: string;
-  onSelectChat?: (projectId: string, chatId: string, projectName: string) => void;
+  onSelectThread?: (projectId: string, threadId: string, projectName: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
-  if (!chats || chats.length === 0) return null;
+  if (!threads || threads.length === 0) return null;
 
-  const running = chats.filter((c) => c.status === 'running').length;
-  const errors = chats.filter((c) => c.status === 'error').length;
-  const waiting = chats.filter((c) => c.status === 'waiting_for_input').length;
+  const running = threads.filter((c) => c.status === 'running').length;
+  const errors = threads.filter((c) => c.status === 'error').length;
+  const waiting = threads.filter((c) => c.status === 'waiting_for_input').length;
 
   return (
     <div className="mt-1.5">
@@ -191,7 +191,7 @@ function ChatList({
         className="flex items-center gap-1.5 text-[11px] text-text-muted hover:text-text-secondary transition-colors"
       >
         {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-        <span>{chats.length} chat{chats.length !== 1 ? 's' : ''}</span>
+        <span>{threads.length} thread{threads.length !== 1 ? 's' : ''}</span>
         {running > 0 && (
           <span className="flex items-center gap-0.5 text-yellow-400">
             <Loader2 className="w-2.5 h-2.5 animate-spin" />
@@ -213,21 +213,27 @@ function ChatList({
       </button>
       {expanded && (
         <div className="mt-1 space-y-px">
-          {chats.map((chat) => (
+          {threads.map((thread) => (
             <button
-              key={chat.id}
+              key={thread.id}
               onClick={(e) => {
                 e.stopPropagation();
-                onSelectChat?.(projectId, chat.id, projectName);
+                onSelectThread?.(projectId, thread.id, projectName);
               }}
               className="flex items-center gap-2 w-full px-2 py-1 rounded text-left hover:bg-surface-secondary/60 transition-colors group"
             >
-              <ChatStatusIcon status={chat.status} className="w-3 h-3" />
+              <ThreadStatusIcon status={thread.status} className="w-3 h-3" />
+              <span className="font-mono text-[10px] text-text-muted shrink-0">{thread.id.slice(0, 8)}</span>
+              {thread.agentType && (
+                <span className="text-[10px] text-text-muted px-1 rounded bg-surface-secondary/60 shrink-0">
+                  {{ claude_code: 'Claude', open_code: 'OpenCode', codex: 'Codex' }[thread.agentType] ?? thread.agentType}
+                </span>
+              )}
               <span className="text-xs text-text-secondary group-hover:text-text-primary truncate flex-1 min-w-0">
-                {chat.title}
+                {thread.title}
               </span>
               <span className="text-[10px] text-text-muted shrink-0">
-                {timeAgo(chat.updatedAt)}
+                {timeAgo(thread.updatedAt)}
               </span>
             </button>
           ))}
@@ -241,12 +247,12 @@ function ForkGroupCard({
   group,
   onOpenProject,
   onDeleteProject,
-  onSelectChat,
+  onSelectThread,
 }: {
   group: ForkGroup;
   onOpenProject: (id: string) => void;
   onDeleteProject: (id: string) => void;
-  onSelectChat?: (projectId: string, chatId: string, projectName: string) => void;
+  onSelectThread?: (projectId: string, threadId: string, projectName: string) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
 
@@ -256,7 +262,7 @@ function ForkGroupCard({
         project={group.root}
         onOpen={() => onOpenProject(group.root.id)}
         onDelete={() => onDeleteProject(group.root.id)}
-        onSelectChat={onSelectChat}
+        onSelectThread={onSelectThread}
         noBorder
       />
 
@@ -281,7 +287,7 @@ function ForkGroupCard({
               project={fork}
               onOpen={() => onOpenProject(fork.id)}
               onDelete={() => onDeleteProject(fork.id)}
-              onSelectChat={onSelectChat}
+              onSelectThread={onSelectThread}
             />
           ))}
         </div>
@@ -294,12 +300,12 @@ function ForkRow({
   project,
   onOpen,
   onDelete,
-  onSelectChat,
+  onSelectThread,
 }: {
   project: Project;
   onOpen: () => void;
   onDelete: () => void;
-  onSelectChat?: (projectId: string, chatId: string, projectName: string) => void;
+  onSelectThread?: (projectId: string, threadId: string, projectName: string) => void;
 }) {
   const statusColors: Record<string, string> = {
     creating: 'text-yellow-400 bg-yellow-400/10',
@@ -309,7 +315,7 @@ function ForkRow({
     error: 'text-red-400 bg-red-400/10',
   };
 
-  const chats = project.chats ?? [];
+  const threads = project.threads ?? [];
   const name = project.branchName || project.name;
 
   return (
@@ -329,10 +335,10 @@ function ForkRow({
             >
               {project.status}
             </span>
-            {chats.length > 0 && (
+            {threads.length > 0 && (
               <span className="flex items-center gap-0.5">
-                {chats.map((c) => (
-                  <ChatStatusIcon key={c.id} status={c.status} className="w-2.5 h-2.5" />
+                {threads.map((c) => (
+                  <ThreadStatusIcon key={c.id} status={c.status} className="w-2.5 h-2.5" />
                 ))}
               </span>
             )}
@@ -358,13 +364,13 @@ function ForkRow({
           </button>
         </div>
       </div>
-      {chats.length > 0 && (
+      {threads.length > 0 && (
         <div className="pl-9">
-          <ChatList
-            chats={chats}
+          <ThreadList
+            threads={threads}
             projectId={project.id}
             projectName={name}
-            onSelectChat={onSelectChat}
+            onSelectThread={onSelectThread}
           />
         </div>
       )}
@@ -376,13 +382,13 @@ function ProjectCard({
   project,
   onOpen,
   onDelete,
-  onSelectChat,
+  onSelectThread,
   noBorder,
 }: {
   project: Project;
   onOpen: () => void;
   onDelete: () => void;
-  onSelectChat?: (projectId: string, chatId: string, projectName: string) => void;
+  onSelectThread?: (projectId: string, threadId: string, projectName: string) => void;
   noBorder?: boolean;
 }) {
   const statusColors: Record<string, string> = {
@@ -393,7 +399,7 @@ function ProjectCard({
     error: 'text-red-400 bg-red-400/10',
   };
 
-  const chats = project.chats ?? [];
+  const threads = project.threads ?? [];
 
   return (
     <div className={cn(
@@ -423,12 +429,12 @@ function ProjectCard({
             <span>·</span>
             <span>{new Date(project.createdAt).toLocaleDateString()}</span>
           </div>
-          {chats.length > 0 && (
-            <ChatList
-              chats={chats}
+          {threads.length > 0 && (
+            <ThreadList
+              threads={threads}
               projectId={project.id}
               projectName={project.name}
-              onSelectChat={onSelectChat}
+              onSelectThread={onSelectThread}
             />
           )}
         </div>

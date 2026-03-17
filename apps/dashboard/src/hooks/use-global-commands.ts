@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useCommandStore, type Command } from '../stores/command-store';
 import { usePanelsStore } from '../stores/panels-store';
 import { useTerminalStore } from '../stores/terminal-store';
-import { useChatsStore } from '../stores/tasks-store';
+import { useThreadsStore } from '../stores/tasks-store';
 import { useThemeStore } from '../stores/theme-store';
 import { themes, themeIds } from '../lib/themes';
 import { configApi } from '../api/client';
@@ -57,7 +57,7 @@ const DEFAULT_KEYBINDINGS: Record<string, string> = {
   'sidebar.toggleRight': 'Mod+Shift+B',
   'terminal.togglePanel': 'Mod+Backquote',
   'terminal.new': 'Mod+Shift+Backquote',
-  'chat.new': 'Mod+Shift+N',
+  'thread.new': 'Mod+Shift+N',
   'explorer.focus': 'Mod+Shift+E',
   'editor.save': 'Mod+S',
 };
@@ -123,10 +123,10 @@ export function useGlobalCommands() {
         execute: () => useTerminalStore.getState().togglePanel(),
       },
       {
-        id: 'chat.new',
-        label: 'New Chat',
-        category: 'Chat',
-        execute: () => useChatsStore.getState().startNewChat(),
+        id: 'thread.new',
+        label: 'New Thread',
+        category: 'Thread',
+        execute: () => useThreadsStore.getState().startNewThread(),
       },
       {
         id: 'explorer.focus',

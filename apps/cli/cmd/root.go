@@ -30,14 +30,14 @@ Quick start:
   apex run "fix the failing tests"            Ephemeral — run and tear down
   apex run "fix tests" -v                     With progress output
   apex run "build a REST API" --git-repo URL  Ephemeral with a git repo
-  apex open my-project                        Interactive chat session
+  apex open my-project                        Interactive thread session
   apex open my-project -p "add auth"          Run a prompt and exit
   apex create my-project                      Create a project + open session
   apex create my-project --git-repo URL       Create from a git repo
-  apex cmd my-project 8d300c0a "add tests"    Send prompt to existing chat
+  apex cmd my-project 8d300c0a "add tests"    Send prompt to existing thread
   apex cmd my-project 8d300c0a /status        Run a slash command
   apex project list                           List all projects
-  apex dashboard                              Interactive projects & chats overview`,
+  apex dashboard                              Interactive projects & threads overview`,
 	Version: Version,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		config.LoadDotEnv()

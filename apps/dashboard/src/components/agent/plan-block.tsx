@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { ScrollText, ChevronDown, ChevronRight, Play, Loader2, Check } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useChatActions } from './chat-actions-context';
+import { useThreadActions } from './thread-actions-context';
 import { useAgentSettingsStore } from '../../stores/agent-settings-store';
 import { BUILD_PROMPT_PREFIX } from '../../stores/plan-store';
 
@@ -11,13 +11,13 @@ interface PlanBlockProps {
   content: string;
   isComplete: boolean;
   wasBuilt?: boolean;
-  chatStatus?: string;
+  threadStatus?: string;
 }
 
-export function PlanBlock({ filename, content, isComplete, wasBuilt, chatStatus }: PlanBlockProps) {
+export function PlanBlock({ filename, content, isComplete, wasBuilt, threadStatus }: PlanBlockProps) {
   const [expanded, setExpanded] = useState(true);
-  const { sendSilentPrompt } = useChatActions();
-  const isRunning = chatStatus === 'running';
+  const { sendSilentPrompt } = useThreadActions();
+  const isRunning = threadStatus === 'running';
   const buildDisabled = !isComplete || isRunning || !!wasBuilt;
 
   const handleBuild = useCallback(() => {

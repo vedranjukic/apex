@@ -22,7 +22,7 @@ All UI state is in Zustand stores under `apps/dashboard/src/stores/`:
 - `panels-store.ts` -- left/right sidebar open state
 - `terminal-store.ts` -- terminal list, active terminal, panel height, terminal counter, active bottom tab (terminals/ports)
 - `ports-store.ts` -- forwarded ports list from sandbox port scanning
-- `tasks-store.ts` -- chats, messages, active chat (exported as `useChatsStore`)
+- `tasks-store.ts` -- threads, messages, active thread (exported as `useThreadsStore`)
 - `command-store.ts` -- command registry, keybindings, palette state
 - `file-tree-store.ts` -- directory cache for the file explorer
 - `projects-store.ts` -- project list

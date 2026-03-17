@@ -6,7 +6,7 @@ import { usePanelsStore } from '../../stores/panels-store';
 interface AppShellProps {
   /** Left sidebar (activity bar + side panel), rendered on the far left */
   leftSidebar?: ReactNode;
-  /** Right sidebar (chat list), rendered on the far right */
+  /** Right sidebar (thread list), rendered on the far right */
   sidebar?: ReactNode;
   /** Terminal panel rendered below the main content area */
   terminalPanel?: ReactNode;

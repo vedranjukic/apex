@@ -28,7 +28,7 @@ apex configure
 # Ephemeral — run a prompt, sandbox is destroyed after
 apex run "write a Python script that parses CSV files"
 
-# Create a project and start a chat session
+# Create a project and start a thread session
 apex create my-app
 
 # Open an existing project
@@ -37,7 +37,7 @@ apex open my-app
 # One-shot prompt on a project
 apex open my-app -p "add user authentication"
 
-# Send a command to an existing chat
+# Send a command to an existing thread
 apex cmd my-app 8d300c0a "implement todo item types"
 ```
 
@@ -92,7 +92,7 @@ apex run "generate a Dockerfile for Node.js" > Dockerfile
 
 ### `apex create [project-name]`
 
-Create a new project, provision a sandbox, and open an interactive chat session.
+Create a new project, provision a sandbox, and open an interactive thread session.
 
 When run without arguments, prompts interactively for project details. With a name argument, creates the project directly and enters the session.
 
@@ -122,7 +122,7 @@ apex create my-app --non-interactive
 
 ### `apex open <project>`
 
-Open an existing project and start an interactive chat session, or run a single prompt.
+Open an existing project and start an interactive thread session, or run a single prompt.
 
 The `<project>` argument accepts a project ID, exact name, or unambiguous name prefix. If the project doesn't exist and `--prompt` is provided, it is created automatically.
 
@@ -136,8 +136,8 @@ The `<project>` argument accepts a project ID, exact name, or unambiguous name p
 
 **Behavior:**
 
-- **Interactive mode** (no flags) — opens a REPL where you type prompts and receive streamed responses. Supports session commands (`:new`, `:chats`, `:open <id>`, `:quit`) and Claude-style slash commands (`/help`, `/diff`, `/undo`, `/commit`, `/status`, `/cost`, `/model`, `/history`, `/clear`, `/add <file>`, `/config`, `/mcp`).
-- **Prompt mode** (`-p`) — creates a new chat session, sends the prompt, streams the full response, and exits. If the named project doesn't exist, it is created and a sandbox is provisioned automatically.
+- **Interactive mode** (no flags) — opens a REPL where you type prompts and receive streamed responses. Supports session commands (`:new`, `:threads`, `:open <id>`, `:quit`) and Claude-style slash commands (`/help`, `/diff`, `/undo`, `/commit`, `/status`, `/cost`, `/model`, `/history`, `/clear`, `/add <file>`, `/config`, `/mcp`).
+- **Prompt mode** (`-p`) — creates a new thread session, sends the prompt, streams the full response, and exits. If the named project doesn't exist, it is created and a sandbox is provisioned automatically.
 - **Stream mode** (`-s`) — sends progress output (spinner, tool calls, cost summary) to stderr so that stdout contains only the assistant's text. Useful for piping results into other commands or capturing clean output.
 
 **Examples:**
@@ -159,9 +159,9 @@ apex open my-fork -p "fix the failing tests" --git-repo https://github.com/user/
 apex open my-app -p "generate a Dockerfile for Node.js" -s > Dockerfile
 ```
 
-### `apex cmd <project> <chat-id> <command-or-prompt>`
+### `apex cmd <project> <thread-id> <command-or-prompt>`
 
-Run a slash command or send a prompt to an existing chat in a project. The chat ID can be a prefix (e.g. first 8 characters). Use `new` to start a fresh chat.
+Run a slash command or send a prompt to an existing thread in a project. The thread ID can be a prefix (e.g. first 8 characters). Use `new` to start a fresh thread.
 
 By default only the result is printed. Use `--verbose` to see progress on stderr.
 
@@ -174,16 +174,16 @@ By default only the result is printed. Use `--verbose` to see progress on stderr
 **Examples:**
 
 ```bash
-# Slash commands against an existing chat
+# Slash commands against an existing thread
 apex cmd my-app 8d300c0a /status
 apex cmd my-app 8d300c0a /diff
 apex cmd my-app 8d300c0a /cost
 apex cmd my-app 8d300c0a /mcp
 
-# Send a prompt to an existing chat (resumes session context)
+# Send a prompt to an existing thread (resumes session context)
 apex cmd my-app 8d300c0a "implement todo item types"
 
-# Start a new chat in the project
+# Start a new thread in the project
 apex cmd my-app new "start a new feature"
 
 # With progress output

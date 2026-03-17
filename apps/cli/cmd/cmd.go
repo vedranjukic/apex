@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/apex/cli/internal/chat"
+	"github.com/apex/cli/internal/thread"
 	"github.com/apex/cli/internal/db"
 	"github.com/apex/cli/internal/sandbox"
 	"github.com/fatih/color"
@@ -16,12 +16,12 @@ import (
 var cmdVerbose bool
 
 var cmdCmd = &cobra.Command{
-	Use:   `cmd <project> <chat-id> <command-or-prompt>`,
-	Short: "Run a command or prompt against an existing project and chat",
+	Use:   `cmd <project> <thread-id> <command-or-prompt>`,
+	Short: "Run a command or prompt against an existing project and thread",
 	Long: `Execute a slash command (like /status, /diff, /cost) or send a prompt
-to an existing chat in a project.
+to an existing thread in a project.
 
-The chat-id can be a prefix (e.g. first 8 chars). Use "new" to start a fresh chat.
+The thread-id can be a prefix (e.g. first 8 chars). Use "new" to start a fresh thread.
 
 Examples:
   apex cmd my-app 8d300c0a /status
@@ -31,7 +31,7 @@ Examples:
 	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		projectName := args[0]
-		chatID := args[1]
+		threadID := args[1]
 		input := args[2]
 
 		database, err := db.Open(cfg.DBPath)
@@ -65,19 +65,19 @@ Examples:
 		}
 
 		if cmdVerbose {
-			chat.ProgressOut = os.Stderr
+			thread.ProgressOut = os.Stderr
 		} else {
-			chat.ProgressOut = io.Discard
+			thread.ProgressOut = io.Discard
 		}
 
 		project := rowToProject(projectRow)
-		repl := chat.NewREPL(database, manager, project.ID, project)
+		repl := thread.NewREPL(database, manager, project.ID, project)
 
-		if chatID == "new" {
-			chatID = ""
+		if threadID == "new" {
+			threadID = ""
 		}
 
-		return repl.RunCommand(chatID, input)
+		return repl.RunCommand(threadID, input)
 	},
 }
 

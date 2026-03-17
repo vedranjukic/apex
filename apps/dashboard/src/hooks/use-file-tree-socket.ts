@@ -16,6 +16,19 @@ export function useFileTreeSocket(
   const boundProjectId = useRef(projectId);
   boundProjectId.current = projectId;
 
+  const refreshAllCachedDirs = useCallback(() => {
+    const socket = socketRef.current;
+    if (!socket?.connected || !boundProjectId.current) return;
+    const { cache, rootPath } = useFileTreeStore.getState();
+    const dirs = rootPath ? [rootPath, ...Object.keys(cache)] : Object.keys(cache);
+    const seen = new Set<string>();
+    for (const dir of dirs) {
+      if (seen.has(dir)) continue;
+      seen.add(dir);
+      socket.emit('file_list', { projectId: boundProjectId.current, path: dir });
+    }
+  }, [socketRef]);
+
   useEffect(() => {
     const socket = socketRef.current;
     if (!projectId || !socket) return;
@@ -101,11 +114,16 @@ export function useFileTreeSocket(
       useEditorStore.getState().markClean(data.path);
     };
 
+    const onReconnect = () => {
+      refreshAllCachedDirs();
+    };
+
     socket.on('file_list_result', onFileListResult);
     socket.on('file_op_result', onFileOpResult);
     socket.on('file_changed', onFileChanged);
     socket.on('file_read_result', onFileReadResult);
     socket.on('file_write_result', onFileWriteResult);
+    socket.on('connect', onReconnect);
 
     return () => {
       socket.off('file_list_result', onFileListResult);
@@ -113,9 +131,10 @@ export function useFileTreeSocket(
       socket.off('file_changed', onFileChanged);
       socket.off('file_read_result', onFileReadResult);
       socket.off('file_write_result', onFileWriteResult);
+      socket.off('connect', onReconnect);
       reset();
     };
-  }, [projectId, socketRef, setEntries, invalidate, reset]);
+  }, [projectId, socketRef, setEntries, invalidate, reset, refreshAllCachedDirs]);
 
   const requestListing = useCallback(
     (path: string) => {
@@ -194,16 +213,13 @@ export function useFileTreeSocket(
     }
   }, [socketRef, invalidate]);
 
-  // Periodic root-directory poll as a safety net
+  // Periodic poll of all cached directories as a safety net
   useEffect(() => {
     const id = setInterval(() => {
-      const socket = socketRef.current;
-      const root = useFileTreeStore.getState().rootPath;
-      if (!socket?.connected || !boundProjectId.current || !root) return;
-      socket.emit('file_list', { projectId: boundProjectId.current, path: root });
+      refreshAllCachedDirs();
     }, ROOT_POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [socketRef]);
+  }, [refreshAllCachedDirs]);
 
   return { requestListing, createFile, renameFile, deleteFile, moveFile, readFile, writeFile, refreshAll };
 }

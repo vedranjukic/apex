@@ -69,13 +69,14 @@ type ProjectRow struct {
 	DeletedAt       *string `db:"deletedAt"`
 }
 
-type ChatRow struct {
+type ThreadRow struct {
 	ID              string  `db:"id"`
 	ProjectID       string  `db:"projectId"`
 	Title           string  `db:"title"`
 	Status          string  `db:"status"`
 	ClaudeSessionID *string `db:"claudeSessionId"`
 	Mode            *string `db:"mode"`
+	AgentType       *string `db:"agentType"`
 	CreatedAt       string  `db:"createdAt"`
 	UpdatedAt       string  `db:"updatedAt"`
 }
@@ -178,24 +179,24 @@ func (d *DB) DeleteProject(id string) error {
 	return err
 }
 
-// ── Chats ────────────────────────────────────────────────
+// ── Threads ──────────────────────────────────────────────
 
-func (d *DB) ListChats(projectID string) ([]ChatRow, error) {
-	var rows []ChatRow
+func (d *DB) ListThreads(projectID string) ([]ThreadRow, error) {
+	var rows []ThreadRow
 	err := d.db.Select(&rows, `SELECT * FROM tasks WHERE projectId = ? ORDER BY createdAt DESC`, projectID)
 	return rows, err
 }
 
-func (d *DB) GetChat(id string) (*ChatRow, error) {
-	var row ChatRow
+func (d *DB) GetThread(id string) (*ThreadRow, error) {
+	var row ThreadRow
 	err := d.db.Get(&row, `SELECT * FROM tasks WHERE id = ?`, id)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("chat not found: %s", id)
+		return nil, fmt.Errorf("thread not found: %s", id)
 	}
 	return &row, err
 }
 
-func (d *DB) CreateChat(projectID, title string) (*ChatRow, error) {
+func (d *DB) CreateThread(projectID, title string) (*ThreadRow, error) {
 	id := uuid.New().String()
 	now := nowISO()
 	if len(title) > 100 {
@@ -207,24 +208,24 @@ func (d *DB) CreateChat(projectID, title string) (*ChatRow, error) {
 		id, projectID, title, "idle", now, now,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("create chat: %w", err)
+		return nil, fmt.Errorf("create thread: %w", err)
 	}
-	return d.GetChat(id)
+	return d.GetThread(id)
 }
 
-func (d *DB) UpdateChatStatus(id, status string) error {
+func (d *DB) UpdateThreadStatus(id, status string) error {
 	now := nowISO()
 	_, err := d.db.Exec(`UPDATE tasks SET status = ?, updatedAt = ? WHERE id = ?`, status, now, id)
 	return err
 }
 
-func (d *DB) UpdateChatSessionID(id, sessionID string) error {
+func (d *DB) UpdateThreadSessionID(id, sessionID string) error {
 	now := nowISO()
 	_, err := d.db.Exec(`UPDATE tasks SET claudeSessionId = ?, updatedAt = ? WHERE id = ?`, sessionID, now, id)
 	return err
 }
 
-func (d *DB) UpdateChatTitle(id, title string) error {
+func (d *DB) UpdateThreadTitle(id, title string) error {
 	if len(title) > 100 {
 		title = title[:100] + "…"
 	}
@@ -233,26 +234,26 @@ func (d *DB) UpdateChatTitle(id, title string) error {
 	return err
 }
 
-func (d *DB) DeleteChat(id string) error {
+func (d *DB) DeleteThread(id string) error {
 	_, err := d.db.Exec(`DELETE FROM tasks WHERE id = ?`, id)
 	return err
 }
 
 // ── Messages ─────────────────────────────────────────────
 
-func (d *DB) GetMessages(chatID string) ([]MessageRow, error) {
+func (d *DB) GetMessages(threadID string) ([]MessageRow, error) {
 	var rows []MessageRow
-	err := d.db.Select(&rows, `SELECT * FROM messages WHERE taskId = ? ORDER BY createdAt ASC`, chatID)
+	err := d.db.Select(&rows, `SELECT * FROM messages WHERE taskId = ? ORDER BY createdAt ASC`, threadID)
 	return rows, err
 }
 
 // AddMessage inserts a new message. content and metadata should be JSON strings.
-func (d *DB) AddMessage(chatID, role, contentJSON string, metadataJSON *string) error {
+func (d *DB) AddMessage(threadID, role, contentJSON string, metadataJSON *string) error {
 	id := uuid.New().String()
 	now := nowISO()
 	_, err := d.db.Exec(
 		`INSERT INTO messages (id, taskId, role, content, metadata, createdAt) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, chatID, role, contentJSON, metadataJSON, now,
+		id, threadID, role, contentJSON, metadataJSON, now,
 	)
 	return err
 }
@@ -295,6 +296,7 @@ func (d *DB) EnsureTables() error {
 			"status"          varchar NOT NULL DEFAULT 'idle',
 			"claudeSessionId" varchar,
 			"mode"            varchar,
+			"agentType"       varchar,
 			"createdAt"       datetime NOT NULL DEFAULT (datetime('now')),
 			"updatedAt"       datetime NOT NULL DEFAULT (datetime('now'))
 		)`,

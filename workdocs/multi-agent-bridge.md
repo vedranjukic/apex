@@ -74,11 +74,12 @@ The bridge script supports three agent backends through an adapter pattern. Each
 | `libs/orchestrator/src/lib/sandbox-manager.ts` | Sandbox lifecycle, per-agent auth setup, bridge installation, `sendPrompt()` with `agentType` |
 | `libs/orchestrator/src/lib/types.ts` | Bridge message types (`claude_message`, `claude_exit`, `claude_error` — kept for backward compat) |
 | `libs/shared/src/lib/enums.ts` | `AgentType` enum: `claude_code`, `open_code`, `codex` |
-| `apps/api/src/modules/agent/agent.gateway.ts` | Socket.io gateway, passes `project.agentType` through all `sendPrompt()` calls |
+| `apps/api/src/modules/agent/agent.gateway.ts` | Socket.io gateway, resolves `thread.agentType ?? project.agentType` for all `sendPrompt()` calls |
 | `apps/api/src/modules/projects/projects.service.ts` | Provisioning, passes `agentType` to `createSandbox()` and `provisionSandbox()` |
 | `apps/api/src/modules/settings/settings.service.ts` | `OPENAI_API_KEY` added to allowed settings keys |
-| `apps/dashboard/src/stores/agent-settings-store.ts` | Per-agent model lists (`AGENT_MODELS_BY_TYPE`), `getModelsForAgentType()` helper |
-| `apps/dashboard/src/components/projects/create-project-dialog.tsx` | Agent type selector (Claude Code / OpenCode / Codex) |
+| `apps/dashboard/src/stores/agent-settings-store.ts` | Per-agent model lists (`AGENT_MODELS_BY_TYPE`), `AGENT_TYPES`, `agentType` state, `getModelsForAgentType()` helper |
+| `apps/dashboard/src/components/agent/mode-model-dropdowns.tsx` | `AgentDropdown` (per-thread agent selector) + `ModelDropdown` (agent-aware model list) in prompt toolbar |
+| `apps/dashboard/src/components/projects/create-project-dialog.tsx` | Agent type selector (Claude Code / OpenCode / Codex) for project-level default |
 | `apps/dashboard/src/pages/settings-page.tsx` | OpenAI API Key field for Codex |
 | `apps/cli/internal/sandbox/bridge.go` | Go CLI `sendPrompt()` includes `agentType` field |
 | `apps/cli/internal/sandbox/scripts.go` | `GenerateBridgeScript()` accepts `agentType` parameter |
@@ -89,7 +90,7 @@ Each adapter implements:
 
 | Method | Claude | OpenCode | Codex |
 |---|---|---|---|
-| `spawn(chatId, prompt, mode, model, sessionId)` | `pty.spawn("claude", [...])` | `pty.spawn("opencode", ["run", ...])` | `spawn("codex", ["app-server", ...])` + JSON-RPC handshake |
+| `spawn(threadId, prompt, mode, model, sessionId)` | `pty.spawn("claude", [...])` | `pty.spawn("opencode", ["run", ...])` | `spawn("codex", ["app-server", ...])` + JSON-RPC handshake |
 | `isAlive(entry)` | `proc.pid > 0` | `proc.pid > 0` | `!proc.killed && exitCode === null` |
 | `sendFollowUp(entry, prompt)` | Pipe JSONL user message to stdin | `null` (respawn with `--session`) | `turn/start` JSON-RPC on same thread |
 | `sendUserAnswer(entry, toolUseId, answer)` | Pipe JSONL tool_result to stdin (fallback) | Not supported (fallback) | `turn/steer` JSON-RPC (fallback) |
@@ -105,11 +106,11 @@ The bridge core (`handleStartAgent`) checks `adapter.processModel`:
 Claude's native `AskUserQuestion` tool is **disallowed** for all agents via `--disallowedTools`. Instead, all agents use the MCP `ask_user` tool which routes through the bridge's `/internal/ask-user` HTTP endpoint. This provides a single code path regardless of agent type:
 
 1. Agent calls MCP `mcp__terminal-server__ask_user` → MCP server POSTs to `/internal/ask-user`
-2. Bridge emits `ask_user_pending { chatId, questionId }` + `claude_message` with AskUserQuestion tool_use
+2. Bridge emits `ask_user_pending { threadId, questionId }` + `claude_message` with AskUserQuestion tool_use
 3. Bridge blocks the HTTP response (5-min timeout) in the `pendingAskUser` map
-4. Client (dashboard or CLI) sets chat status to `waiting_for_input`
-5. User answers → `claude_user_answer { chatId, toolUseId, answer }` → bridge resolves `pendingAskUser`
-6. Bridge emits `ask_user_resolved { chatId, questionId }` → status back to `running`
+4. Client (dashboard or CLI) sets thread status to `waiting_for_input`
+5. User answers → `claude_user_answer { threadId, toolUseId, answer }` → bridge resolves `pendingAskUser`
+6. Bridge emits `ask_user_resolved { threadId, questionId }` → status back to `running`
 7. HTTP response returns answer to MCP server → MCP returns to agent → agent continues
 
 The adapter-specific `sendUserAnswer` methods serve as fallbacks but are not used in the normal flow. The sandbox instructions (CLAUDE.md / AGENTS.md) explicitly tell agents to use `mcp__terminal-server__ask_user` for questions.
@@ -119,7 +120,7 @@ The adapter-specific `sendUserAnswer` methods serve as fallbacks but are not use
 | Agent | Auth Setup | Instructions File | MCP Config |
 |---|---|---|---|
 | Claude Code | `ANTHROPIC_API_KEY` env var on bridge process | `~/.claude/CLAUDE.md` | `~/.claude.json` with terminal-server |
-| OpenCode | Pre-warm: `opencode session list` (triggers DB migration) | `AGENTS.md` in project dir | `opencode.json` with terminal-server |
+| OpenCode | Pre-warm: `opencode session list` (triggers DB migration) | `AGENTS.md` in project dir | `opencode.json` with terminal-server + 300s MCP timeout |
 | Codex | `echo "$KEY" \| codex login --with-api-key` | `AGENTS.md` in project dir | `codex mcp add terminal-server` |
 
 The bridge process env includes `HOME=/home/daytona` and `PATH` with `/home/daytona/.opencode/bin` for all agent types.
@@ -188,12 +189,24 @@ Requires:
 | Prompt + response | Codex | 2.1s | Pass |
 | Normalization contract | All | <1ms | Pass |
 
+## Per-Thread Agent Selection
+
+Agent type can be set at two levels:
+
+1. **Project level** (`project.agentType`) — default for all threads in the project, set at project creation.
+2. **Thread level** (`task.agentType`) — optional per-thread override, set from the `AgentDropdown` in the prompt toolbar.
+
+The gateway resolves the effective agent type as `thread.agentType ?? project.agentType`. This allows different threads within the same project to use different agents (e.g., one thread with Claude Code, another with Codex). The `send_prompt` and `execute_thread` WebSocket payloads accept an optional `agentType` field which is persisted on the thread entity.
+
+The `AgentDropdown` in the prompt input toolbar lets users switch agents per-thread. When an agent is selected, the `ModelDropdown` dynamically updates to show only models available for that agent (`AGENT_MODELS_BY_TYPE`). When switching to an existing thread that has a stored `agentType`, the dropdowns restore to match.
+
 ## Backward Compatibility
 
 - Wire message types unchanged: `start_claude`, `claude_message`, `claude_exit`, `claude_error` (bridge uses these regardless of agent type)
 - The `start_claude` message now carries an optional `agentType` field; bridge falls back to its `AGENT_TYPE` constant
 - Gateway `messageHandler` unchanged — bridge normalizes all output into the format the gateway already expects
 - Dashboard rendering unchanged — all agents produce `text`, `tool_use`, `tool_result` content blocks with normalized tool names
+- Threads with `agentType: null` continue to use the project-level default
 
 ## Troubleshooting
 
@@ -202,5 +215,7 @@ Requires:
 **Codex app-server auth fails (401)**: `CODEX_API_KEY` and `OPENAI_API_KEY` env vars don't work for app-server. Must run `codex login --with-api-key` to write `~/.codex/auth.json`.
 
 **OpenCode first-run slow**: The one-time DB migration can take 30+ seconds. The `installBridge` pre-warm (`opencode session list`) triggers it during provisioning, before the first prompt.
+
+**OpenCode ask_user times out immediately**: OpenCode's default MCP tool timeout is 5 seconds. The `ask_user` tool needs to block until the user responds (up to 5 minutes). The `opencode.json` config must set both `experimental.mcp_timeout` and per-server `timeout` to 300000ms (5 min) to match the bridge's ask_user timeout.
 
 **Codex `danger-full-access` mode**: Uses `commandExecution` (bash) for everything including file reads/writes. Structured `fileChange` items only appear in `workspace-write` sandbox mode. The bridge's file watcher catches all filesystem changes regardless.

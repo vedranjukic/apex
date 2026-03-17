@@ -70,11 +70,11 @@ function subscribeProject(socket: Socket, projectId: string): Promise<void> {
   });
 }
 
-async function createChat(
+async function createThread(
   projectId: string,
   prompt: string,
 ): Promise<string> {
-  const res = await axios.post(`/api/projects/${projectId}/chats`, { prompt });
+  const res = await axios.post(`/api/projects/${projectId}/threads`, { prompt });
   expect([200, 201]).toContain(res.status);
   return res.data.id;
 }
@@ -96,7 +96,7 @@ interface AgentEvent {
 
 function collectAgentEvents(
   socket: Socket,
-  chatId: string,
+  threadId: string,
   timeoutMs = 120_000,
 ): Promise<AgentEvent[]> {
   return new Promise((resolve, reject) => {
@@ -106,8 +106,8 @@ function collectAgentEvents(
       resolve(events); // return what we have instead of failing
     }, timeoutMs);
 
-    const onMessage = (data: { chatId?: string; message?: AgentEvent }) => {
-      if (data.chatId !== chatId) return;
+    const onMessage = (data: { threadId?: string; message?: AgentEvent }) => {
+      if (data.threadId !== threadId) return;
       const ev = data.message;
       if (!ev) return;
       events.push(ev);
@@ -117,8 +117,8 @@ function collectAgentEvents(
       }
     };
 
-    const onError = (data: { chatId?: string; error?: string }) => {
-      if (data.chatId !== chatId) return;
+    const onError = (data: { threadId?: string; error?: string }) => {
+      if (data.threadId !== threadId) return;
       events.push({ type: 'error', subtype: data.error });
       cleanup();
       resolve(events);
@@ -167,10 +167,10 @@ describeIfDaytona('Multi-agent E2E', () => {
       socket = await connectSocket();
       await subscribeProject(socket, projectId);
 
-      const chatId = await createChat(projectId, 'Say exactly: hello e2e');
-      socket.emit('execute_chat', { chatId, mode: 'agent' });
+      const threadId = await createThread(projectId, 'Say exactly: hello e2e');
+      socket.emit('execute_thread', { threadId, mode: 'agent' });
 
-      const events = await collectAgentEvents(socket, chatId);
+      const events = await collectAgentEvents(socket, threadId);
 
       // Should have system init
       const initEvent = events.find(
@@ -215,10 +215,10 @@ describeIfDaytona('Multi-agent E2E', () => {
       socket = await connectSocket();
       await subscribeProject(socket, projectId);
 
-      const chatId = await createChat(projectId, 'What is 2 plus 2? Reply with just the number.');
-      socket.emit('execute_chat', { chatId, mode: 'agent' });
+      const threadId = await createThread(projectId, 'What is 2 plus 2? Reply with just the number.');
+      socket.emit('execute_thread', { threadId, mode: 'agent' });
 
-      const events = await collectAgentEvents(socket, chatId);
+      const events = await collectAgentEvents(socket, threadId);
 
       // Debug: log what we actually received
       console.log(`[OpenCode] Received ${events.length} events:`);
@@ -293,10 +293,10 @@ describeIfDaytona('Multi-agent E2E', () => {
       socket = await connectSocket();
       await subscribeProject(socket, projectId);
 
-      const chatId = await createChat(projectId, 'Say exactly: hello from codex');
-      socket.emit('execute_chat', { chatId, mode: 'agent' });
+      const threadId = await createThread(projectId, 'Say exactly: hello from codex');
+      socket.emit('execute_thread', { threadId, mode: 'agent' });
 
-      const events = await collectAgentEvents(socket, chatId);
+      const events = await collectAgentEvents(socket, threadId);
 
       // Should have system init with thread ID as session
       const initEvent = events.find(

@@ -4,7 +4,7 @@
   "sidebar.toggleRight": "Mod+Shift+B",
   "terminal.togglePanel": "Mod+Backquote",
   "terminal.new": "Mod+Shift+Backquote",
-  "chat.new": "Mod+Shift+N",
+  "thread.new": "Mod+Shift+N",
   "explorer.focus": "Mod+Shift+E",
   "editor.save": "Mod+S"
 }

@@ -1,7 +1,7 @@
 import { useEffect, useCallback } from 'react';
 import { Search, Plus, Loader2, CheckCircle2, AlertCircle, Circle, MessageCircleQuestion, X, FileText, ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '../../lib/cn';
-import { useChatsStore } from '../../stores/tasks-store';
+import { useThreadsStore } from '../../stores/tasks-store';
 import { useEditorStore } from '../../stores/editor-store';
 import { useState } from 'react';
 
@@ -11,57 +11,57 @@ interface SidebarProps {
 
 export function Sidebar({ projectId }: SidebarProps) {
   const {
-    chats,
-    activeChatId,
+    threads,
+    activeThreadId,
     composingNew,
     loading,
     searchQuery,
     setSearchQuery,
-    fetchChats,
-    setActiveChat,
-    startNewChat,
-  } = useChatsStore();
+    fetchThreads,
+    setActiveThread,
+    startNewThread,
+  } = useThreadsStore();
 
   const openFiles = useEditorStore((s) => s.openFiles);
   const activeFilePath = useEditorStore((s) => s.activeFilePath);
   const activeView = useEditorStore((s) => s.activeView);
   const closeFile = useEditorStore((s) => s.closeFile);
   const setActiveFile = useEditorStore((s) => s.setActiveFile);
-  const showChat = useEditorStore((s) => s.showChat);
+  const showThread = useEditorStore((s) => s.showThread);
 
   const [filesExpanded, setFilesExpanded] = useState(true);
-  const [chatsExpanded, setChatsExpanded] = useState(true);
+  const [threadsExpanded, setThreadsExpanded] = useState(true);
 
   useEffect(() => {
-    fetchChats(projectId);
-  }, [projectId, fetchChats]);
+    fetchThreads(projectId);
+  }, [projectId, fetchThreads]);
 
   const handleSearch = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       setSearchQuery(e.target.value);
-      fetchChats(projectId);
+      fetchThreads(projectId);
     },
-    [projectId, setSearchQuery, fetchChats],
+    [projectId, setSearchQuery, fetchThreads],
   );
 
-  const handleChatClick = useCallback(
-    (chatId: string) => {
-      setActiveChat(chatId);
-      showChat();
+  const handleThreadClick = useCallback(
+    (threadId: string) => {
+      setActiveThread(threadId);
+      showThread();
     },
-    [setActiveChat, showChat],
+    [setActiveThread, showThread],
   );
 
-  const handleNewChat = useCallback(() => {
-    startNewChat();
-    showChat();
-  }, [startNewChat, showChat]);
+  const handleNewThread = useCallback(() => {
+    startNewThread();
+    showThread();
+  }, [startNewThread, showThread]);
 
-  const filteredChats = searchQuery
-    ? chats.filter((c) =>
+  const filteredThreads = searchQuery
+    ? threads.filter((c) =>
         c.title.toLowerCase().includes(searchQuery.toLowerCase()),
       )
-    : chats;
+    : threads;
 
   return (
     <aside className="w-72 bg-sidebar text-panel-text flex flex-col shrink-0 h-full">
@@ -123,18 +123,18 @@ export function Sidebar({ projectId }: SidebarProps) {
 
       <div className="border-t border-panel-border" />
 
-      {/* Chats Section */}
+      {/* Threads Section */}
       <div className="flex flex-col flex-1 min-h-0">
         <button
-          onClick={() => setChatsExpanded(!chatsExpanded)}
+          onClick={() => setThreadsExpanded(!threadsExpanded)}
           className="flex items-center gap-1 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-panel-text-muted select-none hover:text-panel-text transition-colors"
         >
-          {chatsExpanded
+          {threadsExpanded
             ? <ChevronDown className="w-3 h-3" />
             : <ChevronRight className="w-3 h-3" />}
-          Chats
+          Threads
         </button>
-        {chatsExpanded && (
+        {threadsExpanded && (
           <div className="flex flex-col flex-1 min-h-0">
             {/* Search */}
             <div className="px-3 pb-2">
@@ -142,7 +142,7 @@ export function Sidebar({ projectId }: SidebarProps) {
                 <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-panel-icon" />
                 <input
                   type="text"
-                  placeholder="Search chats…"
+                  placeholder="Search threads…"
                   value={searchQuery}
                   onChange={handleSearch}
                   className="w-full pl-9 pr-3 py-2 bg-sidebar-hover rounded-lg text-sm text-panel-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-primary"
@@ -150,45 +150,55 @@ export function Sidebar({ projectId }: SidebarProps) {
               </div>
             </div>
 
-            {/* New Chat button */}
+            {/* New Thread button */}
             <div className="px-3 pb-2">
               <button
-                onClick={handleNewChat}
+                onClick={handleNewThread}
                   className={cn(
                   'flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm transition-colors',
-                  composingNew && activeView === 'chat'
+                  composingNew && activeView === 'thread'
                     ? 'bg-sidebar-active text-panel-text'
                     : 'text-panel-text-muted hover:bg-sidebar-hover',
                 )}
               >
                 <Plus className="w-4 h-4" />
-                New Chat
+                New Thread
               </button>
             </div>
 
-            {/* Chat list */}
+            {/* Thread list */}
             <div className="flex-1 overflow-y-auto px-2">
-              {loading && chats.length === 0 ? (
+              {loading && threads.length === 0 ? (
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="w-5 h-5 animate-spin text-text-muted" />
                 </div>
-              ) : filteredChats.length === 0 ? (
-                <p className="text-center text-text-muted text-sm py-8">No chats yet</p>
+              ) : filteredThreads.length === 0 ? (
+                <p className="text-center text-text-muted text-sm py-8">No threads yet</p>
               ) : (
                 <ul className="space-y-0.5">
-                  {filteredChats.map((chat) => (
-                    <li key={chat.id}>
+                  {filteredThreads.map((thread) => (
+                    <li key={thread.id}>
                       <button
-                        onClick={() => handleChatClick(chat.id)}
+                        onClick={() => handleThreadClick(thread.id)}
                         className={cn(
                           'flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm text-left transition-colors',
-                          activeView === 'chat' && activeChatId === chat.id
+                          activeView === 'thread' && activeThreadId === thread.id
                             ? 'bg-sidebar-active text-panel-text'
                             : 'text-panel-text-muted hover:bg-sidebar-hover',
                         )}
                       >
-                        <StatusIcon status={chat.status} />
-                        <span className="truncate flex-1">{chat.title}</span>
+                        <StatusIcon status={thread.status} />
+                        <div className="flex flex-col flex-1 min-w-0">
+                          <span className="truncate">{thread.title}</span>
+                          <span className="flex items-center gap-1.5 text-[10px] text-text-muted">
+                            <span className="font-mono">{thread.id.slice(0, 8)}</span>
+                            {thread.agentType && (
+                              <span className="px-1 rounded bg-surface-secondary/60">
+                                {{ claude_code: 'Claude', open_code: 'OpenCode', codex: 'Codex' }[thread.agentType] ?? thread.agentType}
+                              </span>
+                            )}
+                          </span>
+                        </div>
                       </button>
                     </li>
                   ))}

@@ -31,6 +31,9 @@ export class TaskEntity {
   @Column({ type: 'text', nullable: true, default: null })
   mode: string | null;
 
+  @Column({ type: 'text', nullable: true, default: null })
+  agentType: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

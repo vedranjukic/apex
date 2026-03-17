@@ -5,7 +5,7 @@ import { projectsApi, type Project } from '../api/client';
 import { AppShell } from '../components/layout/app-shell';
 import { LeftSidebar } from '../components/layout/left-sidebar';
 import { Sidebar } from '../components/layout/sidebar';
-import { AgentChat } from '../components/agent/agent-chat';
+import { AgentThread } from '../components/agent/agent-thread';
 import { TerminalPanel } from '../components/terminal/terminal-panel';
 import { ProjectStatusBar } from '../components/layout/project-status-bar';
 import { useAgentSocket } from '../hooks/use-agent-socket';
@@ -16,16 +16,17 @@ import { useFileTreeSocket } from '../hooks/use-file-tree-socket';
 import { useSearchSocket } from '../hooks/use-search-socket';
 import { useGitSocket } from '../hooks/use-git-socket';
 import { usePortsSocket } from '../hooks/use-ports-socket';
-import { useChatsStore } from '../stores/tasks-store';
+import { useThreadsStore } from '../stores/tasks-store';
 import { useProjectCommands } from '../hooks/use-project-commands';
 import { useEditorStore, type CodeSelection } from '../stores/editor-store';
+import { useAgentSettingsStore, type AgentTypeId } from '../stores/agent-settings-store';
 import { CodeViewer } from '../components/editor/code-viewer';
 
 export function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
-  const { sendPrompt, executeChat, sendUserAnswer, socket } = useAgentSocket(projectId);
+  const { sendPrompt, executeThread, sendUserAnswer, socket } = useAgentSocket(projectId);
   const terminal = useTerminalSocket(projectId, socket);
   const { layoutReady } = useLayoutSocket(projectId, socket);
   const projectInfo = useProjectInfoSocket(projectId, socket);
@@ -33,9 +34,9 @@ export function ProjectPage() {
   const { search: searchFiles } = useSearchSocket(projectId, socket);
   const gitActions = useGitSocket(projectId, socket);
   const { requestPreviewUrl } = usePortsSocket(projectId, socket);
-  const addMessage = useChatsStore((s) => s.addMessage);
-  const createChat = useChatsStore((s) => s.createChat);
-  const fetchChats = useChatsStore((s) => s.fetchChats);
+  const addMessage = useThreadsStore((s) => s.addMessage);
+  const createThread = useThreadsStore((s) => s.createThread);
+  const fetchThreads = useThreadsStore((s) => s.fetchThreads);
   const resetEditor = useEditorStore((s) => s.reset);
   const pollRef = useRef<ReturnType<typeof setInterval>>();
   const [provisionMsg, setProvisionMsg] = useState<string | null>(null);
@@ -46,12 +47,12 @@ export function ProjectPage() {
 
   useEffect(() => {
     if (projectId) {
-      fetchChats(projectId);
+      fetchThreads(projectId);
     }
-  }, [projectId, fetchChats]);
+  }, [projectId, fetchThreads]);
 
   const handleSendPrompt = useCallback(
-    (chatId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => {
+    (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string) => {
       let fullPrompt = prompt;
       if (files && files.length > 0) {
         fullPrompt = `Referenced files:\n${files.map((f) => `- ${f}`).join('\n')}\n\n${fullPrompt}`;
@@ -67,13 +68,13 @@ export function ProjectPage() {
       if (snippets && snippets.length > 0) metadata.codeSnippets = snippets;
       addMessage({
         id: crypto.randomUUID(),
-        taskId: chatId,
+        taskId: threadId,
         role: 'user',
         content: [{ type: 'text', text: prompt }],
         metadata: Object.keys(metadata).length > 0 ? metadata : null,
         createdAt: new Date().toISOString(),
       });
-      sendPrompt(chatId, fullPrompt, mode, model);
+      sendPrompt(threadId, fullPrompt, mode, model, agentType);
     },
     [sendPrompt, addMessage],
   );
@@ -89,7 +90,12 @@ export function ProjectPage() {
     setLoading(true);
     projectsApi
       .get(projectId)
-      .then(setProject)
+      .then((p) => {
+        setProject(p);
+        if (p.agentType) {
+          useAgentSettingsStore.getState().setAgentType(p.agentType as AgentTypeId);
+        }
+      })
       .finally(() => setLoading(false));
   }, [projectId]);
 
@@ -130,20 +136,20 @@ export function ProjectPage() {
     return () => { s.off('agent_status', handler); };
   }, [socket, projectId]);
 
-  const handleExecuteChat = useCallback(
-    (chatId: string, mode?: string, model?: string) => {
-      executeChat(chatId, mode, model);
+  const handleExecuteThread = useCallback(
+    (threadId: string, mode?: string, model?: string, agentType?: string) => {
+      executeThread(threadId, mode, model, agentType);
     },
-    [executeChat],
+    [executeThread],
   );
 
   const handleAnalyzeGitignore = useCallback(
     async (prompt: string) => {
       if (!projectId) return;
-      const chat = await createChat(projectId, { prompt });
-      executeChat(chat.id, 'agent');
+      const thread = await createThread(projectId, { prompt });
+      executeThread(thread.id, 'agent');
     },
-    [projectId, createChat, executeChat],
+    [projectId, createThread, executeThread],
   );
 
   if (loading) {
@@ -200,9 +206,10 @@ export function ProjectPage() {
       )}
       <CentralPanel
         projectId={projectId}
+        projectAgentType={project.agentType}
         onSendPrompt={handleSendPrompt}
         onSendSilentPrompt={sendPrompt}
-        onExecuteChat={handleExecuteChat}
+        onExecuteThread={handleExecuteThread}
         onSendUserAnswer={sendUserAnswer}
         readFile={fileActions.readFile}
         writeFile={fileActions.writeFile}
@@ -214,19 +221,21 @@ export function ProjectPage() {
 
 function CentralPanel({
   projectId,
+  projectAgentType,
   onSendPrompt,
   onSendSilentPrompt,
-  onExecuteChat,
+  onExecuteThread,
   onSendUserAnswer,
   readFile,
   writeFile,
   requestListing,
 }: {
   projectId: string;
-  onSendPrompt: (chatId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => void;
-  onSendSilentPrompt: (chatId: string, prompt: string, mode?: string, model?: string) => void;
-  onExecuteChat: (chatId: string, mode?: string, model?: string) => void;
-  onSendUserAnswer: (chatId: string, toolUseId: string, answer: string) => void;
+  projectAgentType?: string;
+  onSendPrompt: (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string) => void;
+  onSendSilentPrompt: (threadId: string, prompt: string, mode?: string, model?: string) => void;
+  onExecuteThread: (threadId: string, mode?: string, model?: string, agentType?: string) => void;
+  onSendUserAnswer: (threadId: string, toolUseId: string, answer: string) => void;
   readFile: (path: string) => void;
   writeFile: (path: string, content: string) => void;
   requestListing: (path: string) => void;
@@ -252,11 +261,12 @@ function CentralPanel({
   }
 
   return (
-    <AgentChat
+    <AgentThread
       projectId={projectId}
+      projectAgentType={projectAgentType}
       onSendPrompt={onSendPrompt}
       onSendSilentPrompt={onSendSilentPrompt}
-      onExecuteChat={onExecuteChat}
+      onExecuteThread={onExecuteThread}
       onSendUserAnswer={onSendUserAnswer}
       requestListing={requestListing}
     />

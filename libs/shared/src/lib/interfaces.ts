@@ -47,6 +47,7 @@ export interface ITask {
   projectId: string;
   title: string;
   status: TaskStatus;
+  agentType?: string | null;
   createdAt: string;
   updatedAt: string;
 }

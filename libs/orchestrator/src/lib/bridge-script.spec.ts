@@ -344,9 +344,9 @@ describe('Shared infrastructure', () => {
     expect(script).toContain('pendingAskUser.get(msg.toolUseId)');
   });
 
-  it('should fall back to chatId matching in handleUserAnswer', () => {
+  it('should fall back to threadId matching in handleUserAnswer', () => {
     const script = getBridgeScript(8080, '/tmp/test');
-    expect(script).toContain('entry.chatId === msg.chatId');
+    expect(script).toContain('entry.threadId === msg.threadId');
   });
 
   it('should emit bridge_ready on connection', () => {

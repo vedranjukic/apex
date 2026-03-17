@@ -16,13 +16,13 @@ import { cn } from '../../lib/cn';
 import { getGitFilesDisplayLimit } from '../../lib/git-source-control-config';
 import { useGitStore, type GitFileEntry } from '../../stores/git-store';
 import type { GitActions } from '../../hooks/use-git-socket';
-import { chatsApi, type Message } from '../../api/client';
+import { threadsApi, type Message } from '../../api/client';
 
 interface SourceControlPanelProps {
   gitActions: GitActions;
   projectId: string;
   socket: { current: Socket | null };
-  sendPrompt: (chatId: string, prompt: string, mode?: string, model?: string) => void;
+  sendPrompt: (threadId: string, prompt: string, mode?: string, model?: string) => void;
   onAnalyzeGitignore?: (prompt: string) => Promise<void>;
 }
 
@@ -41,7 +41,7 @@ export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt, 
   const optimisticUnstage = useGitStore((s) => s.optimisticUnstage);
   const optimisticDiscard = useGitStore((s) => s.optimisticDiscard);
   const [generating, setGenerating] = useState(false);
-  const generatingChatId = useRef<string | null>(null);
+  const generatingThreadId = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -68,7 +68,7 @@ export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt, 
 
   // Clean up socket listener on unmount
   useEffect(() => {
-    return () => { generatingChatId.current = null; };
+    return () => { generatingThreadId.current = null; };
   }, []);
 
   const handleGenerateMessage = useCallback(async () => {
@@ -83,15 +83,15 @@ export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt, 
         return i >= 0 ? p.slice(i + 1) : p;
       }));
 
-      // Gather context from existing chats
-      const chats = await chatsApi.listByProject(projectId);
+      // Gather context from existing threads
+      const threads = await threadsApi.listByProject(projectId);
       let context = '';
       const MAX_CONTEXT = 4000;
 
-      for (const chat of chats.slice(0, 10)) {
+      for (const thread of threads.slice(0, 10)) {
         if (context.length >= MAX_CONTEXT) break;
         let messages: Message[];
-        try { messages = await chatsApi.messages(chat.id); } catch { continue; }
+        try { messages = await threadsApi.messages(thread.id); } catch { continue; }
 
         for (const msg of messages) {
           if (context.length >= MAX_CONTEXT) break;
@@ -125,16 +125,16 @@ export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt, 
         'Respond with ONLY the commit message, nothing else.',
       ].join('\n');
 
-      // Create a temporary chat and send the prompt
-      const tempChat = await chatsApi.create(projectId, { prompt: 'generate commit message' });
-      generatingChatId.current = tempChat.id;
+      // Create a temporary thread and send the prompt
+      const tempThread = await threadsApi.create(projectId, { prompt: 'generate commit message' });
+      generatingThreadId.current = tempThread.id;
 
       const sock = socket.current;
       if (!sock) { setGenerating(false); return; }
 
       let accumulated = '';
-      const onMessage = (data: { chatId?: string; message?: { type: string; message?: { content?: Array<{ type: string; text?: string }> } } }) => {
-        if (data.chatId !== generatingChatId.current) return;
+      const onMessage = (data: { threadId?: string; message?: { type: string; message?: { content?: Array<{ type: string; text?: string }> } } }) => {
+        if (data.threadId !== generatingThreadId.current) return;
         const msg = data.message;
         if (!msg) return;
 
@@ -148,21 +148,21 @@ export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt, 
         }
         if (msg.type === 'result') {
           sock.off('agent_message', onMessage);
-          generatingChatId.current = null;
+          generatingThreadId.current = null;
           setGenerating(false);
-          // Clean up the temp chat
-          chatsApi.delete(tempChat.id).catch(() => {});
+          // Clean up the temp thread
+          threadsApi.delete(tempThread.id).catch(() => {});
         }
       };
 
       sock.on('agent_message', onMessage);
-      sendPrompt(tempChat.id, prompt, 'ask');
+      sendPrompt(tempThread.id, prompt, 'ask');
 
       // Safety timeout
       setTimeout(() => {
-        if (generatingChatId.current === tempChat.id) {
+        if (generatingThreadId.current === tempThread.id) {
           sock.off('agent_message', onMessage);
-          generatingChatId.current = null;
+          generatingThreadId.current = null;
           setGenerating(false);
         }
       }, 60_000);

@@ -369,7 +369,7 @@ async function handleRequest(request) {
 
       } else if (toolName === "ask_user") {
         const result = await bridgeRequest("/internal/ask-user", {
-          chatId: "default",
+          threadId: "default",
           input: { questions: args.questions },
         });
         if (result.error) {

@@ -5,7 +5,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/apex/cli/internal/chat"
+	"github.com/apex/cli/internal/thread"
 	"github.com/apex/cli/internal/db"
 	"github.com/spf13/cobra"
 )
@@ -36,9 +36,9 @@ Use --verbose to also see progress (spinner, tool calls, cost) on stderr.`,
 		defer database.Close()
 
 		if runVerbose {
-			chat.ProgressOut = os.Stderr
+			thread.ProgressOut = os.Stderr
 		} else {
-			chat.ProgressOut = io.Discard
+			thread.ProgressOut = io.Discard
 		}
 
 		projectRow, manager, err := createProjectWithSandbox(database, "ephemeral", runGitRepo)
@@ -48,7 +48,7 @@ Use --verbose to also see progress (spinner, tool calls, cost) on stderr.`,
 		defer manager.Close()
 
 		project := rowToProject(projectRow)
-		repl := chat.NewREPL(database, manager, project.ID, project)
+		repl := thread.NewREPL(database, manager, project.ID, project)
 
 		runErr := repl.RunSinglePrompt(prompt)
 

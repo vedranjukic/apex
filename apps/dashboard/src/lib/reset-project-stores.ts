@@ -1,5 +1,5 @@
 import { useTerminalStore } from '../stores/terminal-store';
-import { useChatsStore } from '../stores/tasks-store';
+import { useThreadsStore } from '../stores/tasks-store';
 import { useEditorStore } from '../stores/editor-store';
 import { useFileTreeStore } from '../stores/file-tree-store';
 import { usePortsStore } from '../stores/ports-store';
@@ -12,7 +12,7 @@ import { usePanelsStore } from '../stores/panels-store';
  */
 export function resetProjectStores(): void {
   useTerminalStore.getState().reset();
-  useChatsStore.getState().reset();
+  useThreadsStore.getState().reset();
   useEditorStore.getState().reset();
   useFileTreeStore.getState().reset();
   usePortsStore.getState().reset();

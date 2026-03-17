@@ -21,8 +21,8 @@ import {
 } from 'lucide-react';
 import type { ContentBlock } from '../../api/client';
 import { cn } from '../../lib/cn';
-import { useChatActions } from './chat-actions-context';
-import { useChatsStore } from '../../stores/tasks-store';
+import { useThreadActions } from './thread-actions-context';
+import { useThreadsStore } from '../../stores/tasks-store';
 import { useEditorStore } from '../../stores/editor-store';
 
 type Input = Record<string, unknown>;
@@ -532,8 +532,8 @@ function parseAnswerToSelections(
 }
 
 function AskQuestionBlock({ input, toolUseId }: { input: Input; toolUseId?: string }) {
-  const { sendUserAnswer, sendPrompt } = useChatActions();
-  const messages = useChatsStore((s) => s.messages);
+  const { sendUserAnswer, sendPrompt } = useThreadActions();
+  const messages = useThreadsStore((s) => s.messages);
   const questions = Array.isArray(input.questions)
     ? (input.questions as QuestionDef[])
     : [];
@@ -547,7 +547,10 @@ function AskQuestionBlock({ input, toolUseId }: { input: Input; toolUseId?: stri
       const block = m.content.find(
         (b: any) => b.type === 'tool_result' && b.tool_use_id === toolUseId,
       );
-      if (block?.content) return block.content as string;
+      if (block?.content) {
+        const c = block.content;
+        return typeof c === 'string' ? c : JSON.stringify(c);
+      }
     }
     return null;
   }, [messages, toolUseId]);

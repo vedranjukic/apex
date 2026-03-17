@@ -136,19 +136,19 @@ func (m *Manager) Connect(ctx context.Context, sandboxID string) error {
 // SendPrompt sends a prompt to the agent process in the sandbox.
 // mode is "agent", "plan", or "ask"; empty defaults to "agent".
 // agentType is "claude_code", "open_code", or "codex"; empty uses the bridge default.
-func (m *Manager) SendPrompt(chatID, prompt, sessionID, mode, agentType string) error {
+func (m *Manager) SendPrompt(threadID, prompt, sessionID, mode, agentType string) error {
 	if m.bridge == nil {
 		return fmt.Errorf("not connected to bridge")
 	}
-	return m.bridge.sendPrompt(chatID, prompt, sessionID, mode, agentType)
+	return m.bridge.sendPrompt(threadID, prompt, sessionID, mode, agentType)
 }
 
 // SendUserAnswer sends a user answer for an AskUserQuestion back to the bridge.
-func (m *Manager) SendUserAnswer(chatID, toolUseID, answer string) error {
+func (m *Manager) SendUserAnswer(threadID, toolUseID, answer string) error {
 	if m.bridge == nil {
 		return fmt.Errorf("not connected to bridge")
 	}
-	return m.bridge.sendUserAnswer(chatID, toolUseID, answer)
+	return m.bridge.sendUserAnswer(threadID, toolUseID, answer)
 }
 
 // Messages returns the channel of incoming bridge messages.

@@ -12,17 +12,17 @@ import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { AgentGateway } from './agent.gateway';
 import type { ProjectsService } from '../projects/projects.service';
 import type { ProjectsGateway } from '../projects/projects.gateway';
-import type { ChatsService } from '../tasks/tasks.service';
+import type { ThreadsService } from '../tasks/tasks.service';
 
 describe('Agent auto-restart on timeout', () => {
   const TEST_TIMEOUT_MS = 100;
-  const CHAT_ID = 'chat-123';
+  const THREAD_ID = 'thread-123';
   const PROJECT_ID = 'proj-456';
   const SANDBOX_ID = 'sandbox-789';
 
   let mockManager: EventEmitter & { sendPrompt: ReturnType<typeof vi.fn> };
   let projectsService: { getSandboxManager: ReturnType<typeof vi.fn>; findById: ReturnType<typeof vi.fn> };
-  let chatsService: {
+  let threadsService: {
     findById: ReturnType<typeof vi.fn>;
     updateStatus: ReturnType<typeof vi.fn>;
     addMessage: ReturnType<typeof vi.fn>;
@@ -55,9 +55,9 @@ describe('Agent auto-restart on timeout', () => {
       }),
     };
 
-    chatsService = {
+    threadsService = {
       findById: vi.fn().mockResolvedValue({
-        id: CHAT_ID,
+        id: THREAD_ID,
         projectId: PROJECT_ID,
         claudeSessionId: null,
         messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
@@ -74,7 +74,7 @@ describe('Agent auto-restart on timeout', () => {
     gateway = new AgentGateway(
       projectsService as unknown as ProjectsService,
       projectsGateway as unknown as ProjectsGateway,
-      chatsService as unknown as ChatsService,
+      threadsService as unknown as ThreadsService,
     );
 
     // Simulate sandbox subscribers so emitToSubscribers works
@@ -96,14 +96,14 @@ describe('Agent auto-restart on timeout', () => {
   it('should auto-retry when agent times out (no activity)', async () => {
     await gateway.handleSendPrompt(
       mockClient as any,
-      { chatId: CHAT_ID, prompt: 'Hello', mode: 'agent' },
+      { threadId: THREAD_ID, prompt: 'Hello', mode: 'agent' },
     );
 
     expect(mockManager.sendPrompt).toHaveBeenCalledTimes(1);
     expect(mockManager.sendPrompt).toHaveBeenCalledWith(
       SANDBOX_ID,
       'Hello',
-      CHAT_ID,
+      THREAD_ID,
       null,
       'agent',
       undefined,
@@ -118,7 +118,7 @@ describe('Agent auto-restart on timeout', () => {
     expect(mockManager.sendPrompt).toHaveBeenLastCalledWith(
       SANDBOX_ID,
       'Hello', // No session yet, so same prompt
-      CHAT_ID,
+      THREAD_ID,
       null,
       'agent',
       undefined,
@@ -129,7 +129,7 @@ describe('Agent auto-restart on timeout', () => {
   it('should emit agent_error after retry also fails', async () => {
     await gateway.handleSendPrompt(
       mockClient as any,
-      { chatId: CHAT_ID, prompt: 'Hello', mode: 'agent' },
+      { threadId: THREAD_ID, prompt: 'Hello', mode: 'agent' },
     );
 
     // First timeout - triggers retry
@@ -139,11 +139,11 @@ describe('Agent auto-restart on timeout', () => {
     // Second timeout - should emit agent_error (no more retries)
     await vi.advanceTimersByTimeAsync(300_000 + 50); // AGENT_ACTIVITY_TIMEOUT_MS
 
-    expect(chatsService.updateStatus).toHaveBeenCalledWith(CHAT_ID, 'error');
+    expect(threadsService.updateStatus).toHaveBeenCalledWith(THREAD_ID, 'error');
     const emitMock = (gateway as any).server.to().emit;
     const agentErrorCall = emitMock.mock.calls.find((c: unknown[]) => c[0] === 'agent_error');
     expect(agentErrorCall).toBeDefined();
-    expect(agentErrorCall[1]).toMatchObject({ chatId: CHAT_ID });
+    expect(agentErrorCall[1]).toMatchObject({ threadId: THREAD_ID });
     // Error text varies: "Agent stopped responding" (after first msg) or "Agent did not respond within" (no response)
     expect(agentErrorCall[1].error).toMatch(/Agent (stopped responding|did not respond)/);
   });
@@ -151,18 +151,18 @@ describe('Agent auto-restart on timeout', () => {
   it('should set waiting_for_input on ask_user_pending', async () => {
     await gateway.handleSendPrompt(
       mockClient as any,
-      { chatId: CHAT_ID, prompt: 'Hello', mode: 'agent' },
+      { threadId: THREAD_ID, prompt: 'Hello', mode: 'agent' },
     );
 
     mockManager.emit('message', SANDBOX_ID, {
       type: 'ask_user_pending',
-      chatId: CHAT_ID,
+      threadId: THREAD_ID,
       questionId: 'ask-123',
     });
 
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(chatsService.updateStatus).toHaveBeenCalledWith(CHAT_ID, 'waiting_for_input');
+    expect(threadsService.updateStatus).toHaveBeenCalledWith(THREAD_ID, 'waiting_for_input');
     const emitMock = (gateway as any).server.to().emit;
     const statusCall = emitMock.mock.calls.find(
       (c: unknown[]) => c[0] === 'agent_status' && (c[1] as any)?.status === 'waiting_for_input',
@@ -173,18 +173,18 @@ describe('Agent auto-restart on timeout', () => {
   it('should set running on ask_user_resolved', async () => {
     await gateway.handleSendPrompt(
       mockClient as any,
-      { chatId: CHAT_ID, prompt: 'Hello', mode: 'agent' },
+      { threadId: THREAD_ID, prompt: 'Hello', mode: 'agent' },
     );
 
     mockManager.emit('message', SANDBOX_ID, {
       type: 'ask_user_resolved',
-      chatId: CHAT_ID,
+      threadId: THREAD_ID,
       questionId: 'ask-123',
     });
 
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(chatsService.updateStatus).toHaveBeenCalledWith(CHAT_ID, 'running');
+    expect(threadsService.updateStatus).toHaveBeenCalledWith(THREAD_ID, 'running');
     const emitMock = (gateway as any).server.to().emit;
     const statusCall = emitMock.mock.calls.find(
       (c: unknown[]) => c[0] === 'agent_status' && (c[1] as any)?.status === 'running',
@@ -193,8 +193,8 @@ describe('Agent auto-restart on timeout', () => {
   });
 
   it('should not override waiting_for_input with completed on result', async () => {
-    chatsService.findById.mockResolvedValue({
-      id: CHAT_ID,
+    threadsService.findById.mockResolvedValue({
+      id: THREAD_ID,
       projectId: PROJECT_ID,
       claudeSessionId: null,
       status: 'waiting_for_input',
@@ -203,12 +203,12 @@ describe('Agent auto-restart on timeout', () => {
 
     await gateway.handleSendPrompt(
       mockClient as any,
-      { chatId: CHAT_ID, prompt: 'Hello', mode: 'agent' },
+      { threadId: THREAD_ID, prompt: 'Hello', mode: 'agent' },
     );
 
     mockManager.emit('message', SANDBOX_ID, {
       type: 'claude_message',
-      chatId: CHAT_ID,
+      threadId: THREAD_ID,
       data: {
         type: 'result',
         subtype: 'success',
@@ -225,7 +225,7 @@ describe('Agent auto-restart on timeout', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     // Should NOT have been set to 'completed'
-    const completedCall = chatsService.updateStatus.mock.calls.find(
+    const completedCall = threadsService.updateStatus.mock.calls.find(
       (c: unknown[]) => c[1] === 'completed',
     );
     expect(completedCall).toBeUndefined();
@@ -234,7 +234,7 @@ describe('Agent auto-restart on timeout', () => {
   it('should auto-retry when agent crashes (claude_exit code !== 0)', async () => {
     await gateway.handleSendPrompt(
       mockClient as any,
-      { chatId: CHAT_ID, prompt: 'Hello', mode: 'agent' },
+      { threadId: THREAD_ID, prompt: 'Hello', mode: 'agent' },
     );
 
     expect(mockManager.sendPrompt).toHaveBeenCalledTimes(1);
@@ -242,14 +242,14 @@ describe('Agent auto-restart on timeout', () => {
     // Simulate first message so receivedFirstMessage is true (manager emits 'message')
     mockManager.emit('message', SANDBOX_ID, {
       type: 'claude_message',
-      chatId: CHAT_ID,
+      threadId: THREAD_ID,
       data: { type: 'assistant', message: { content: [{ type: 'text', text: 'Hi' }] } },
     });
 
     // Simulate crash (claude_exit with non-zero code)
     mockManager.emit('message', SANDBOX_ID, {
       type: 'claude_exit',
-      chatId: CHAT_ID,
+      threadId: THREAD_ID,
       code: 1,
     });
 
@@ -261,7 +261,7 @@ describe('Agent auto-restart on timeout', () => {
     expect(mockManager.sendPrompt).toHaveBeenLastCalledWith(
       SANDBOX_ID,
       'Continue from where you left off. You had crashed and were restarted.',
-      CHAT_ID,
+      THREAD_ID,
       null,
       'agent',
       undefined,

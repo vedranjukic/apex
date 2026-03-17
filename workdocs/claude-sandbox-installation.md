@@ -86,7 +86,7 @@ The bridge opens a WebSocket server on port 8080 (exposed via Daytona's preview 
 
 ## 3. How Claude CLI Is Invoked
 
-When a user sends the first prompt in a chat, the bridge spawns the Claude CLI as a long-lived child process with bidirectional JSON streaming:
+When a user sends the first prompt in a thread, the bridge spawns the Claude CLI as a long-lived child process with bidirectional JSON streaming:
 
 ```bash
 claude --dangerously-skip-permissions --verbose --output-format stream-json --input-format stream-json -p "<prompt>"
@@ -109,7 +109,7 @@ The process is spawned via PTY (`node-pty`) for line-buffered output, and the br
 ```
 User (Dashboard)
   │
-  │  Socket.io: execute_chat / send_prompt / user_answer
+  │  Socket.io: execute_thread / send_prompt / user_answer
   ▼
 API Server (AgentGateway)
   │
@@ -145,8 +145,8 @@ Dashboard (real-time rendering)
 | `claude_stderr` | Stderr output from Claude |
 | `claude_exit` | Claude process exited (includes exit code) |
 | `claude_error` | Error spawning or managing Claude |
-| `ask_user_pending` | Agent asked a question via MCP `ask_user` — chat status → `waiting_for_input` |
-| `ask_user_resolved` | User answered (or timeout) — chat status → `running` |
+| `ask_user_pending` | Agent asked a question via MCP `ask_user` — thread status → `waiting_for_input` |
+| `ask_user_resolved` | User answered (or timeout) — thread status → `running` |
 | `terminal_output` | PTY terminal output |
 | `terminal_created` | New terminal session created |
 | `terminal_exit` | Terminal session ended |
@@ -158,13 +158,13 @@ Dashboard (real-time rendering)
 | `start_claude` | Spawn a new Claude process, or pipe a follow-up prompt to an existing one |
 | `claude_user_answer` | Pipe the user's answer to an `AskUserQuestion` tool call to Claude's stdin |
 | `claude_input` | Raw stdin data for a running Claude process |
-| `stop_claude` | Kill the Claude process for a chat |
+| `stop_claude` | Kill the Claude process for a thread |
 
 ---
 
 ## 5. Follow-up Prompts & AskUserQuestion
 
-The Claude process stays alive across multiple turns within a chat. When a follow-up message arrives, the bridge pipes it as a JSONL user message to the running process's stdin:
+The Claude process stays alive across multiple turns within a thread. When a follow-up message arrives, the bridge pipes it as a JSONL user message to the running process's stdin:
 
 ```json
 {"type":"user","message":{"role":"user","content":"follow-up text"}}
@@ -178,7 +178,7 @@ Claude's native `AskUserQuestion` tool is **disallowed** in all modes via `--dis
 
 1. Agent calls MCP `ask_user` → MCP server POSTs to bridge `/internal/ask-user`
 2. Bridge emits `claude_message` (AskUserQuestion tool_use) + `ask_user_pending` over WebSocket
-3. Chat status → `waiting_for_input` (persisted to DB)
+3. Thread status → `waiting_for_input` (persisted to DB)
 4. Dashboard renders `AskQuestionBlock`; CLI TUI shows answer prompt
 5. User answers → `user_answer` socket event (or `answerCh` in CLI) → bridge resolves pending HTTP
 6. Bridge emits `ask_user_resolved` → status → `running`; MCP returns answer to agent
@@ -199,4 +199,4 @@ The sandbox CLAUDE.md / AGENTS.md instructions explicitly tell agents to use `mc
 | `apps/api/src/modules/agent/agent.gateway.ts` | Socket.io gateway that connects the dashboard to the sandbox manager |
 | `apps/api/src/modules/projects/projects.service.ts` | Triggers sandbox provisioning on project creation |
 | `apps/cli/internal/sandbox/scripts.go` | Go CLI mirror of bridge + MCP scripts |
-| `apps/cli/internal/chat/bridge.go` | Go CLI bridge message processing (handles `ask_user_pending`/`ask_user_resolved`) |
+| `apps/cli/internal/thread/bridge.go` | Go CLI bridge message processing (handles `ask_user_pending`/`ask_user_resolved`) |

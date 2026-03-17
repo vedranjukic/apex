@@ -11,9 +11,9 @@
   All adapters normalize output into the same event format (`system`/`assistant`/`result` with content blocks) so the gateway and dashboard stay agent-agnostic. Terminal PTY sessions are shared across all agent types.
 
 ## Data Model
-- **Project** → has a Daytona sandbox (provisioned async on creation). Optional `gitRepo` URL for cloning a repository.
-- **Chat** (DB table: `tasks`) → belongs to a project, has messages. Title auto-generated from first prompt. Stores `claudeSessionId` to maintain a persistent Claude Code session across follow-up prompts.
-- **Message** → belongs to a chat. Roles: `user`, `assistant`, `system`. Content is JSON array of blocks (text, tool_use, tool_result).
+- **Project** → has a Daytona sandbox (provisioned async on creation). Optional `gitRepo` URL for cloning a repository. Stores `agentType` as the project-level default agent (claude_code, open_code, codex).
+- **Thread** (DB table: `tasks`) → belongs to a project, has messages. Title auto-generated from first prompt. Stores `claudeSessionId` to maintain a persistent Claude Code session across follow-up prompts. Optional `agentType` overrides the project default, allowing different threads within one project to use different agents.
+- **Message** → belongs to a thread. Roles: `user`, `assistant`, `system`. Content is JSON array of blocks (text, tool_use, tool_result).
 
 ## Key Flows
 
@@ -23,30 +23,30 @@
 3. During sandbox provisioning: if `gitRepo` is set, clones the repo into the project directory (`git clone <url> .`); otherwise runs `git init` so every project starts version-controlled
 4. Dashboard polls project status while `creating`, shows sandbox status indicator (green/yellow/red) in top bar
 
-### Chat + Agent Execution (Session-per-Chat)
-Each chat maintains a long-lived Claude Code process. The first prompt spawns the process; follow-ups are piped to stdin as JSONL messages, keeping full conversational context within a single process.
+### Thread + Agent Execution (Session-per-Thread)
+Each thread maintains a long-lived Claude Code process. The first prompt spawns the process; follow-ups are piped to stdin as JSONL messages, keeping full conversational context within a single process.
 
-1. User clicks "New Chat" → composing mode (prompt input, no dialog)
-2. User types prompt → `POST /api/projects/:id/chats` creates chat + stores first user message
-3. Dashboard emits `execute_chat { chatId }` via Socket.io → gateway reads first message, sends to sandbox
-4. `SandboxManager.sendPrompt(sandboxId, prompt, chatId, sessionId)` → auto-reconnects if server restarted
+1. User clicks "New Thread" → composing mode (prompt input, no dialog)
+2. User types prompt → `POST /api/projects/:id/threads` creates thread + stores first user message
+3. Dashboard emits `execute_thread { threadId }` via Socket.io → gateway reads first message, sends to sandbox
+4. `SandboxManager.sendPrompt(sandboxId, prompt, threadId, sessionId)` → auto-reconnects if server restarted
 5. Bridge spawns `claude --dangerously-skip-permissions --output-format stream-json --input-format stream-json -p <prompt>` (first prompt), or pipes a JSONL user message to the existing process's stdin (follow-ups). If the process has exited (crash/reload), `--resume <sessionId>` restores context.
-6. Claude's `system` init message contains `session_id` → gateway captures it → stored on the chat entity as `claudeSessionId`
-7. Claude output streams: bridge → WS (tagged with `chatId`) → SandboxManager → gateway filters by `chatId` → forwards via Socket.io `agent_message` → dashboard renders in real-time
-8. Multiple chats can have concurrent Claude processes in the same sandbox (bridge tracks processes per chatId in a Map)
+6. Claude's `system` init message contains `session_id` → gateway captures it → stored on the thread entity as `claudeSessionId`
+7. Claude output streams: bridge → WS (tagged with `threadId`) → SandboxManager → gateway filters by `threadId` → forwards via Socket.io `agent_message` → dashboard renders in real-time
+8. Multiple threads can have concurrent Claude processes in the same sandbox (bridge tracks processes per threadId in a Map)
 
 ### Follow-up Prompts
-1. User sends another message → dashboard emits `send_prompt { chatId, prompt }`
-2. Gateway stores user message in DB, sends `start_claude` to bridge → bridge detects an existing process for that chatId and pipes the prompt to stdin as `{"type":"user","message":{"role":"user","content":"..."}}`
+1. User sends another message → dashboard emits `send_prompt { threadId, prompt }`
+2. Gateway stores user message in DB, sends `start_claude` to bridge → bridge detects an existing process for that threadId and pipes the prompt to stdin as `{"type":"user","message":{"role":"user","content":"..."}}`
 
 ### AskUserQuestion (waiting_for_input)
 Claude's native `AskUserQuestion` tool is **disallowed** in all modes (both TS and Go bridges). Instead, all agents use the MCP `ask_user` tool (`mcp__terminal-server__ask_user`) which routes through the bridge's `/internal/ask-user` endpoint:
 
 1. Agent calls `mcp__terminal-server__ask_user` → MCP server POSTs to bridge `/internal/ask-user`
 2. Bridge emits `claude_message` (with `AskUserQuestion` tool_use block) + `ask_user_pending` over WebSocket
-3. Gateway/CLI sets chat status to `waiting_for_input` and emits `agent_status { status: 'waiting_for_input' }`
+3. Gateway/CLI sets thread status to `waiting_for_input` and emits `agent_status { status: 'waiting_for_input' }`
 4. Dashboard renders `AskQuestionBlock` with multiple-choice UI; CLI TUI shows `?` indicator and answer prompt
-5. User answers → `user_answer { chatId, toolUseId, answer }` via Socket.io (or `answerCh` in CLI TUI)
+5. User answers → `user_answer { threadId, toolUseId, answer }` via Socket.io (or `answerCh` in CLI TUI)
 6. Bridge resolves the pending HTTP request, emits `ask_user_resolved`, status returns to `running`
 7. MCP server returns the answer to the agent, which continues execution
 
@@ -91,12 +91,12 @@ Example: user asks *"start the dev server so I can watch it"* → Claude calls `
 - Server: NestJS `@WebSocketGateway` at namespace `/ws/agent`, path `/ws/socket.io`
 - Client: `socket.io-client` connects with same path
 - Vite proxy: `/ws` → `http://localhost:6000` with `ws: true`
-- Chat events: `subscribe_project`, `execute_chat`, `send_prompt`, `user_answer` (client→server); `agent_message`, `agent_status`, `agent_error` (server→client). `agent_status` values: `running`, `waiting_for_input`, `retrying`, `completed`, `error`
+- Thread events: `subscribe_project`, `execute_thread`, `send_prompt`, `user_answer` (client→server); `agent_message`, `agent_status`, `agent_error` (server→client). `send_prompt` and `execute_thread` accept optional `agentType` to override the project default per-thread. `agent_status` values: `running`, `waiting_for_input`, `retrying`, `completed`, `error`
 - Terminal events: `terminal_create`, `terminal_input`, `terminal_resize`, `terminal_close`, `terminal_list` (client→server); `terminal_created`, `terminal_output`, `terminal_exit`, `terminal_error`, `terminal_list` (server→client)
 - File events: `file_list`, `file_create`, `file_rename`, `file_delete`, `file_move`, `file_read`, `file_write` (client→server); `file_list_result`, `file_op_result`, `file_changed`, `file_read_result`, `file_write_result` (server→client)
 - Project info events: `project_info` (client→server + server→client) – returns `{ gitBranch, projectDir }` for the status bar and file tree root
 - Git branch events: `git_branches`, `git_create_branch`, `git_checkout` (client→server); `git_branches_result` (server→client) – branch list and switching
-- Payload uses `chatId` (maps to internal `taskId` in DB)
+- Payload uses `threadId` (maps to internal `taskId` in DB)
 
 ## Message Rendering
 - Consecutive assistant messages are **grouped** into a single agent block (no repeated headers)
@@ -107,7 +107,7 @@ Example: user asks *"start the dev server so I can watch it"* → Claude calls `
 
 ### Plan Mode Rendering
 When the user sends a prompt in **Plan** mode, the response renders in a special `PlanBlock` inline card:
-1. `use-agent-socket.ts` marks the chat as a plan chat and accumulates text blocks into `usePlanStore`
+1. `use-agent-socket.ts` marks the thread as a plan thread and accumulates text blocks into `usePlanStore`
 2. Plan content is extracted from the first `#` heading onward (conversational preamble stays as regular text)
 3. Plan card shows: filename (slug + timestamp `.md`), READY badge on completion, rendered markdown body, and a **Build** button
 4. Clicking **Build** sends the plan as a prompt in `agent` mode via `sendSilentPrompt` (adds a hidden user message for group separation, hidden by `UserBubble` via `BUILD_PROMPT_PREFIX` detection)
@@ -125,7 +125,7 @@ When the user sends a prompt in **Plan** mode, the response renders in a special
 - Zustand store (`useTerminalStore`) tracks terminals, active tab, panel open/closed state
 
 ## File Editor (Monaco)
-The central panel toggles between `AgentChat` and `CodeViewer` based on `useEditorStore.activeView`.
+The central panel toggles between `AgentThread` and `CodeViewer` based on `useEditorStore.activeView`.
 
 - Clicking a file in the explorer calls `useEditorStore.openFile()` (switches to `editor` view) and emits `file_read` via socket to fetch content.
 - `CodeViewer` renders `@monaco-editor/react` with a custom "apex-dark" theme (`apex-theme.ts`) and auto-detected language (`lang-map.ts`).
@@ -148,26 +148,26 @@ A single-line bottom bar displays project info and git controls (VS Code-style).
 - Component: `ProjectStatusBar` + `BranchPicker` rendered at the very bottom of `AppShell`
 
 ## Layout Persistence
-Layout state (terminal panel, sidebars, active chat, editor tabs) is stored in two places:
+Layout state (terminal panel, sidebars, active thread, editor tabs) is stored in two places:
 
 1. **Server-side** (sandbox filesystem `~/.apex-layout.json`) — persists across machines and browser sessions.
 2. **Client-side** (`localStorage` key `apex-layout:{projectId}`) — instant restore on page refresh even when the sandbox is unavailable.
 
-- **Save**: Any Zustand store change (terminals, chats, panels, editor) → `useLayoutSocket` debounces (500ms) → Socket.io `layout_save` to server + immediate `localStorage` write.
+- **Save**: Any Zustand store change (terminals, threads, panels, editor) → `useLayoutSocket` debounces (500ms) → Socket.io `layout_save` to server + immediate `localStorage` write.
 - **Load**: On mount, `localStorage` data is applied instantly (no blank UI). Then `layout_load` is emitted to the server. If the server responds with `layout_data`, it overrides the local backup (server is source of truth). If the server times out (3s), the `localStorage` layout is already active.
-- The `LayoutData` shape: `{ terminalPanelOpen, terminalPanelHeight, activeTerminalId, activeChatId, leftSidebarOpen, rightSidebarOpen, chatScrollOffsets, openFiles, activeFilePath, activeView, fileScrollOffsets }`
+- The `LayoutData` shape: `{ terminalPanelOpen, terminalPanelHeight, activeTerminalId, activeThreadId, leftSidebarOpen, rightSidebarOpen, threadScrollOffsets, openFiles, activeFilePath, activeView, fileScrollOffsets }`
 
 ## Project Navigation & Store Reset
 When switching projects, all project-specific Zustand stores must be reset to avoid stale content from the previous project leaking into the new one.
 
-- **`resetProjectStores()`** (`lib/reset-project-stores.ts`) clears: terminal, chats, editor, file tree, ports, and panels stores.
+- **`resetProjectStores()`** (`lib/reset-project-stores.ts`) clears: terminal, threads, editor, file tree, ports, and panels stores.
 - Called on **`HomePage` mount** — when the user navigates back to the projects list, stale state from the previous project is wiped.
 - NOT called in `openProject()` or `ProjectPage` mount — those open new windows (Electron) or tabs (browser) with naturally fresh stores.
 
 ## Key Files
 ```
 apps/api/src/modules/agent/agent.gateway.ts    – Socket.io gateway, bridges dashboard↔sandbox + local PTY fallback
-apps/api/src/modules/tasks/tasks.service.ts     – ChatsService (CRUD for chats + messages)
+apps/api/src/modules/tasks/tasks.service.ts     – ThreadsService (CRUD for threads + messages)
 apps/api/src/modules/projects/projects.service.ts – Project CRUD + sandbox provisioning
 libs/orchestrator/src/lib/sandbox-manager.ts    – Daytona sandbox lifecycle + bridge WS + terminal methods
 libs/orchestrator/src/lib/bridge-script.ts      – JS code uploaded into sandbox (Claude CLI + PTY terminals + HTTP API)
@@ -179,13 +179,13 @@ apps/dashboard/src/hooks/use-layout-socket.ts   – Socket.io hook for layout pe
 apps/dashboard/src/lib/reset-project-stores.ts  – Centralized reset of all project-specific Zustand stores
 apps/dashboard/src/lib/open-project.ts           – Opens project in new window (Electron) or tab (browser)
 apps/dashboard/src/hooks/use-project-info-socket.ts – Socket.io hook for git branch polling
-apps/dashboard/src/stores/tasks-store.ts        – Zustand store (useChatsStore)
+apps/dashboard/src/stores/tasks-store.ts        – Zustand store (useThreadsStore)
 apps/dashboard/src/stores/terminal-store.ts     – Zustand store (useTerminalStore)
 apps/dashboard/src/stores/editor-store.ts        – Zustand store (useEditorStore) — open files, dirty tracking, code selections
 apps/dashboard/src/stores/file-tree-store.ts     – Zustand store (useFileTreeStore) — directory cache, root path
 apps/dashboard/src/stores/plan-store.ts          – Zustand store (usePlanStore) — plan mode state + content extraction
 apps/dashboard/src/stores/agent-settings-store.ts – Zustand store — agent mode/model selection
-apps/dashboard/src/components/agent/agent-chat.tsx – Main chat panel
+apps/dashboard/src/components/agent/agent-thread.tsx – Main thread panel
 apps/dashboard/src/components/agent/message-bubble.tsx – Message grouping + rendering (plan detection, markdown blocks)
 apps/dashboard/src/components/agent/plan-block.tsx     – Inline plan card (markdown + Build button)
 apps/dashboard/src/components/agent/markdown-block.tsx  – Inline collapsible markdown card (summaries)
