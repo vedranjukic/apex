@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus, FolderOpen, Trash2, ExternalLink, Loader2, CheckCircle2,
-  CircleHelp, XCircle, Circle, GitBranch, ChevronDown, ChevronRight, Settings,
+  CircleHelp, CirclePause, XCircle, Circle, GitBranch, ChevronDown, ChevronRight, Settings,
 } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { useProjectsStore } from '../../stores/projects-store';
@@ -16,6 +16,8 @@ function ThreadStatusIcon({ status, className }: { status: string; className?: s
   switch (status) {
     case 'waiting_for_input':
       return <CircleHelp className={cn(size, 'text-yellow-400 shrink-0')} />;
+    case 'waiting_for_user_action':
+      return <CirclePause className={cn(size, 'text-yellow-400 shrink-0')} />;
     case 'running':
       return <Loader2 className={cn(size, 'text-yellow-400 animate-spin shrink-0')} />;
     case 'completed':
@@ -176,13 +178,12 @@ function ThreadList({
   projectName: string;
   onSelectThread?: (projectId: string, threadId: string, projectName: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-
   if (!threads || threads.length === 0) return null;
 
   const running = threads.filter((c) => c.status === 'running').length;
   const errors = threads.filter((c) => c.status === 'error').length;
-  const waiting = threads.filter((c) => c.status === 'waiting_for_input').length;
+  const waiting = threads.filter((c) => c.status === 'waiting_for_input' || c.status === 'waiting_for_user_action').length;
+  const [expanded, setExpanded] = useState(waiting > 0);
 
   return (
     <div className="mt-1.5">

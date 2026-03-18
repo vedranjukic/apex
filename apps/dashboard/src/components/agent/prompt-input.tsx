@@ -150,6 +150,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
       const { text, files, snippets } = extractContent(el);
       if (!text.trim()) return;
       const { mode, model, agentType } = useAgentSettingsStore.getState();
+      console.log('[prompt] sending with', { mode, model, agentType });
       onSend(
         text.trim(),
         files.length > 0 ? files : undefined,

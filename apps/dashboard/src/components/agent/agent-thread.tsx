@@ -1,18 +1,18 @@
 import { useEffect, useRef, useMemo, useCallback } from 'react';
-import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo, RotateCcw, MessageCircleQuestion, Send } from 'lucide-react';
-// Send used in the continue banner below the messages
+import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo, RotateCcw, MessageCircleQuestion, CirclePause, Send, Brain } from 'lucide-react';
 import { useThreadsStore } from '../../stores/tasks-store';
-import { groupMessages, MessageGroupView, PlanShownProvider } from './message-bubble';
+import { groupMessages, MessageGroupView, PlanShownProvider, ReasoningToggleProvider, useReasoningToggle } from './message-bubble';
 import { PromptInput, type PromptInputHandle } from './prompt-input';
 import { ThreadActionsContext } from './thread-actions-context';
 import { useAgentSettingsStore, AGENT_TYPES, DEFAULT_MODEL_BY_TYPE, type AgentTypeId } from '../../stores/agent-settings-store';
+import { usePlanStore } from '../../stores/plan-store';
 import type { CodeSelection } from '../../stores/editor-store';
 
 interface Props {
   projectId: string;
   projectAgentType?: string;
   onSendPrompt: (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string) => void;
-  onSendSilentPrompt: (threadId: string, prompt: string, mode?: string, model?: string) => void;
+  onSendSilentPrompt: (threadId: string, prompt: string, mode?: string, model?: string, agentType?: string) => void;
   onExecuteThread: (threadId: string, mode?: string, model?: string, agentType?: string) => void;
   onSendUserAnswer?: (threadId: string, toolUseId: string, answer: string) => void;
   requestListing?: (path: string) => void;
@@ -42,7 +42,7 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
     }
   }, [activeThreadId, onSendPrompt]);
 
-  const sendSilentPrompt = useCallback((text: string, mode?: string) => {
+  const sendSilentPrompt = useCallback((text: string, mode?: string, agentType?: string) => {
     if (activeThreadId) {
       useThreadsStore.getState().addMessage({
         id: crypto.randomUUID(),
@@ -52,7 +52,8 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
         metadata: null,
         createdAt: new Date().toISOString(),
       });
-      onSendSilentPrompt(activeThreadId, text, mode);
+      const model = useAgentSettingsStore.getState().model || undefined;
+      onSendSilentPrompt(activeThreadId, text, mode, model, agentType);
     }
   }, [activeThreadId, onSendSilentPrompt]);
 
@@ -71,15 +72,44 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
       if (store.agentType !== at) {
         store.setAgentType(at);
       }
+      if (activeThread.model != null && store.model !== activeThread.model) {
+        store.setModel(activeThread.model);
+      }
     } else if (!activeThreadId && projectAgentType) {
       const pat = projectAgentType as AgentTypeId;
       if (store.agentType !== pat) {
         store.setAgentType(pat);
       }
     }
-  }, [activeThreadId, activeThread?.id, activeThread?.agentType, projectAgentType]);
+  }, [activeThreadId, activeThread?.id, activeThread?.agentType, activeThread?.model, projectAgentType]);
+
+  useEffect(() => {
+    if (!activeThreadId || !activeThread?.planData) return;
+    const planStore = usePlanStore.getState();
+    if (planStore.getPlanByThreadId(activeThreadId)) return;
+    planStore.markThreadAsPlan(activeThreadId);
+    const { id, title, filename, content } = activeThread.planData;
+    const plan = {
+      id,
+      threadId: activeThreadId,
+      title,
+      filename,
+      content,
+      isComplete: true,
+      createdAt: activeThread.createdAt,
+    };
+    usePlanStore.setState((s) => ({ plans: [...s.plans, plan] }));
+  }, [activeThreadId, activeThread?.planData]);
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
+  const lastAgentGroupIdx = useMemo(
+    () => groups.reduce((last, g, i) => (g.type === 'agent' ? i : last), -1),
+    [groups],
+  );
+  const hasThinkingBlocks = useMemo(
+    () => messages.some((m) => m.content.some((b) => b.type === 'thinking')),
+    [messages],
+  );
 
   const taskInfo = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -196,9 +226,11 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
   const isRunning = activeThread.status === 'running';
   const isError = activeThread.status === 'error';
   const isWaitingForInput = activeThread.status === 'waiting_for_input';
+  const isWaitingForAction = activeThread.status === 'waiting_for_user_action';
 
   return (
     <ThreadActionsContext.Provider value={{ fillPrompt, sendPrompt, sendSilentPrompt, sendUserAnswer }}>
+      <ReasoningToggleProvider>
       <div className="flex-1 flex flex-col overflow-hidden bg-surface-thread">
         {/* Thread header: title + agent + thread id, progress icon when running */}
         <div className="px-4 py-3 border-b border-border bg-surface-thread flex items-center gap-2 min-h-[44px] min-w-0">
@@ -223,6 +255,7 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
               {currentTask}
             </span>
           )}
+          {hasThinkingBlocks && <ReasoningToggleButton />}
           {isRunning && (
             <Loader2 className="w-3.5 h-3.5 animate-spin text-yellow-500 shrink-0" />
           )}
@@ -245,6 +278,12 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
               Waiting for your response
             </span>
           )}
+          {isWaitingForAction && (
+            <span className="flex items-center gap-1 text-xs text-yellow-400 shrink-0">
+              <CirclePause className="w-3.5 h-3.5" />
+              Waiting for user action
+            </span>
+          )}
         </div>
 
         {/* Messages */}
@@ -257,7 +296,7 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
             <PlanShownProvider threadId={activeThreadId}>
               <div className="divide-y divide-border">
                 {groups.map((group, i) => (
-                  <MessageGroupView key={i} group={group} />
+                  <MessageGroupView key={i} group={group} isLastGroup={i === lastAgentGroupIdx} />
                 ))}
               </div>
             </PlanShownProvider>
@@ -288,7 +327,27 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
           requestListing={requestListing}
         />
       </div>
+      </ReasoningToggleProvider>
     </ThreadActionsContext.Provider>
+  );
+}
+
+function ReasoningToggleButton() {
+  const { showAll, toggle } = useReasoningToggle();
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      title={showAll ? 'Hide reasoning' : 'Show reasoning'}
+      className={`shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+        showAll
+          ? 'bg-violet-500/15 text-violet-400'
+          : 'bg-white/5 text-text-muted hover:text-text-secondary hover:bg-white/10'
+      }`}
+    >
+      <Brain className="w-3 h-3" />
+      <span>{showAll ? 'Reasoning on' : 'Reasoning'}</span>
+    </button>
   );
 }
 

@@ -1,4 +1,4 @@
-import { useMemo, useState, createContext, useContext, useRef, useEffect } from 'react';
+import { useMemo, useState, useCallback, createContext, useContext, useRef, useEffect } from 'react';
 import { User, Bot, Info, Clock, Brain, ChevronDown, ChevronRight } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -11,7 +11,12 @@ import { useThreadsStore } from '../../stores/tasks-store';
 
 // ── Plan deduplication (only first agent group shows the plan) ──
 
-const PlanShownContext = createContext<() => boolean>(() => true);
+/**
+ * Key-based plan dedup: the first agent group that calls claimPlan(key)
+ * "owns" the plan. Subsequent calls with the SAME key still return true
+ * (safe across memo recomputation). Calls with a DIFFERENT key return false.
+ */
+const PlanShownContext = createContext<(groupKey: string) => boolean>(() => true);
 
 export function PlanShownProvider({
   threadId,
@@ -20,28 +25,57 @@ export function PlanShownProvider({
   threadId: string | null;
   children: React.ReactNode;
 }) {
-  const planShownRef = useRef(false);
+  const claimedByRef = useRef<string | null>(null);
   const prevThreadIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (prevThreadIdRef.current !== threadId) {
       prevThreadIdRef.current = threadId;
-      planShownRef.current = false;
+      claimedByRef.current = null;
     }
   }, [threadId]);
 
-  const shouldShowPlanAndMark = useMemo(
-    () => () => {
-      if (planShownRef.current) return false;
-      planShownRef.current = true;
-      return true;
+  const claimPlan = useMemo(
+    () => (groupKey: string) => {
+      if (claimedByRef.current === null) {
+        claimedByRef.current = groupKey;
+        return true;
+      }
+      return claimedByRef.current === groupKey;
     },
     [],
   );
   return (
-    <PlanShownContext.Provider value={shouldShowPlanAndMark}>
+    <PlanShownContext.Provider value={claimPlan}>
       {children}
     </PlanShownContext.Provider>
   );
+}
+
+// ── Reasoning toggle (show all thinking blocks) ─────
+
+interface ReasoningToggleValue {
+  showAll: boolean;
+  toggle: () => void;
+}
+
+const ReasoningToggleContext = createContext<ReasoningToggleValue>({
+  showAll: false,
+  toggle: () => {},
+});
+
+export function ReasoningToggleProvider({ children }: { children: React.ReactNode }) {
+  const [showAll, setShowAll] = useState(false);
+  const toggle = useCallback(() => setShowAll((v) => !v), []);
+  const value = useMemo(() => ({ showAll, toggle }), [showAll, toggle]);
+  return (
+    <ReasoningToggleContext.Provider value={value}>
+      {children}
+    </ReasoningToggleContext.Provider>
+  );
+}
+
+export function useReasoningToggle() {
+  return useContext(ReasoningToggleContext);
 }
 
 // ── Types for grouped rendering ─────────────────────
@@ -122,7 +156,7 @@ export function groupMessages(messages: Message[]): MessageGroup[] {
 
 // ── Group renderers ─────────────────────────────────
 
-export function MessageGroupView({ group }: { group: MessageGroup }) {
+export function MessageGroupView({ group, isLastGroup }: { group: MessageGroup; isLastGroup?: boolean }) {
   switch (group.type) {
     case 'user':
       return <UserBubble message={group.message} />;
@@ -131,6 +165,7 @@ export function MessageGroupView({ group }: { group: MessageGroup }) {
         <AgentGroup
           messages={group.messages}
           thinkingSec={group.thinkingSec}
+          isLastGroup={isLastGroup}
         />
       );
     case 'result':
@@ -181,15 +216,10 @@ function UserBubble({ message }: { message: Message }) {
 
 // ── Agent group (consecutive assistant messages merged) ──
 
-const DEDUP_TOOLS = new Set(['TodoWrite', 'AskUserQuestion', 'mcp__terminal-server__ask_user']);
-
-const DEDUP_ALIASES: Record<string, string> = {
-  'mcp__terminal-server__ask_user': 'AskUserQuestion',
-};
+const DEDUP_TOOLS = new Set(['TodoWrite', 'AskUserQuestion']);
 
 function dedupKey(name: string): string {
-  const normalized = normalizeTool(name);
-  return DEDUP_ALIASES[normalized] ?? normalized;
+  return normalizeTool(name);
 }
 
 /** Tools that are transient: only shown live, not rendered on refresh (Bash is always rendered) */
@@ -285,8 +315,6 @@ function deduplicateBlocks(blocks: ContentBlock[]): ContentBlock[] {
       const normalized = normalizeTool(b.name);
       if (!DEDUP_TOOLS.has(normalized)) continue;
       const key = dedupKey(b.name);
-      const existing = bestByKey.get(key);
-      if (existing && existing.name !== b.name) continue;
       bestByKey.set(key, b);
     }
   }
@@ -363,11 +391,14 @@ function extractPlanFromText(text: string): string | null {
 function AgentGroup({
   messages,
   thinkingSec,
+  isLastGroup,
 }: {
   messages: Message[];
   thinkingSec: number | null;
+  isLastGroup?: boolean;
 }) {
-  const shouldShowPlanAndMark = useContext(PlanShownContext);
+  const claimPlan = useContext(PlanShownContext);
+  const groupKey = messages[0]?.id ?? '';
   const threadId = messages[0]?.taskId;
   const storePlan = usePlanStore((s) => threadId ? s.getPlanByThreadId(threadId) : undefined);
   const thread = useThreadsStore(
@@ -446,11 +477,33 @@ function AgentGroup({
           !(b.type === 'tool_use' && b.id && lastToolUseIdx.get(b.id) !== i))
       : raw;
 
+    // Deduplicate thinking blocks by content text
+    const seenThinking = new Set<string>();
+    const thinkingDeduped = idDeduped.filter((b) => {
+      if (b.type !== 'thinking' || !b.thinking) return true;
+      if (seenThinking.has(b.thinking)) return false;
+      seenThinking.add(b.thinking);
+      return true;
+    });
+
     return {
-      allBlocks: deduplicateBlocks(idDeduped),
+      allBlocks: deduplicateBlocks(thinkingDeduped),
       blockReceivedAt,
     };
   }, [messages]);
+
+  // Only the very last thinking block can be "live", and only when the
+  // thread is running, this is the last agent group, AND no text/tool
+  // output has arrived after it.
+  const liveThinkingBlock = useMemo(() => {
+    if (!isLastGroup || threadStatus !== 'running') return null;
+    for (let i = allBlocks.length - 1; i >= 0; i--) {
+      const b = allBlocks[i];
+      if (b.type === 'thinking') return b;
+      if (b.type === 'text' || b.type === 'tool_use') return null;
+    }
+    return null;
+  }, [isLastGroup, threadStatus, allBlocks]);
 
   const derivedPlan = useMemo((): DerivedPlan | null => {
     if (isAfterBuild) return null;
@@ -486,7 +539,7 @@ function AgentGroup({
 
   const planBlocks = useMemo(() => {
     if (!derivedPlan) return null;
-    if (!shouldShowPlanAndMark()) return null; // Dedupe: only first agent group shows plan
+    if (!claimPlan(groupKey)) return null; // Dedupe: only first agent group shows plan
 
     type PlanItem =
       | { kind: 'block'; block: ContentBlock }
@@ -533,7 +586,7 @@ function AgentGroup({
     }
 
     return items;
-  }, [derivedPlan, allBlocks, shouldShowPlanAndMark]);
+  }, [derivedPlan, allBlocks, claimPlan, groupKey]);
 
   return (
     <div className="bg-surface-thread/60">
@@ -563,7 +616,7 @@ function AgentGroup({
                     wasBuilt={wasBuilt}
                     threadStatus={threadStatus}
                   />
-                : <ContentBlockView key={i} block={item.block} siblings={allBlocks} />
+                : <ContentBlockView key={i} block={item.block} siblings={allBlocks} isLiveThinking={item.block === liveThinkingBlock} />
             )
           ) : (
             (() => {
@@ -571,7 +624,9 @@ function AgentGroup({
                 .filter((b): b is ContentBlock & { text: string } => b.type === 'text' && !!b.text)
                 .map((b) => b.text)
                 .join('\n\n');
-              const fallbackPlanBody = hasPlanBlock(fullText) ? extractPlanFromText(fullText) : null;
+              // Only render plan via fallback if this group can claim it
+              const canShowPlan = claimPlan(groupKey);
+              const fallbackPlanBody = canShowPlan && hasPlanBlock(fullText) ? extractPlanFromText(fullText) : null;
 
               let planRendered = false;
               return groupConsecutiveBash(allBlocks, blockReceivedAt, messages).map((item, i) => {
@@ -582,8 +637,12 @@ function AgentGroup({
                   return <TransientSearchBlock key={i} block={item.block} receivedAt={item.receivedAt} />;
                 }
                 const block = item.block;
+                // In post-build groups the agent often restates the plan; suppress it
+                if (isAfterBuild && block.type === 'text' && block.text && hasPlanBlock(block.text)) {
+                  return null;
+                }
                 if (block.type === 'text' && block.text && hasPlanBlock(block.text)) {
-                  if (planRendered) return null; // skip duplicate plan blocks
+                  if (planRendered) return null;
                   if (fallbackPlanBody) {
                     planRendered = true;
                     const title = extractTitle(fallbackPlanBody);
@@ -601,7 +660,7 @@ function AgentGroup({
                     );
                   }
                 }
-                return <ContentBlockView key={i} block={block} siblings={allBlocks} />;
+                return <ContentBlockView key={i} block={block} siblings={allBlocks} isLiveThinking={block === liveThinkingBlock} />;
               });
             })()
           )}
@@ -665,30 +724,39 @@ function ensureHardBreaks(text: string): string {
   return text.replace(/(?<! {2})\n/g, '  \n');
 }
 
-function ThinkingBlock({ text }: { text: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const preview = text.length > 120 ? text.slice(0, 120) + '...' : text;
+function ThinkingBlock({ text, isLive }: { text: string; isLive?: boolean }) {
+  const { showAll } = useContext(ReasoningToggleContext);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // Hidden entirely when reasoning is done and toggle is off
+  const visible = showAll || !!isLive;
+
+  useEffect(() => {
+    if (isLive && contentRef.current) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+    }
+  }, [text, isLive]);
+
+  if (!visible) return null;
+
   return (
-    <div className="my-1 rounded-md border border-border-subtle bg-surface-raised/50">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 w-full px-3 py-1.5 text-xs text-text-muted hover:text-text-secondary transition-colors"
-      >
-        <Brain className="w-3 h-3 shrink-0" />
+    <div className="my-1 rounded-lg border border-border overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs">
+        <Brain className="w-3.5 h-3.5 text-violet-400 shrink-0" />
         <span className="font-medium">Reasoning</span>
-        {!expanded && <span className="truncate opacity-60 ml-1">{preview}</span>}
-        {expanded ? <ChevronDown className="w-3 h-3 ml-auto shrink-0" /> : <ChevronRight className="w-3 h-3 ml-auto shrink-0" />}
-      </button>
-      {expanded && (
-        <div className="px-3 pb-2 text-xs text-text-secondary leading-relaxed whitespace-pre-wrap border-t border-border-subtle pt-2">
-          {text}
-        </div>
-      )}
+        {isLive && <span className="ml-1 w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse shrink-0" />}
+      </div>
+      <div
+        ref={contentRef}
+        className="px-3 py-2 text-xs text-text-secondary leading-relaxed whitespace-pre-wrap border-t border-border max-h-60 overflow-y-auto"
+      >
+        {text}
+      </div>
     </div>
   );
 }
 
-function ContentBlockView({ block, siblings }: { block: ContentBlock; siblings?: ContentBlock[] }) {
+function ContentBlockView({ block, siblings, isLiveThinking }: { block: ContentBlock; siblings?: ContentBlock[]; isLiveThinking?: boolean }) {
   if (block.type === 'text' && block.text) {
     if (block.text.length >= MIN_MARKDOWN_LEN && HEADING_RE.test(block.text)) {
       const title = extractTitle(block.text);
@@ -715,7 +783,7 @@ function ContentBlockView({ block, siblings }: { block: ContentBlock; siblings?:
   }
 
   if (block.type === 'thinking' && block.thinking) {
-    return <ThinkingBlock text={block.thinking} />;
+    return <ThinkingBlock text={block.thinking} isLive={isLiveThinking} />;
   }
 
   if (block.type === 'tool_use') {

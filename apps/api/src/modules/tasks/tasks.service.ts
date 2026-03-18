@@ -87,6 +87,22 @@ export class ThreadsService implements OnModuleInit {
     await this.threadRepo.update(threadId, { agentType });
   }
 
+  async updateModel(threadId: string, model: string): Promise<void> {
+    await this.threadRepo
+      .createQueryBuilder()
+      .update()
+      .set({ model: (model || null) as any })
+      .where('id = :id', { id: threadId })
+      .execute();
+  }
+
+  async updatePlanData(
+    threadId: string,
+    planData: { id: string; title: string; filename: string; content: string },
+  ): Promise<void> {
+    await this.threadRepo.update(threadId, { planData });
+  }
+
   async addMessage(
     threadId: string,
     data: {

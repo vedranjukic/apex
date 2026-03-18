@@ -34,6 +34,7 @@ export const AGENT_MODELS: AgentModelOption[] = [
   { value: 'openai/gpt-5', label: 'GPT-5', provider: 'openai' },
   { value: 'openai/gpt-5.1', label: 'GPT-5.1', provider: 'openai' },
   { value: 'openai/gpt-5.2', label: 'GPT-5.2', provider: 'openai' },
+  { value: 'openai/gpt-5.4', label: 'GPT-5.4', provider: 'openai' },
   { value: 'openai/gpt-5.1-codex', label: 'GPT-5.1 Codex', provider: 'openai' },
   // Google
   { value: 'google/gemini-3-pro', label: 'Gemini 3 Pro', provider: 'google' },

@@ -85,19 +85,6 @@ export function useAgentSocket(projectId: string | undefined) {
       }
 
       if (msg.type === 'assistant' && msg.message?.content) {
-        addMessage({
-          id: msg.uuid || crypto.randomUUID(),
-          taskId: data.threadId,
-          role: 'assistant',
-          content: msg.message.content,
-          metadata: {
-            model: msg.message.model,
-            stopReason: msg.message.stop_reason,
-          },
-          createdAt: new Date().toISOString(),
-          _receivedAt: Date.now(),
-        } as any);
-
         const planStore = usePlanStore.getState();
         const activePlan = planStore.getPlanByThreadId(data.threadId);
         if (planStore.isThreadPlan(data.threadId) && !activePlan?.isComplete) {
@@ -120,6 +107,19 @@ export function useAgentSocket(projectId: string | undefined) {
             }
           }
         }
+
+        addMessage({
+          id: msg.uuid || crypto.randomUUID(),
+          taskId: data.threadId,
+          role: 'assistant',
+          content: msg.message.content,
+          metadata: {
+            model: msg.message.model,
+            stopReason: msg.message.stop_reason,
+          },
+          createdAt: new Date().toISOString(),
+          _receivedAt: Date.now(),
+        } as any);
       } else if (msg.type === 'result') {
         addMessage({
           id: msg.uuid || crypto.randomUUID(),
@@ -138,8 +138,11 @@ export function useAgentSocket(projectId: string | undefined) {
         const planStore = usePlanStore.getState();
         if (planStore.isThreadPlan(data.threadId)) {
           const plan = planStore.getPlanByThreadId(data.threadId);
-          if (plan) {
+          if (plan && !plan.isComplete) {
             planStore.completePlan(plan.id);
+            const planData = { id: plan.id, title: plan.title, filename: plan.filename, content: plan.content };
+            useThreadsStore.getState().updateThread(data.threadId, { planData });
+            socket.emit('save_plan', { threadId: data.threadId, plan: planData });
           }
         }
       }
@@ -193,7 +196,7 @@ export function useAgentSocket(projectId: string | undefined) {
 
   const executeThread = useCallback(
     (threadId: string, mode?: string, model?: string, agentType?: string) => {
-      console.log('[ws] emit execute_thread', threadId);
+      console.log('[ws] emit execute_thread', threadId, { mode, model, agentType });
       if (mode === 'plan') {
         usePlanStore.getState().markThreadAsPlan(threadId);
         planTextRef.current.delete(threadId);

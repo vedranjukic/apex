@@ -45,7 +45,16 @@ const HIDDEN_TOOLS = new Set([
   'EnterPlanMode',
 ]);
 
-const MCP_HANDLED_TOOLS = new Set(['mcp__terminal-server__ask_user']);
+const MCP_HANDLED_TOOLS = new Set([
+  'mcp__terminal-server__ask_user',
+  'terminal-server_ask_user',
+]);
+
+/** Tool names that should be hidden (MCP internal / plumbing tools). */
+const HIDDEN_MCP_TOOLS = new Set([
+  'terminal-server_get_plan_format_instructions',
+  'mcp__terminal-server__get_plan_format_instructions',
+]);
 
 const TOOL_NAME_ALIASES: Record<string, string> = {
   todowrite: 'TodoWrite',
@@ -59,6 +68,8 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   multiedit: 'MultiEdit',
   multi_edit: 'MultiEdit',
   askuserquestion: 'AskUserQuestion',
+  'terminal-server_ask_user': 'AskUserQuestion',
+  'mcp__terminal-server__ask_user': 'AskUserQuestion',
 };
 
 export function normalizeTool(name: string): string {
@@ -68,7 +79,7 @@ export function normalizeTool(name: string): string {
 export function ToolUseBlock({ block, resultContent }: { block: ContentBlock; resultContent?: string }) {
   const rawName = block.name ?? '';
   const name = normalizeTool(rawName);
-  if (HIDDEN_TOOLS.has(name) || (rawName.startsWith('mcp__') && !MCP_HANDLED_TOOLS.has(rawName))) return null;
+  if (HIDDEN_TOOLS.has(name) || HIDDEN_MCP_TOOLS.has(rawName) || (rawName.startsWith('mcp__') && !MCP_HANDLED_TOOLS.has(rawName))) return null;
 
   const input = (block.input ?? {}) as Input;
   switch (name) {
@@ -244,16 +255,36 @@ function BashBlock({ input }: { input: Input }) {
 
 // ── Task (subagent delegation) ──────
 
+interface ChildActivityItem {
+  type: 'text' | 'tool';
+  text?: string;
+  name?: string;
+  status?: string;
+  title?: string;
+}
+
 function TaskBlock({ input, result }: { input: Input; result?: string }) {
   const description = input.description ? String(input.description) : null;
   const prompt = input.prompt ? String(input.prompt) : null;
   const agentType = input.subagent_type ? String(input.subagent_type) : 'general';
+  const childActivity = Array.isArray(input._childActivity)
+    ? (input._childActivity as ChildActivityItem[])
+    : [];
   const hasResult = !!result;
   const [expanded, setExpanded] = useState(!hasResult);
+  const activityEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (hasResult) setExpanded(false);
   }, [hasResult]);
+
+  useEffect(() => {
+    if (expanded && activityEndRef.current) {
+      activityEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [childActivity.length, expanded]);
+
+  const hasActivity = childActivity.length > 0;
 
   return (
     <div className="rounded-lg overflow-hidden border border-border">
@@ -268,16 +299,44 @@ function TaskBlock({ input, result }: { input: Input; result?: string }) {
         <span className="text-text-muted ml-1">({agentType})</span>
         {hasResult
           ? <CheckCircle2 className="w-3 h-3 text-green-500 ml-auto shrink-0" />
-          : <span className="text-text-muted ml-auto text-[10px]">running...</span>}
+          : hasActivity
+            ? <span className="text-blue-400 ml-auto text-[10px]">{childActivity.filter(a => a.type === 'tool' && a.status === 'running').length > 0 ? 'working...' : 'running...'}</span>
+            : <span className="text-text-muted ml-auto text-[10px]">running...</span>}
         {expanded ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />}
       </button>
       {expanded && (
-        <div className="px-3 py-2 text-xs border-t border-border">
+        <div className="border-t border-border">
           {prompt && (
-            <div className="text-text-muted whitespace-pre-wrap max-h-60 overflow-y-auto">{prompt}</div>
+            <div className="px-3 py-2 text-xs text-text-muted whitespace-pre-wrap max-h-40 overflow-y-auto">{prompt}</div>
+          )}
+          {hasActivity && (
+            <div className="border-t border-border-subtle max-h-48 overflow-y-auto">
+              <div className="px-3 py-1.5 space-y-1">
+                {childActivity.map((item, i) => (
+                  <div key={i} className="flex items-start gap-2 text-xs">
+                    {item.type === 'text' ? (
+                      <p className="text-text-secondary leading-relaxed">{item.text}</p>
+                    ) : (
+                      <div className="flex items-center gap-1.5 py-0.5">
+                        {item.status === 'completed'
+                          ? <CheckCircle2 className="w-3 h-3 text-green-500 shrink-0" />
+                          : item.status === 'error'
+                            ? <Circle className="w-3 h-3 text-red-400 shrink-0" />
+                            : <Loader2 className="w-3 h-3 text-blue-400 animate-spin shrink-0" />}
+                        <span className="font-medium text-text-secondary">{item.name}</span>
+                        {item.title && item.title !== item.name && (
+                          <span className="text-text-muted truncate max-w-[200px]">{item.title}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+                <div ref={activityEndRef} />
+              </div>
+            </div>
           )}
           {result && (
-            <div className="mt-2 pt-2 border-t border-border-subtle text-text-secondary whitespace-pre-wrap max-h-60 overflow-y-auto">{result}</div>
+            <div className="px-3 py-2 border-t border-border-subtle text-xs text-text-secondary whitespace-pre-wrap max-h-60 overflow-y-auto">{result}</div>
           )}
         </div>
       )}

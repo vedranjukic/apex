@@ -38,6 +38,7 @@ let ocServeProc = null;
 let sseReq = null;
 const terminals = new Map();
 const pendingAskUser = new Map();
+const sessionEmittedParts = new Map();
 
 // ── Logging ──────────────────────────────────────────
 function log(emoji, msg) {
@@ -238,7 +239,9 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId) {
 }
 
 function pollSession(threadId, sessionId) {
-  const emittedParts = new Set();
+  if (!sessionEmittedParts.has(sessionId)) sessionEmittedParts.set(sessionId, new Set());
+  const emittedParts = sessionEmittedParts.get(sessionId);
+  const taskChildren = new Map();
   let lastCost = 0;
   let seenBusy = false;
   let idleCount = 0;
@@ -267,16 +270,21 @@ function pollSession(threadId, sessionId) {
               const toolId = part.callID || part.id;
               if (s.status === "completed") {
                 emittedParts.add(pid);
+                taskChildren.delete(pid);
                 emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
                   { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
                   { type: "tool_result", tool_use_id: toolId, content: typeof s.output === "string" ? s.output : JSON.stringify(s.output || "") },
                 ], stop_reason: "tool_use" } });
-              } else if (s.status === "running" && !emittedParts.has(pid + ":running")) {
-                emittedParts.add(pid + ":running");
-                const title = s.title || nn;
-                emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
-                  { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
-                ], stop_reason: "tool_use" } });
+              } else if (s.status === "running") {
+                if (!emittedParts.has(pid + ":running")) {
+                  emittedParts.add(pid + ":running");
+                  emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
+                    { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
+                  ], stop_reason: "tool_use" } });
+                }
+                if (tn === "task" && s.metadata && s.metadata.sessionId && !taskChildren.has(pid)) {
+                  taskChildren.set(pid, { childSid: s.metadata.sessionId, toolId: toolId, input: s.input || {}, lastHash: "" });
+                }
               }
             } else if (part.type === "step-finish") {
               emittedParts.add(pid);
@@ -288,7 +296,37 @@ function pollSession(threadId, sessionId) {
             }
           }
         }
-        return ocFetch("GET", "/session/status", null);
+        var childPolls = [];
+        for (const [pid, ci] of taskChildren) {
+          childPolls.push(
+            ocFetch("GET", "/session/" + ci.childSid + "/message?limit=10", null)
+              .then((childMsgs) => {
+                if (!Array.isArray(childMsgs)) return;
+                var activity = [];
+                for (const cm of childMsgs) {
+                  if (!cm.parts || !cm.info || cm.info.role !== "assistant") continue;
+                  for (const cp of cm.parts) {
+                    if (cp.type === "text" && cp.text) {
+                      activity.push({ type: "text", text: cp.text.length > 300 ? cp.text.slice(0, 300) + "..." : cp.text });
+                    } else if (cp.type === "tool") {
+                      var cs = cp.state || {};
+                      var ctn = TOOL_NAME_MAP[cp.tool] || cp.tool || "unknown";
+                      activity.push({ type: "tool", name: ctn, status: cs.status || "running", title: cs.title || ctn });
+                    }
+                  }
+                }
+                var hash = activity.length + ":" + activity.map(function(a) { return (a.type === "tool" ? a.name + ":" + a.status : "t"); }).join(",");
+                if (activity.length > 0 && hash !== ci.lastHash) {
+                  ci.lastHash = hash;
+                  emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
+                    { type: "tool_use", id: ci.toolId, name: "Task", input: Object.assign({}, ci.input, { _childActivity: activity }) },
+                  ], stop_reason: "tool_use" } });
+                }
+              })
+              .catch(function() {})
+          );
+        }
+        return (childPolls.length > 0 ? Promise.all(childPolls) : Promise.resolve()).then(function() { return ocFetch("GET", "/session/status", null); });
       })
       .then((statuses) => {
         if (!statuses) return;

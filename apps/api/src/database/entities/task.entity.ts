@@ -34,6 +34,12 @@ export class TaskEntity {
   @Column({ type: 'text', nullable: true, default: null })
   agentType: string | null;
 
+  @Column({ type: 'text', nullable: true, default: null })
+  model: string | null;
+
+  @Column({ type: 'simple-json', nullable: true, default: null })
+  planData: { id: string; title: string; filename: string; content: string } | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

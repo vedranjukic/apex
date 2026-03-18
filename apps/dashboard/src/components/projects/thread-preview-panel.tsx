@@ -10,7 +10,7 @@ interface Props {
   projectName: string;
   onClose: () => void;
   onSendPrompt: (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => void;
-  onSendSilentPrompt: (threadId: string, prompt: string, mode?: string, model?: string) => void;
+  onSendSilentPrompt: (threadId: string, prompt: string, mode?: string, model?: string, agentType?: string) => void;
   onExecuteThread: (threadId: string, mode?: string, model?: string) => void;
   onSendUserAnswer: (threadId: string, toolUseId: string, answer: string) => void;
 }

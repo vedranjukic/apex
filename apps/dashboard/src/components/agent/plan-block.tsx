@@ -26,7 +26,7 @@ export function PlanBlock({ filename, content, isComplete, wasBuilt, threadStatu
     if (actionDisabled) return;
     if (isPlanAgent) {
       useAgentSettingsStore.getState().setAgentType('build');
-      sendSilentPrompt(`${BUILD_PROMPT_PREFIX}${content}`, 'agent');
+      sendSilentPrompt(`${BUILD_PROMPT_PREFIX}${content}`, 'agent', 'build');
     } else {
       sendSilentPrompt('Continue. Execute the tasks outlined above.');
     }

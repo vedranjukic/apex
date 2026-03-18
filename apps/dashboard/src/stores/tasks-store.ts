@@ -21,6 +21,7 @@ interface ThreadsState {
   ) => Promise<Thread>;
   addMessage: (msg: Message) => void;
   updateThreadStatus: (threadId: string, status: string) => void;
+  updateThread: (threadId: string, patch: Partial<Thread>) => void;
   deleteThread: (id: string) => Promise<void>;
   setThreadScrollOffset: (threadId: string, offset: number) => void;
   reset: () => void;
@@ -117,6 +118,13 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
   updateThreadStatus: (threadId, status) => {
     const threads = get().threads.map((c) =>
       c.id === threadId ? { ...c, status } : c,
+    );
+    set({ threads });
+  },
+
+  updateThread: (threadId, patch) => {
+    const threads = get().threads.map((c) =>
+      c.id === threadId ? { ...c, ...patch } : c,
     );
     set({ threads });
   },

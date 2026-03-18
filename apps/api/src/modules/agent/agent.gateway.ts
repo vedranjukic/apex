@@ -103,11 +103,14 @@ export class AgentGateway
     this.logger.log(`send_prompt: threadId=${threadId} mode=${mode ?? 'agent'} model=${model ?? 'default'} agentType=${agentType ?? 'default'} prompt="${prompt.slice(0, 60)}..."`);
 
     try {
-      if (mode === 'plan') {
+      if (mode) {
         await this.threadsService.updateMode(threadId, mode);
       }
       if (agentType) {
         await this.threadsService.updateAgentType(threadId, agentType);
+      }
+      if (model !== undefined) {
+        await this.threadsService.updateModel(threadId, model);
       }
 
       await this.threadsService.addMessage(threadId, {
@@ -128,14 +131,17 @@ export class AgentGateway
     @MessageBody() payload: { threadId: string; mode?: string; model?: string; agentType?: string },
   ) {
     const { threadId, mode, model, agentType } = payload;
-    this.logger.log(`execute_thread: threadId=${threadId}`);
+    this.logger.log(`execute_thread: threadId=${threadId} mode=${mode} model=${model} agentType=${agentType}`);
 
     try {
-      if (mode === 'plan') {
+      if (mode) {
         await this.threadsService.updateMode(threadId, mode);
       }
       if (agentType) {
         await this.threadsService.updateAgentType(threadId, agentType);
+      }
+      if (model !== undefined) {
+        await this.threadsService.updateModel(threadId, model);
       }
 
       const thread = await this.threadsService.findById(threadId);
@@ -164,6 +170,24 @@ export class AgentGateway
     } catch (err) {
       this.logger.error(`execute_thread error: ${err}`);
       client.emit('agent_error', { threadId, error: String(err) });
+    }
+  }
+
+  @SubscribeMessage('save_plan')
+  async handleSavePlan(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: {
+      threadId: string;
+      plan: { id: string; title: string; filename: string; content: string };
+    },
+  ) {
+    const { threadId, plan } = payload;
+    this.logger.log(`save_plan: threadId=${threadId} title="${plan.title}"`);
+    try {
+      await this.threadsService.updatePlanData(threadId, plan);
+      client.emit('plan_saved', { threadId, planId: plan.id });
+    } catch (err) {
+      this.logger.error(`save_plan error: ${err}`);
     }
   }
 
@@ -1204,7 +1228,11 @@ export class AgentGateway
           // manages the status transition via ask_user_resolved.
           const currentThread = await this.threadsService.findById(threadId);
           if (currentThread.status !== 'waiting_for_input') {
-            const finalStatus = data.is_error ? 'error' : 'completed';
+            const finalStatus = data.is_error
+              ? 'error'
+              : currentThread.mode === 'plan'
+                ? 'waiting_for_user_action'
+                : 'completed';
             await this.updateThreadStatusAndNotify(threadId, finalStatus);
             this.emitToSubscribers(project.sandboxId!, 'agent_status', {
               threadId,
@@ -1270,10 +1298,13 @@ export class AgentGateway
 
         const exitThread = await this.threadsService.findById(threadId);
         if (exitThread.status !== 'waiting_for_input') {
-          await this.updateThreadStatusAndNotify(threadId, status);
+          const exitStatus = (status === 'completed' && exitThread.mode === 'plan')
+            ? 'waiting_for_user_action'
+            : status;
+          await this.updateThreadStatusAndNotify(threadId, exitStatus);
           this.emitToSubscribers(project.sandboxId!, 'agent_status', {
             threadId,
-            status,
+            status: exitStatus,
           });
           cleanupHandler();
         }

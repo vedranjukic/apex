@@ -85,8 +85,8 @@ export function HomePage() {
   );
 
   const handleExecuteThread = useCallback(
-    (threadId: string, mode?: string, model?: string) => {
-      executeThread(threadId, mode, model);
+    (threadId: string, mode?: string, model?: string, agentType?: string) => {
+      executeThread(threadId, mode, model, agentType);
     },
     [executeThread],
   );

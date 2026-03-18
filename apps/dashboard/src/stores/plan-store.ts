@@ -99,7 +99,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       return existing;
     }
 
-    const content = extractPlanBody(rawContent);
+    const content = extractPlanBody(rawContent) || rawContent.trim();
     if (!content) return null;
 
     const title = extractTitle(content);
@@ -118,7 +118,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   },
 
   updatePlanContent: (planId, rawContent) => {
-    const content = extractPlanBody(rawContent);
+    const content = extractPlanBody(rawContent) || rawContent.trim();
     if (!content) return;
     set((state) => ({
       plans: state.plans.map((p) => {

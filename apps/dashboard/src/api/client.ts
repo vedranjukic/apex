@@ -73,6 +73,13 @@ export const projectsApi = {
 };
 
 // ── Threads ──────────────────────────────────────────
+export interface ThreadPlanData {
+  id: string;
+  title: string;
+  filename: string;
+  content: string;
+}
+
 export interface Thread {
   id: string;
   projectId: string;
@@ -80,6 +87,8 @@ export interface Thread {
   status: string;
   mode: string | null;
   agentType: string | null;
+  model: string | null;
+  planData: ThreadPlanData | null;
   createdAt: string;
   updatedAt: string;
   messages?: Message[];
