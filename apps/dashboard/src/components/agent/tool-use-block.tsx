@@ -65,7 +65,7 @@ export function normalizeTool(name: string): string {
   return TOOL_NAME_ALIASES[name.toLowerCase()] ?? name;
 }
 
-export function ToolUseBlock({ block }: { block: ContentBlock }) {
+export function ToolUseBlock({ block, resultContent }: { block: ContentBlock; resultContent?: string }) {
   const rawName = block.name ?? '';
   const name = normalizeTool(rawName);
   if (HIDDEN_TOOLS.has(name) || (rawName.startsWith('mcp__') && !MCP_HANDLED_TOOLS.has(rawName))) return null;
@@ -73,7 +73,7 @@ export function ToolUseBlock({ block }: { block: ContentBlock }) {
   const input = (block.input ?? {}) as Input;
   switch (name) {
     case 'Task':
-      return <TaskBlock input={input} />;
+      return <TaskBlock input={input} result={resultContent} />;
     case 'Bash':
       return <BashBlock input={input} />;
     case 'Write':
@@ -242,27 +242,45 @@ function BashBlock({ input }: { input: Input }) {
   );
 }
 
-// ── Task (transient — fades out after 10s) ──────
+// ── Task (subagent delegation) ──────
 
-const TASK_FADE_MS = 10_000;
-
-function TaskBlock({ input }: { input: Input }) {
+function TaskBlock({ input, result }: { input: Input; result?: string }) {
   const description = input.description ? String(input.description) : null;
-  const [visible, setVisible] = useState(true);
+  const prompt = input.prompt ? String(input.prompt) : null;
+  const agentType = input.subagent_type ? String(input.subagent_type) : 'general';
+  const hasResult = !!result;
+  const [expanded, setExpanded] = useState(!hasResult);
 
   useEffect(() => {
-    const timer = setTimeout(() => setVisible(false), TASK_FADE_MS);
-    return () => clearTimeout(timer);
-  }, []);
-
-  if (!visible) return null;
+    if (hasResult) setExpanded(false);
+  }, [hasResult]);
 
   return (
-    <div
-      className="text-xs text-text-muted italic transition-opacity duration-1000"
-      style={{ opacity: 0.6 }}
-    >
-      {description}
+    <div className="rounded-lg overflow-hidden border border-border">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 w-full px-3 py-2 bg-surface-secondary text-text-secondary text-xs hover:bg-surface-hover transition-colors"
+      >
+        {hasResult
+          ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
+          : <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin shrink-0" />}
+        <span className="font-medium truncate">{description || 'Subagent task'}</span>
+        <span className="text-text-muted ml-1">({agentType})</span>
+        {hasResult
+          ? <CheckCircle2 className="w-3 h-3 text-green-500 ml-auto shrink-0" />
+          : <span className="text-text-muted ml-auto text-[10px]">running...</span>}
+        {expanded ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />}
+      </button>
+      {expanded && (
+        <div className="px-3 py-2 text-xs border-t border-border">
+          {prompt && (
+            <div className="text-text-muted whitespace-pre-wrap max-h-60 overflow-y-auto">{prompt}</div>
+          )}
+          {result && (
+            <div className="mt-2 pt-2 border-t border-border-subtle text-text-secondary whitespace-pre-wrap max-h-60 overflow-y-auto">{result}</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

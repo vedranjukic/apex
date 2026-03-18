@@ -97,6 +97,7 @@ export interface Message {
 export interface ContentBlock {
   type: string;
   text?: string;
+  thinking?: string;
   id?: string;
   name?: string;
   input?: Record<string, unknown>;

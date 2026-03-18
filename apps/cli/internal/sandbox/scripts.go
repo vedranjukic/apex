@@ -10,7 +10,8 @@ const bridgePort = 8080
 // GenerateBridgeScript returns the JavaScript source for bridge.js
 // that runs inside a Daytona sandbox. Mirrors the TypeScript
 // getBridgeScript() in libs/orchestrator/src/lib/bridge-script.ts.
-// Uses OpenCode as the single agent runtime.
+// Uses OpenCode in serve mode -- the bridge starts opencode serve once
+// and communicates via HTTP API + SSE event stream.
 func GenerateBridgeScript(port int, projectDir string) string {
 	safeProjDir := strings.ReplaceAll(projectDir, `"`, `\"`)
 
@@ -30,7 +31,12 @@ const https = require("https");
 const urlMod = require("url");
 
 let state = { ws: null };
-const agentProcesses = new Map();
+const threadToSession = new Map();
+const sessionToThread = new Map();
+const activeThreads = new Set();
+const sessionCosts = new Map();
+let ocServeProc = null;
+let sseReq = null;
 const pendingAskUser = new Map();
 
 const terminals = new Map();
@@ -187,6 +193,256 @@ startFileWatcher();
 function log(emoji, msg) {
   console.log(new Date().toISOString() + " " + emoji + " " + msg);
 }
+
+function emitAgentMessage(threadId, data) {
+  if (state.ws && state.ws.readyState === 1) {
+    state.ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: data }));
+  }
+}
+function emitAgentExit(threadId, code) {
+  if (state.ws && state.ws.readyState === 1) {
+    state.ws.send(JSON.stringify({ type: "claude_exit", threadId: threadId, code: code }));
+  }
+}
+function emitAgentError(threadId, error) {
+  if (state.ws && state.ws.readyState === 1) {
+    state.ws.send(JSON.stringify({ type: "claude_error", threadId: threadId, error: error }));
+  }
+}
+
+// ══════════════════════════════════════════════════════
+// ── OpenCode Serve Adapter ──────────────────────────
+// ══════════════════════════════════════════════════════
+const OC_PORT = 4096;
+const TOOL_NAME_MAP = { bash: "Bash", read: "Read", glob: "Glob", grep: "Grep", apply_patch: "Write", write: "Write", edit: "Edit", todowrite: "TodoWrite", todo_write: "TodoWrite", websearch: "WebSearch", web_search: "WebSearch", webfetch: "WebFetch", web_fetch: "WebFetch", task: "Task" };
+
+function ocFetch(method, urlPath, body) {
+  return new Promise((resolve, reject) => {
+    const opts = { hostname: "127.0.0.1", port: OC_PORT, path: urlPath, method: method, headers: {} };
+    if (body) opts.headers["Content-Type"] = "application/json";
+    const req = http.request(opts, (res) => {
+      let data = "";
+      res.on("data", (c) => data += c);
+      res.on("end", () => {
+        if (res.statusCode === 204) { resolve(null); return; }
+        if (res.statusCode >= 400) { reject(new Error("HTTP " + res.statusCode + ": " + data)); return; }
+        try { resolve(JSON.parse(data)); } catch { resolve(data); }
+      });
+    });
+    req.on("error", reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
+function loadDotEnv(dir) {
+  try {
+    const fs = require("fs");
+    const content = fs.readFileSync(dir + "/.env", "utf8");
+    const vars = {};
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq === -1) continue;
+      vars[trimmed.substring(0, eq).trim()] = trimmed.substring(eq + 1).trim();
+    }
+    return vars;
+  } catch { return {}; }
+}
+
+function startOpenCodeServe() {
+  if (ocServeProc) return;
+  log("\u{1F680}", "Starting opencode serve on port " + OC_PORT);
+  const ocBin = "/home/daytona/.opencode/bin/opencode";
+  const dotEnvVars = loadDotEnv(PROJECT_DIR);
+  const serveEnv = { ...process.env, ...dotEnvVars, HOME: "/home/daytona" };
+  ocServeProc = spawn(ocBin, ["serve", "--port", String(OC_PORT), "--hostname", "127.0.0.1"], {
+    cwd: PROJECT_DIR,
+    env: serveEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  ocServeProc.stdout.on("data", (d) => log("\u{1F916}", "oc-serve: " + d.toString().trim()));
+  ocServeProc.stderr.on("data", (d) => log("\u{1F916}", "oc-serve err: " + d.toString().trim()));
+  ocServeProc.on("exit", (code) => {
+    log("\u{26A0}", "opencode serve exited code=" + code);
+    ocServeProc = null;
+    setTimeout(() => { if (!ocServeProc) startOpenCodeServe(); }, 3000);
+  });
+  ocServeProc.on("error", (err) => {
+    log("\u{274C}", "opencode serve spawn error: " + err.message);
+    ocServeProc = null;
+  });
+  pollHealth(0);
+}
+
+function pollHealth(attempt) {
+  if (attempt >= 60) { log("\u{274C}", "opencode serve health timed out"); return; }
+  setTimeout(() => {
+    ocFetch("GET", "/global/health", null)
+      .then((res) => {
+        if (res && res.healthy) {
+          log("\u{2705}", "opencode serve healthy v=" + (res.version || "?"));
+          connectSSE();
+        } else { pollHealth(attempt + 1); }
+      })
+      .catch(() => pollHealth(attempt + 1));
+  }, attempt === 0 ? 500 : 1000);
+}
+
+function connectSSE() {
+  if (sseReq) { try { sseReq.kill(); } catch {} sseReq = null; }
+  log("\u{1F4E1}", "Connecting SSE /event via curl");
+  const proc = spawn("curl", ["-s", "-N", "http://127.0.0.1:" + OC_PORT + "/event"], { stdio: ["ignore", "pipe", "pipe"] });
+  sseReq = proc;
+  let buf = "";
+  proc.stdout.on("data", (chunk) => {
+    buf += chunk.toString();
+    const blocks = buf.split("\n\n");
+    buf = blocks.pop() || "";
+    for (const block of blocks) {
+      if (!block.trim()) continue;
+      const lines = block.split("\n");
+      let evType = "";
+      let dataLines = [];
+      for (const l of lines) {
+        if (l.startsWith("event:")) evType = l.slice(6).trim();
+        else if (l.startsWith("data:")) dataLines.push(l.slice(5).trimStart());
+      }
+      if (dataLines.length === 0) continue;
+      try {
+        const parsed = JSON.parse(dataLines.join(""));
+        if (!evType && parsed.type) evType = parsed.type;
+        if (!evType) continue;
+        handleSSEEvent(evType, parsed);
+      } catch (e) { log("\u{26A0}", "SSE parse error " + evType + ": " + e.message); }
+    }
+  });
+  proc.stderr.on("data", (d) => { const m = d.toString().trim(); if (m) log("\u{26A0}", "SSE curl stderr: " + m); });
+  proc.on("exit", (code) => { sseReq = null; log("\u{26A0}", "SSE curl exited code=" + code + ", reconnecting..."); setTimeout(connectSSE, 2000); });
+  proc.on("error", (e) => { sseReq = null; log("\u{26A0}", "SSE curl error: " + e.message); setTimeout(connectSSE, 3000); });
+}
+
+function handleSSEEvent(evType, data) {
+  const props = data.properties || data;
+  if (evType === "permission.updated") {
+    const sessionId = props.sessionID || props.id;
+    const permId = props.permissionID || props.id;
+    if (sessionId && permId) {
+      log("\u{1F513}", "Auto-approving permission " + permId + " for session " + sessionId);
+      ocFetch("POST", "/session/" + sessionId + "/permissions/" + permId, { response: true }).catch((e) => {
+        log("\u{26A0}", "Permission approval failed: " + (e.message || String(e)));
+      });
+    }
+  }
+}
+
+async function sendPrompt(threadId, prompt, agent, model, sessionId) {
+  const ocAgent = agent || "build";
+  const ocModel = model || "";
+  log("\u{1F916}", "Sending prompt thread=" + threadId + " agent=" + ocAgent + " model=" + (ocModel || "default"));
+
+  let ocSessionId = threadToSession.get(threadId);
+  if (!ocSessionId) {
+    const sess = await ocFetch("POST", "/session", { title: threadId });
+    ocSessionId = sess.id;
+    log("\u{1F4DD}", "Created session " + ocSessionId + " for thread " + threadId);
+  }
+
+  const oldThread = sessionToThread.get(ocSessionId);
+  if (oldThread && oldThread !== threadId) threadToSession.delete(oldThread);
+  const oldSession = threadToSession.get(threadId);
+  if (oldSession && oldSession !== ocSessionId) sessionToThread.delete(oldSession);
+  threadToSession.set(threadId, ocSessionId);
+  sessionToThread.set(ocSessionId, threadId);
+  activeThreads.add(threadId);
+  sessionCosts.set(ocSessionId, 0);
+
+  emitAgentMessage(threadId, { type: "system", subtype: "init", session_id: ocSessionId, tools: [], model: ocModel || ocAgent, cwd: PROJECT_DIR });
+
+  let modelObj;
+  if (ocModel && ocModel.includes("/")) {
+    const si = ocModel.indexOf("/");
+    modelObj = { providerID: ocModel.substring(0, si), modelID: ocModel.substring(si + 1) };
+  }
+
+  await ocFetch("POST", "/session/" + ocSessionId + "/prompt_async", {
+    parts: [{ type: "text", text: prompt }],
+    agent: ocAgent,
+    model: modelObj,
+  });
+  log("\u{1F916}", "Prompt dispatched to session " + ocSessionId);
+  pollSession(threadId, ocSessionId);
+}
+
+function pollSession(threadId, sessionId) {
+  const emittedParts = new Set();
+  let lastCost = 0;
+  const poll = () => {
+    if (!activeThreads.has(threadId)) return;
+    ocFetch("GET", "/session/" + sessionId + "/message?limit=20", null)
+      .then((msgs) => {
+        if (!Array.isArray(msgs)) { setTimeout(poll, 1500); return; }
+        for (const msg of msgs) {
+          if (!msg.parts || !msg.info || msg.info.role !== "assistant") continue;
+          for (const part of msg.parts) {
+            const pid = part.id;
+            if (!pid || emittedParts.has(pid)) continue;
+            if (part.type === "text" && part.text) {
+              emittedParts.add(pid);
+              emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [{ type: "text", text: part.text }], stop_reason: "end_turn" } });
+            } else if (part.type === "reasoning" && part.text) {
+              emittedParts.add(pid);
+              emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [{ type: "thinking", thinking: part.text }], stop_reason: null } });
+            } else if (part.type === "tool") {
+              const s = part.state || {};
+              const tn = part.tool || "unknown";
+              const nn = TOOL_NAME_MAP[tn] || tn;
+              const toolId = part.callID || part.id;
+              if (s.status === "completed") {
+                emittedParts.add(pid);
+                emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
+                  { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
+                  { type: "tool_result", tool_use_id: toolId, content: typeof s.output === "string" ? s.output : JSON.stringify(s.output || "") },
+                ], stop_reason: "tool_use" } });
+              } else if (s.status === "running" && !emittedParts.has(pid + ":running")) {
+                emittedParts.add(pid + ":running");
+                emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
+                  { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
+                ], stop_reason: "tool_use" } });
+              }
+            } else if (part.type === "step-finish") {
+              emittedParts.add(pid);
+              lastCost += part.cost || 0;
+              if (part.reason === "stop") {
+                const tk = part.tokens || {};
+                emitAgentMessage(threadId, { type: "result", subtype: "success", is_error: false, duration_ms: 0, num_turns: 1, result: "", session_id: sessionId, total_cost_usd: lastCost, usage: { input_tokens: tk.input || 0, output_tokens: tk.output || 0 } });
+              }
+            }
+          }
+        }
+        return ocFetch("GET", "/session/status", null);
+      })
+      .then((statuses) => {
+        if (!statuses) return;
+        const st = statuses[sessionId];
+        if (!st || st.type === "idle") {
+          log("\u{1F916}", "Session " + sessionId + " idle, emitting exit");
+          activeThreads.delete(threadId);
+          emitAgentExit(threadId, 0);
+          return;
+        }
+        setTimeout(poll, 1500);
+      })
+      .catch((e) => {
+        log("\u{26A0}", "Poll error: " + (e.message || String(e)));
+        setTimeout(poll, 3000);
+      });
+  };
+  setTimeout(poll, 1000);
+}
+
+startOpenCodeServe();
 
 const server = http.createServer((req, res) => {
   if (req.method === "POST" && req.url === "/internal/terminal-create") {
@@ -359,7 +615,7 @@ const server = http.createServer((req, res) => {
       try {
         const payload = JSON.parse(body);
         const questionId = "ask-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-        const activeThreadId = payload.threadId !== "default" ? payload.threadId : (agentProcesses.size > 0 ? Array.from(agentProcesses.keys()).pop() : "default");
+        const activeThreadId = payload.threadId !== "default" ? payload.threadId : (activeThreads.size > 0 ? Array.from(activeThreads).pop() : "default");
         if (state.ws && state.ws.readyState === 1) {
           state.ws.send(JSON.stringify({ type: "claude_message", threadId: activeThreadId, data: { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: questionId, name: "AskUserQuestion", input: payload.input || {} }], stop_reason: "tool_use" } } }));
           state.ws.send(JSON.stringify({ type: "ask_user_pending", threadId: activeThreadId, questionId: questionId }));
@@ -397,78 +653,6 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server });
 
-function spawnOpenCode(threadId, prompt, agent, model, sessionId) {
-  const ocAgent = agent || "build";
-  const ocModel = model || "";
-  log("\u{1F916}", "Spawning OpenCode for thread " + threadId + " agent=" + ocAgent);
-  const ocBin = "/home/daytona/.opencode/bin/opencode";
-  const args = ["run", "--format", "json"];
-  if (ocAgent) args.push("--agent", ocAgent);
-  if (ocModel) args.push("-m", ocModel);
-  if (sessionId) args.push("--session", sessionId);
-  args.push(prompt);
-
-  try {
-    const proc = pty.spawn(ocBin, args, {
-      name: "xterm-256color", cols: 200, rows: 50, cwd: PROJECT_DIR,
-      env: { ...process.env, HOME: "/home/daytona" },
-    });
-    agentProcesses.set(threadId, { proc, sessionId, threadId });
-    let capturedSessionId = null;
-    let stepCost = 0;
-    let buffer = "";
-
-    proc.onData((d) => {
-      buffer += d;
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const rawLine of lines) {
-        const line = rawLine.replace(/[\x00-\x1f\x7f]+(\[\?[\d;]*[a-zA-Z])?/g, "").trim();
-        if (!line) continue;
-        try {
-          const ev = JSON.parse(line);
-          if (!capturedSessionId && ev.sessionID) {
-            capturedSessionId = ev.sessionID;
-            const ex = agentProcesses.get(threadId);
-            if (ex) ex.sessionId = capturedSessionId;
-            ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: { type: "system", subtype: "init", session_id: capturedSessionId, tools: [], model: ocModel || ocAgent, cwd: PROJECT_DIR } }));
-          }
-          if (ev.type === "text") {
-            ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: { type: "assistant", message: { role: "assistant", model: ocModel || ocAgent, content: [{ type: "text", text: ev.part.text || "" }], stop_reason: "end_turn" } } }));
-          } else if (ev.type === "tool_use") {
-            const s = ev.part.state || {};
-            const tn = ev.part.tool || "unknown";
-            const nn = { bash: "Bash", read: "Read", glob: "Glob", grep: "Grep", apply_patch: "Write", write: "Write", edit: "Edit" }[tn] || tn;
-            ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: { type: "assistant", message: { role: "assistant", model: ocModel || ocAgent, content: [
-              { type: "tool_use", id: ev.part.callID || ev.part.id, name: nn, input: s.input || {} },
-              { type: "tool_result", tool_use_id: ev.part.callID || ev.part.id, content: typeof s.output === "string" ? s.output : JSON.stringify(s.output || "") },
-            ], stop_reason: "tool_use" } } }));
-          } else if (ev.type === "step_finish") {
-            stepCost += ev.part.cost || 0;
-            if (ev.part.reason === "stop") {
-              const tk = ev.part.tokens || {};
-              ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: { type: "result", subtype: "success", is_error: false, duration_ms: 0, num_turns: 1, result: "", session_id: capturedSessionId || "", total_cost_usd: stepCost, usage: { input_tokens: tk.input || 0, output_tokens: tk.output || 0 } } }));
-            }
-          } else if (ev.type === "error") {
-            ws.send(JSON.stringify({ type: "claude_error", threadId: threadId, error: (ev.error && ev.error.data && ev.error.data.message) || "OpenCode error" }));
-          }
-        } catch {}
-      }
-    });
-
-    proc.onExit(({ exitCode }) => {
-      log("\u{1F916}", "OpenCode exited for thread " + threadId + " code=" + exitCode);
-      if (!capturedSessionId && exitCode !== 0) {
-        ws.send(JSON.stringify({ type: "claude_error", threadId: threadId, error: "OpenCode exited with code " + exitCode }));
-      }
-      agentProcesses.delete(threadId);
-      ws.send(JSON.stringify({ type: "claude_exit", threadId: threadId, code: exitCode || 0 }));
-    });
-  } catch (e) {
-    ws.send(JSON.stringify({ type: "claude_error", threadId: threadId, error: e.message || String(e) }));
-  }
-}
-
 wss.on("connection", (ws) => {
   log("\u{1F517}", "Orchestrator connected");
   state.ws = ws;
@@ -479,13 +663,18 @@ wss.on("connection", (ws) => {
       const msg = JSON.parse(data.toString());
 
       if (msg.type === "start_claude") {
-        const threadId = msg.threadId || "default";
-        const existing = agentProcesses.get(threadId);
-        if (existing) {
-          if (existing.proc) { try { existing.proc.kill(); } catch {} }
-          agentProcesses.delete(threadId);
-        }
-        spawnOpenCode(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId);
+        (async () => {
+          const threadId = msg.threadId || "default";
+          const existingSession = threadToSession.get(threadId);
+          if (existingSession && activeThreads.has(threadId)) {
+            log("\u{1F916}", "Aborting running session for thread " + threadId);
+            try { await ocFetch("POST", "/session/" + existingSession + "/abort", {}); } catch {}
+            activeThreads.delete(threadId);
+          }
+          try {
+            await sendPrompt(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId);
+          } catch (e) { emitAgentError(threadId, e.message || String(e)); }
+        })().catch(e => log("\u{274C}", "start_claude error: " + e));
 
       } else if (msg.type === "claude_user_answer") {
         let pending = pendingAskUser.get(msg.toolUseId);
@@ -495,20 +684,22 @@ wss.on("connection", (ws) => {
           }
         }
         if (pending) { pending.resolve(msg.answer); }
-        else { ws.send(JSON.stringify({ type: "claude_error", threadId: msg.threadId, error: "No pending ask_user to receive answer" })); }
-
-      } else if (msg.type === "claude_input") {
-        const e = agentProcesses.get(msg.threadId);
-        if (e && e.proc && e.proc.write) e.proc.write(msg.data);
+        else { emitAgentError(msg.threadId, "No pending ask_user to receive answer"); }
 
       } else if (msg.type === "stop_claude") {
-        if (msg.threadId) {
-          const e = agentProcesses.get(msg.threadId);
-          if (e && e.proc) { try { e.proc.kill(); } catch {} }
-          agentProcesses.delete(msg.threadId);
-        } else {
-          for (const [cid, e] of agentProcesses) { if (e.proc) { try { e.proc.kill(); } catch {} } agentProcesses.delete(cid); }
-        }
+        (async () => {
+          if (msg.threadId) {
+            const sid = threadToSession.get(msg.threadId);
+            if (sid) { try { await ocFetch("POST", "/session/" + sid + "/abort", {}); } catch {} }
+            activeThreads.delete(msg.threadId);
+          } else {
+            for (const tid of activeThreads) {
+              const sid = threadToSession.get(tid);
+              if (sid) { try { await ocFetch("POST", "/session/" + sid + "/abort", {}); } catch {} }
+            }
+            activeThreads.clear();
+          }
+        })().catch(e => log("\u{274C}", "stop_claude error: " + e));
 
       } else if (msg.type === "terminal_create") {
         const result = createTerminalPty(
@@ -550,7 +741,11 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     log("\u{1F50C}", "Orchestrator disconnected");
-    for (const [cid, e] of agentProcesses) { if (e.proc) { try { e.proc.kill(); } catch {} } agentProcesses.delete(cid); }
+    for (const tid of activeThreads) {
+      const sid = threadToSession.get(tid);
+      if (sid) { ocFetch("POST", "/session/" + sid + "/abort", {}).catch(() => {}); }
+    }
+    activeThreads.clear();
   });
 });
 

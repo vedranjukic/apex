@@ -1373,12 +1373,12 @@ export class SandboxManager extends EventEmitter {
     const sid = session.sandboxId.slice(0, 8);
 
     await sandbox.process.executeCommand(
-      'pkill -f "node bridge.js" 2>/dev/null; sleep 0.3',
+      'pkill -f "node bridge.js" 2>/dev/null; pkill -f "opencode serve" 2>/dev/null; sleep 0.3',
     );
 
     const bridgeCode = getBridgeScript(BRIDGE_PORT, projectDir);
     console.log(
-      `[bridge:${sid}] uploading bridge.js (${bridgeCode.length} bytes, has spawnOpenCode: ${bridgeCode.includes("spawnOpenCode")})`,
+      `[bridge:${sid}] uploading bridge.js (${bridgeCode.length} bytes, has startOpenCodeServe: ${bridgeCode.includes("startOpenCodeServe")})`,
     );
     await sandbox.fs.uploadFile(
       Buffer.from(bridgeCode),
@@ -1414,18 +1414,20 @@ export class SandboxManager extends EventEmitter {
             description: "Full development agent with all tools enabled",
             mode: "primary",
             prompt: "{file:AGENTS.md}",
+            permission: { "*": { "*": "allow" } },
           },
           plan: {
             description: "Analysis and planning without making changes",
             mode: "primary",
             tools: { write: false, edit: false, bash: false },
+            permission: { "*": { "*": "allow" } },
           },
           sisyphus: {
             description: "Orchestration agent for complex multi-step tasks",
             mode: "primary",
             prompt: "{file:.opencode/agents/sisyphus-prompt.txt}",
             steps: 50,
-            permission: { task: { "*": "allow" } },
+            permission: { "*": { "*": "allow" } },
           },
         },
         experimental: { mcp_timeout: 300000 },
@@ -1548,7 +1550,7 @@ export class SandboxManager extends EventEmitter {
       "",
     ].join("\n");
 
-    // Pre-warm: trigger the one-time DB migration before the bridge spawns `opencode run`.
+    // Pre-warm: trigger the one-time DB migration before the bridge starts `opencode serve`.
     await sandbox.process.executeCommand(
       `cd ${projectDir} && HOME=/home/daytona /home/daytona/.opencode/bin/opencode session list 2>&1; echo "opencode pre-warm done"`,
     );
@@ -1580,18 +1582,20 @@ export class SandboxManager extends EventEmitter {
           description: "Full development agent with all tools enabled",
           mode: "primary",
           prompt: "{file:AGENTS.md}",
+          permission: { "*": { "*": "allow" } },
         },
         plan: {
           description: "Analysis and planning without making changes",
           mode: "primary",
           tools: { write: false, edit: false, bash: false },
+          permission: { "*": { "*": "allow" } },
         },
         sisyphus: {
           description: "Orchestration agent for complex multi-step tasks with retry logic",
           mode: "primary",
           prompt: "{file:.opencode/agents/sisyphus-prompt.txt}",
           steps: 50,
-          permission: { task: { "*": "allow" } },
+          permission: { "*": { "*": "allow" } },
         },
       },
       experimental: { mcp_timeout: 300000 },
@@ -1618,13 +1622,17 @@ export class SandboxManager extends EventEmitter {
       "",
       "Your approach:",
       "1. Analyze the request and break it into concrete sub-tasks",
-      "2. Delegate implementation to subagents using @general for multi-step work and @explore for codebase investigation",
+      "2. Use the `task` tool to delegate each subtask to a worker agent",
       "3. Track progress — when a subtask fails, retry with adjusted context",
       "4. Provide a status update after each sub-task completes",
       "5. Synthesize the results and present a final summary",
       "",
-      "When delegating, be specific about what each subagent should do.",
-      "Prefer parallel delegation when sub-tasks are independent.",
+      "For each subtask, call the task tool with:",
+      '- subagent_type: "general" (for implementation work)',
+      '- subagent_type: "explore" (for codebase investigation)',
+      "",
+      "When subtasks are independent, dispatch them in parallel by making",
+      "multiple task tool calls in the same response.",
     ].join("\n");
     await sandbox.fs.uploadFile(
       Buffer.from(sisyphusPrompt),

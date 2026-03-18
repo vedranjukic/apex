@@ -235,18 +235,20 @@ func (m *Manager) installBridge(ctx context.Context, sandbox *daytona.Sandbox, p
 				"description": "Full development agent with all tools enabled",
 				"mode":        "primary",
 				"prompt":      "{file:AGENTS.md}",
+				"permission":  map[string]interface{}{"*": map[string]interface{}{"*": "allow"}},
 			},
 			"plan": map[string]interface{}{
 				"description": "Analysis and planning without making changes",
 				"mode":        "primary",
 				"tools":       map[string]interface{}{"write": false, "edit": false, "bash": false},
+				"permission":  map[string]interface{}{"*": map[string]interface{}{"*": "allow"}},
 			},
 			"sisyphus": map[string]interface{}{
 				"description": "Orchestration agent for complex multi-step tasks",
 				"mode":        "primary",
 				"prompt":      "{file:.opencode/agents/sisyphus-prompt.txt}",
 				"steps":       50,
-				"permission":  map[string]interface{}{"task": map[string]interface{}{"*": "allow"}},
+				"permission":  map[string]interface{}{"*": map[string]interface{}{"*": "allow"}},
 			},
 		},
 		"experimental": map[string]interface{}{"mcp_timeout": 300000},
@@ -306,13 +308,17 @@ ALWAYS use the `+"`ask_user`"+` tool so the system knows you are waiting for inp
 
 Your approach:
 1. Analyze the request and break it into concrete sub-tasks
-2. Delegate implementation to subagents using @general for multi-step work and @explore for codebase investigation
+2. Use the task tool to delegate each subtask to a worker agent
 3. Track progress — when a subtask fails, retry with adjusted context
 4. Provide a status update after each sub-task completes
 5. Synthesize the results and present a final summary
 
-When delegating, be specific about what each subagent should do.
-Prefer parallel delegation when sub-tasks are independent.`
+For each subtask, call the task tool with:
+- subagent_type: "general" (for implementation work)
+- subagent_type: "explore" (for codebase investigation)
+
+When subtasks are independent, dispatch them in parallel by making
+multiple task tool calls in the same response.`
 	if err := sandbox.FileSystem.UploadFile(ctx, []byte(sisyphusPrompt), projectDir+"/.opencode/agents/sisyphus-prompt.txt"); err != nil {
 		return fmt.Errorf("upload sisyphus-prompt.txt: %w", err)
 	}

@@ -1,5 +1,5 @@
-import { useMemo, createContext, useContext, useRef, useEffect } from 'react';
-import { User, Bot, Info, Clock } from 'lucide-react';
+import { useMemo, useState, createContext, useContext, useRef, useEffect } from 'react';
+import { User, Bot, Info, Clock, Brain, ChevronDown, ChevronRight } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Message, ContentBlock } from '../../api/client';
@@ -172,7 +172,7 @@ function UserBubble({ message }: { message: Message }) {
           </span>
         </div>
         {message.content.map((block, i) => (
-          <ContentBlockView key={i} block={block} />
+          <ContentBlockView key={i} block={block} siblings={message.content} />
         ))}
       </div>
     </div>
@@ -432,8 +432,22 @@ function AgentGroup({
       }
     }
 
+    // Deduplicate tool_use blocks by id: when the bridge emits both a
+    // "running" and a "completed" message for the same tool call, we keep
+    // only the last occurrence (which carries the final input/state).
+    const lastToolUseIdx = new Map<string, number>();
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i].type === 'tool_use' && raw[i].id) {
+        lastToolUseIdx.set(raw[i].id!, i);
+      }
+    }
+    const idDeduped = lastToolUseIdx.size > 0
+      ? raw.filter((b, i) =>
+          !(b.type === 'tool_use' && b.id && lastToolUseIdx.get(b.id) !== i))
+      : raw;
+
     return {
-      allBlocks: deduplicateBlocks(raw),
+      allBlocks: deduplicateBlocks(idDeduped),
       blockReceivedAt,
     };
   }, [messages]);
@@ -549,7 +563,7 @@ function AgentGroup({
                     wasBuilt={wasBuilt}
                     threadStatus={threadStatus}
                   />
-                : <ContentBlockView key={i} block={item.block} />
+                : <ContentBlockView key={i} block={item.block} siblings={allBlocks} />
             )
           ) : (
             (() => {
@@ -587,7 +601,7 @@ function AgentGroup({
                     );
                   }
                 }
-                return <ContentBlockView key={i} block={block} />;
+                return <ContentBlockView key={i} block={block} siblings={allBlocks} />;
               });
             })()
           )}
@@ -634,11 +648,12 @@ function SystemBubble({ message }: { message: Message }) {
       </div>
       <div className="flex-1 min-w-0 space-y-2">
         {message.content.map((block, i) => (
-          <ContentBlockView key={i} block={block} />
+          <ContentBlockView key={i} block={block} siblings={message.content} />
         ))}
       </div>
     </div>
   );
+
 }
 
 // ── Content block renderer ──────────────────────────
@@ -650,7 +665,30 @@ function ensureHardBreaks(text: string): string {
   return text.replace(/(?<! {2})\n/g, '  \n');
 }
 
-function ContentBlockView({ block }: { block: ContentBlock }) {
+function ThinkingBlock({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const preview = text.length > 120 ? text.slice(0, 120) + '...' : text;
+  return (
+    <div className="my-1 rounded-md border border-border-subtle bg-surface-raised/50">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 w-full px-3 py-1.5 text-xs text-text-muted hover:text-text-secondary transition-colors"
+      >
+        <Brain className="w-3 h-3 shrink-0" />
+        <span className="font-medium">Reasoning</span>
+        {!expanded && <span className="truncate opacity-60 ml-1">{preview}</span>}
+        {expanded ? <ChevronDown className="w-3 h-3 ml-auto shrink-0" /> : <ChevronRight className="w-3 h-3 ml-auto shrink-0" />}
+      </button>
+      {expanded && (
+        <div className="px-3 pb-2 text-xs text-text-secondary leading-relaxed whitespace-pre-wrap border-t border-border-subtle pt-2">
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ContentBlockView({ block, siblings }: { block: ContentBlock; siblings?: ContentBlock[] }) {
   if (block.type === 'text' && block.text) {
     if (block.text.length >= MIN_MARKDOWN_LEN && HEADING_RE.test(block.text)) {
       const title = extractTitle(block.text);
@@ -676,8 +714,13 @@ function ContentBlockView({ block }: { block: ContentBlock }) {
     );
   }
 
+  if (block.type === 'thinking' && block.thinking) {
+    return <ThinkingBlock text={block.thinking} />;
+  }
+
   if (block.type === 'tool_use') {
-    return <ToolUseBlock block={block} />;
+    const resultBlock = siblings?.find(b => b.type === 'tool_result' && b.tool_use_id === block.id);
+    return <ToolUseBlock block={block} resultContent={resultBlock?.content} />;
   }
 
   if (block.type === 'tool_result') {

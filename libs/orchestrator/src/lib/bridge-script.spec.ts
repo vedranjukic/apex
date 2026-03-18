@@ -1,10 +1,11 @@
 /**
- * Tests for the OpenCode-only bridge script.
+ * Tests for the OpenCode serve-based bridge script.
  *
  * Validates that:
- * 1. getBridgeScript() generates valid JS with the OpenCode adapter
- * 2. The OpenCode adapter normalizes output into the expected format
+ * 1. getBridgeScript() generates valid JS with the serve adapter
+ * 2. The serve adapter uses HTTP API + SSE for communication
  * 3. The bridge core routes messages correctly
+ * 4. Session management maps threads to OpenCode sessions
  */
 import { describe, it, expect } from 'vitest';
 import { getBridgeScript } from './bridge-script';
@@ -48,10 +49,20 @@ describe('getBridgeScript', () => {
   });
 });
 
-describe('OpenCode adapter', () => {
-  it('should use opencode run with --format json', () => {
+describe('OpenCode serve adapter', () => {
+  it('should not use opencode run (replaced by serve mode)', () => {
     const script = getBridgeScript(8080, '/tmp/test');
-    expect(script).toContain('"run", "--format", "json"');
+    expect(script).not.toContain('"run", "--format", "json"');
+    expect(script).not.toContain('spawnOpenCode');
+  });
+
+  it('should start opencode serve with port and hostname', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('startOpenCodeServe');
+    expect(script).toContain('"serve"');
+    expect(script).toContain('"--port"');
+    expect(script).toContain('"--hostname"');
+    expect(script).toContain('"127.0.0.1"');
   });
 
   it('should use the full opencode binary path', () => {
@@ -59,26 +70,66 @@ describe('OpenCode adapter', () => {
     expect(script).toContain('/home/daytona/.opencode/bin/opencode');
   });
 
-  it('should support --agent flag for agent selection', () => {
+  it('should poll /global/health for readiness', () => {
     const script = getBridgeScript(8080, '/tmp/test');
-    expect(script).toContain('"--agent"');
+    expect(script).toContain('pollHealth');
+    expect(script).toContain('/global/health');
+    expect(script).toContain('res.healthy');
   });
 
-  it('should support -m flag for model selection', () => {
+  it('should connect to SSE /event endpoint', () => {
     const script = getBridgeScript(8080, '/tmp/test');
-    expect(script).toContain('"-m"');
+    expect(script).toContain('connectSSE');
+    expect(script).toContain('/event');
+    expect(script).toContain('handleSSEEvent');
   });
 
-  it('should normalize OpenCode tool names to Claude-style names', () => {
+  it('should use prompt_async with polling for sending prompts', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('/prompt_async');
+    expect(script).toContain('sendPrompt');
+    expect(script).toContain('pollSession');
+    expect(script).toContain('Prompt dispatched to session');
+  });
+
+  it('should create sessions via POST /session', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('ocFetch("POST", "/session"');
+    expect(script).toContain('title: threadId');
+  });
+
+  it('should poll session messages for text, tool, and step-finish parts', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('pollSession');
+    expect(script).toContain('part.type === "text"');
+    expect(script).toContain('part.type === "tool"');
+    expect(script).toContain('part.type === "step-finish"');
+  });
+
+  it('should detect session idle via polling and emit exit', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('session/status');
+    expect(script).toContain('st.type === "idle"');
+    expect(script).toContain('emitAgentExit(threadId, 0)');
+  });
+
+  it('should deduplicate polled parts by ID', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('emittedParts');
+    expect(script).toContain('emittedParts.has(pid)');
+  });
+
+  it('should normalize OpenCode tool names to display names', () => {
     const script = getBridgeScript(8080, '/tmp/test');
     expect(script).toContain('bash: "Bash"');
     expect(script).toContain('read: "Read"');
     expect(script).toContain('glob: "Glob"');
     expect(script).toContain('grep: "Grep"');
     expect(script).toContain('apply_patch: "Write"');
+    expect(script).toContain('task: "Task"');
   });
 
-  it('should emit system init with sessionID', () => {
+  it('should emit system init with session_id', () => {
     const script = getBridgeScript(8080, '/tmp/test');
     expect(script).toContain('type: "system"');
     expect(script).toContain('subtype: "init"');
@@ -92,22 +143,56 @@ describe('OpenCode adapter', () => {
     expect(script).toContain('total_cost_usd:');
   });
 
-  it('should support --session for follow-ups', () => {
-    const script = getBridgeScript(8080, '/tmp/test');
-    expect(script).toContain('"--session"');
-  });
-
   it('should default agent to build when not specified', () => {
     const script = getBridgeScript(8080, '/tmp/test');
     expect(script).toContain('agent || "build"');
   });
+
+  it('should split model string into providerID and modelID', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('providerID:');
+    expect(script).toContain('modelID:');
+  });
+});
+
+describe('Session management', () => {
+  it('should maintain threadToSession and sessionToThread maps', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('threadToSession');
+    expect(script).toContain('sessionToThread');
+  });
+
+  it('should track active threads', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('activeThreads');
+    expect(script).toContain('activeThreads.add(threadId)');
+    expect(script).toContain('activeThreads.delete(threadId)');
+  });
+
+  it('should abort existing session before sending new prompt', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('Aborting running session');
+    expect(script).toContain('/abort');
+  });
+
+  it('should accumulate costs per session', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('sessionCosts');
+  });
+
+  it('should clean up bidirectional mappings on session change', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('oldThread');
+    expect(script).toContain('oldSession');
+  });
 });
 
 describe('Bridge core routing', () => {
-  it('should route start_claude to handleStartAgent', () => {
+  it('should route start_claude to handleStartAgent (async)', () => {
     const script = getBridgeScript(8080, '/tmp/test');
     expect(script).toContain('"start_claude"');
     expect(script).toContain('handleStartAgent(msg)');
+    expect(script).toContain('.catch');
   });
 
   it('should route claude_user_answer to handleUserAnswer', () => {
@@ -116,10 +201,11 @@ describe('Bridge core routing', () => {
     expect(script).toContain('handleUserAnswer(msg)');
   });
 
-  it('should route stop_claude to handleStopAgent', () => {
+  it('should route stop_claude to handleStopAgent using abort API', () => {
     const script = getBridgeScript(8080, '/tmp/test');
     expect(script).toContain('msg.type === "stop_claude"');
     expect(script).toContain('handleStopAgent(msg)');
+    expect(script).toContain('/abort');
   });
 
   it('should read agent name from msg.agent or msg.agentType', () => {
@@ -127,16 +213,21 @@ describe('Bridge core routing', () => {
     expect(script).toContain('msg.agent || msg.agentType');
   });
 
-  it('should kill all agent processes on WS disconnect', () => {
+  it('should abort all sessions on WS disconnect', () => {
     const script = getBridgeScript(8080, '/tmp/test');
     expect(script).toContain('Orchestrator disconnected');
-    expect(script).toContain('killEntry');
+    expect(script).toContain('activeThreads.clear()');
   });
 
-  it('should always respawn (per-prompt model)', () => {
+  it('should not include PTY-based agent processes', () => {
     const script = getBridgeScript(8080, '/tmp/test');
-    expect(script).toContain('Killing existing OpenCode');
-    expect(script).not.toContain('processModel');
+    expect(script).not.toContain('agentProcesses');
+    expect(script).not.toContain('killEntry');
+  });
+
+  it('should not include claude_input handler (no PTY)', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).not.toContain('"claude_input"');
   });
 });
 
@@ -160,6 +251,12 @@ describe('Shared infrastructure', () => {
     const script = getBridgeScript(8080, '/tmp/test');
     expect(script).toContain('ports_update');
     expect(script).toContain('parseNetstatOutput');
+  });
+
+  it('should exclude opencode serve port from port scanning', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('OC_PORT');
+    expect(script).toContain('INTERNAL_PORTS');
   });
 
   it('should include preview URL endpoint', () => {
@@ -199,5 +296,26 @@ describe('Shared infrastructure', () => {
   it('should emit bridge_ready on connection', () => {
     const script = getBridgeScript(8080, '/tmp/test');
     expect(script).toContain('"bridge_ready"');
+  });
+
+  it('should auto-restart opencode serve on exit', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('opencode serve exited');
+    expect(script).toContain('startOpenCodeServe');
+  });
+
+  it('should reconnect SSE curl on exit or error', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('SSE curl exited');
+    expect(script).toContain('SSE curl error');
+    expect(script).toContain('setTimeout(connectSSE');
+  });
+
+  it('should auto-approve permission requests from opencode serve', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('"permission.updated"');
+    expect(script).toContain('Auto-approving permission');
+    expect(script).toContain('/permissions/');
+    expect(script).toContain('response: true');
   });
 });
