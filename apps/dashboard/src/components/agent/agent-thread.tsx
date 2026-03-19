@@ -338,7 +338,7 @@ function ReasoningToggleButton() {
     <button
       type="button"
       onClick={toggle}
-      title={showAll ? 'Hide reasoning' : 'Show reasoning'}
+      title={showAll ? 'Collapse all reasoning' : 'Expand all reasoning'}
       className={`shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
         showAll
           ? 'bg-violet-500/15 text-violet-400'
@@ -346,7 +346,7 @@ function ReasoningToggleButton() {
       }`}
     >
       <Brain className="w-3 h-3" />
-      <span>{showAll ? 'Reasoning on' : 'Reasoning'}</span>
+      <span>{showAll ? 'Collapse all' : 'Expand all'}</span>
     </button>
   );
 }

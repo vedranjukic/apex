@@ -228,7 +228,8 @@ const TRANSIENT_TOOLS = new Set(['Glob', 'Grep']);
 type RenderItem =
   | { kind: 'block'; block: ContentBlock }
   | { kind: 'bash_group'; items: BashItem[]; receivedAt: number }
-  | { kind: 'transient_tool'; block: ContentBlock; receivedAt: number };
+  | { kind: 'transient_tool'; block: ContentBlock; receivedAt: number }
+  | { kind: 'thinking_group'; blocks: ContentBlock[] };
 
 /** Message with optional client-side received timestamp (socket only) */
 type MessageWithReceived = Message & { _receivedAt?: number };
@@ -253,9 +254,12 @@ function groupConsecutiveBash(
     }
   }
 
+  const thinkingBlocks = blocks.filter((b) => b.type === 'thinking' && b.thinking);
+
   const out: RenderItem[] = [];
   let bashGroup: BashItem[] = [];
   let bashGroupReceivedAt = 0;
+  let thinkingGroupEmitted = false;
   const consumedResultIds = new Set<string>();
 
   const flushBashGroup = () => {
@@ -267,6 +271,15 @@ function groupConsecutiveBash(
   };
 
   for (const block of blocks) {
+    if (block.type === 'thinking' && block.thinking) {
+      if (!thinkingGroupEmitted) {
+        flushBashGroup();
+        out.push({ kind: 'thinking_group', blocks: thinkingBlocks });
+        thinkingGroupEmitted = true;
+      }
+      continue;
+    }
+
     if (block.type === 'tool_use' && TRANSIENT_TOOLS.has(block.name ?? '') && block.id) {
       if (block.name !== 'Bash') {
         const receivedAt = blockReceivedAt.get(block.id);
@@ -606,18 +619,35 @@ function AgentGroup({
         </div>
         <div className="flex-1 min-w-0 space-y-2">
           {planBlocks && derivedPlan ? (
-            planBlocks.map((item, i) =>
-              item.kind === 'plan'
-                ? <PlanBlock
-                    key={`plan-${i}`}
-                    filename={derivedPlan.filename}
-                    content={derivedPlan.content}
-                    isComplete={derivedPlan.isComplete}
-                    wasBuilt={wasBuilt}
-                    threadStatus={threadStatus}
-                  />
-                : <ContentBlockView key={i} block={item.block} siblings={allBlocks} isLiveThinking={item.block === liveThinkingBlock} />
-            )
+            (() => {
+              const planThinking = planBlocks
+                .filter((it): it is { kind: 'block'; block: ContentBlock } =>
+                  it.kind === 'block' && it.block.type === 'thinking' && !!it.block.thinking)
+                .map((it) => it.block);
+              let thinkingEmitted = false;
+              return planBlocks.map((item, i) => {
+                if (item.kind === 'plan') {
+                  return (
+                    <PlanBlock
+                      key={`plan-${i}`}
+                      filename={derivedPlan.filename}
+                      content={derivedPlan.content}
+                      isComplete={derivedPlan.isComplete}
+                      wasBuilt={wasBuilt}
+                      threadStatus={threadStatus}
+                    />
+                  );
+                }
+                if (item.block.type === 'thinking' && item.block.thinking) {
+                  if (thinkingEmitted) return null;
+                  thinkingEmitted = true;
+                  const texts = planThinking.map((b) => b.thinking!);
+                  const isLive = planThinking.some((b) => b === liveThinkingBlock);
+                  return <ThinkingBlock key={i} texts={texts} isLive={isLive} />;
+                }
+                return <ContentBlockView key={i} block={item.block} siblings={allBlocks} isLiveThinking={item.block === liveThinkingBlock} />;
+              });
+            })()
           ) : (
             (() => {
               const fullText = allBlocks
@@ -635,6 +665,11 @@ function AgentGroup({
                 }
                 if (item.kind === 'transient_tool') {
                   return <TransientSearchBlock key={i} block={item.block} receivedAt={item.receivedAt} />;
+                }
+                if (item.kind === 'thinking_group') {
+                  const texts = item.blocks.map((b) => b.thinking!).filter(Boolean);
+                  const isLive = item.blocks.some((b) => b === liveThinkingBlock);
+                  return <ThinkingBlock key={i} texts={texts} isLive={isLive} />;
                 }
                 const block = item.block;
                 // In post-build groups the agent often restates the plan; suppress it
@@ -724,34 +759,51 @@ function ensureHardBreaks(text: string): string {
   return text.replace(/(?<! {2})\n/g, '  \n');
 }
 
-function ThinkingBlock({ text, isLive }: { text: string; isLive?: boolean }) {
+function ThinkingBlock({ texts, isLive }: { texts: string[]; isLive?: boolean }) {
   const { showAll } = useContext(ReasoningToggleContext);
   const contentRef = useRef<HTMLDivElement>(null);
-
-  // Hidden entirely when reasoning is done and toggle is off
-  const visible = showAll || !!isLive;
+  const [isOpen, setIsOpen] = useState(!!isLive);
 
   useEffect(() => {
-    if (isLive && contentRef.current) {
+    if (!isLive) setIsOpen(false);
+  }, [isLive]);
+
+  const expanded = isOpen || showAll || !!isLive;
+
+  const joined = texts.join('\n\n');
+
+  useEffect(() => {
+    if (expanded && isLive && contentRef.current) {
       contentRef.current.scrollTop = contentRef.current.scrollHeight;
     }
-  }, [text, isLive]);
+  }, [joined, isLive, expanded]);
 
-  if (!visible) return null;
+  const Chevron = expanded ? ChevronDown : ChevronRight;
 
   return (
-    <div className="my-1 rounded-lg border border-border overflow-hidden">
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs">
+    <div className={`my-1 rounded-lg border border-border overflow-hidden transition-opacity ${expanded ? 'opacity-100' : 'opacity-50'}`}>
+      <button
+        type="button"
+        onClick={() => setIsOpen((v) => !v)}
+        className="flex items-center gap-2 px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs w-full text-left hover:bg-surface-secondary/80 transition-colors cursor-pointer"
+      >
+        <Chevron className="w-3 h-3 shrink-0 text-text-muted" />
         <Brain className="w-3.5 h-3.5 text-violet-400 shrink-0" />
         <span className="font-medium">Reasoning</span>
         {isLive && <span className="ml-1 w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse shrink-0" />}
-      </div>
-      <div
-        ref={contentRef}
-        className="px-3 py-2 text-xs text-text-secondary leading-relaxed whitespace-pre-wrap border-t border-border max-h-60 overflow-y-auto"
-      >
-        {text}
-      </div>
+      </button>
+      {expanded && (
+        <div
+          ref={contentRef}
+          className="px-3 py-2 text-xs text-text-secondary leading-relaxed border-t border-border max-h-60 overflow-y-auto"
+        >
+          <article className="inline-markdown reasoning-markdown">
+            <Markdown remarkPlugins={[remarkGfm]}>
+              {ensureHardBreaks(joined)}
+            </Markdown>
+          </article>
+        </div>
+      )}
     </div>
   );
 }
@@ -783,7 +835,7 @@ function ContentBlockView({ block, siblings, isLiveThinking }: { block: ContentB
   }
 
   if (block.type === 'thinking' && block.thinking) {
-    return <ThinkingBlock text={block.thinking} isLive={isLiveThinking} />;
+    return <ThinkingBlock texts={[block.thinking]} isLive={isLiveThinking} />;
   }
 
   if (block.type === 'tool_use') {

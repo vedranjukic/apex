@@ -88,7 +88,7 @@ export function ToolUseBlock({ block, resultContent }: { block: ContentBlock; re
     case 'Bash':
       return <BashBlock input={input} />;
     case 'Write':
-      return <WriteBlock input={input} />;
+      return <WriteBlock input={input} resultContent={resultContent} />;
     case 'Read':
       return <ReadBlock input={input} />;
     case 'Edit':
@@ -346,12 +346,18 @@ function TaskBlock({ input, result }: { input: Input; result?: string }) {
 
 // ── Write ────────────────────────────────────────────
 
-function WriteBlock({ input }: { input: Input }) {
+function WriteBlock({ input, resultContent }: { input: Input; resultContent?: string }) {
   const filePath = String(input.file_path ?? input.filePath ?? '');
+  const patchText = String(input.patchText ?? '');
   const content = String(input.content ?? '');
+  const [expanded, setExpanded] = useState(false);
+
+  if (patchText && !filePath) {
+    return <PatchWriteBlock patchText={patchText} resultContent={resultContent} />;
+  }
+
   const lines = content.split('\n');
   const isLong = lines.length > 20;
-  const [expanded, setExpanded] = useState(false);
 
   const displayLines = isLong && !expanded ? lines.slice(0, 10) : lines;
   const ext = extname(filePath);
@@ -385,6 +391,74 @@ function WriteBlock({ input }: { input: Input }) {
           )}
         </button>
       )}
+    </div>
+  );
+}
+
+function PatchWriteBlock({ patchText, resultContent }: { patchText: string; resultContent?: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const files = useMemo(() => {
+    const result: { path: string; op: string }[] = [];
+    for (const line of patchText.split('\n')) {
+      const addMatch = line.match(/^\*\*\* Add File:\s*(.+)/);
+      if (addMatch) { result.push({ path: addMatch[1].trim(), op: 'A' }); continue; }
+      const updateMatch = line.match(/^\*\*\* Update File:\s*(.+)/);
+      if (updateMatch) { result.push({ path: updateMatch[1].trim(), op: 'M' }); continue; }
+      const deleteMatch = line.match(/^\*\*\* Delete File:\s*(.+)/);
+      if (deleteMatch) { result.push({ path: deleteMatch[1].trim(), op: 'D' }); continue; }
+    }
+    if (result.length === 0 && typeof resultContent === 'string') {
+      for (const line of resultContent.split('\n')) {
+        const m = line.match(/^([AMD])\s+(.+)/);
+        if (m) result.push({ path: m[2].trim(), op: m[1] });
+      }
+    }
+    return result;
+  }, [patchText, resultContent]);
+
+  const patchLines = patchText.split('\n');
+  const isLong = patchLines.length > 20;
+  const displayLines = isLong && !expanded ? patchLines.slice(0, 15) : patchLines;
+
+  return (
+    <div className="rounded-lg overflow-hidden border border-border">
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs">
+        <FilePen className="w-3.5 h-3.5 text-blue-400" />
+        <span className="font-medium">Write</span>
+        <span className="text-text-muted ml-auto">{files.length} file{files.length !== 1 ? 's' : ''}</span>
+      </div>
+      <div className="px-3 py-2 space-y-0.5 text-xs font-mono border-t border-border">
+        {files.map((f, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <span className={`font-semibold ${f.op === 'A' ? 'text-green-400' : f.op === 'D' ? 'text-red-400' : 'text-yellow-400'}`}>
+              {f.op}
+            </span>
+            <span className="text-text-secondary truncate">{basename(f.path)}</span>
+          </div>
+        ))}
+      </div>
+      {expanded && (
+        <pre className="px-3 py-2 bg-surface-secondary text-text-primary text-xs font-mono overflow-x-auto leading-relaxed border-t border-border max-h-60 overflow-y-auto">
+          <code>{displayLines.join('\n')}</code>
+        </pre>
+      )}
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs flex items-center justify-center gap-1 hover:text-text-primary transition-colors border-t border-border"
+      >
+        {expanded ? (
+          <>
+            <ChevronDown className="w-3 h-3" />
+            Hide patch
+          </>
+        ) : (
+          <>
+            <ChevronRight className="w-3 h-3" />
+            Show patch
+          </>
+        )}
+      </button>
     </div>
   );
 }
