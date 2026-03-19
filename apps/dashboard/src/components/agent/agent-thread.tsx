@@ -1,9 +1,10 @@
-import { useEffect, useRef, useMemo, useCallback } from 'react';
-import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo, RotateCcw, MessageCircleQuestion, CirclePause, Send, Brain } from 'lucide-react';
+import { useEffect, useRef, useMemo, useCallback, useState } from 'react';
+import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo, RotateCcw, MessageCircleQuestion, CirclePause, Send, Brain, BarChart3 } from 'lucide-react';
 import { useThreadsStore } from '../../stores/tasks-store';
 import { groupMessages, MessageGroupView, PlanShownProvider, ReasoningToggleProvider, useReasoningToggle } from './message-bubble';
 import { PromptInput, type PromptInputHandle } from './prompt-input';
 import { ThreadActionsContext } from './thread-actions-context';
+import { ThreadStatsBar } from './thread-stats-bar';
 import { useAgentSettingsStore, AGENT_TYPES, DEFAULT_MODEL_BY_TYPE, type AgentTypeId } from '../../stores/agent-settings-store';
 import { usePlanStore } from '../../stores/plan-store';
 import type { CodeSelection } from '../../stores/editor-store';
@@ -31,6 +32,8 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
   const scrollSaveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const prevMessageCount = useRef(0);
   const isFollowingRef = useRef(true);
+
+  const [showStats, setShowStats] = useState(false);
 
   const fillPrompt = useCallback((text: string) => {
     promptRef.current?.fill(text);
@@ -108,6 +111,14 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
   );
   const hasThinkingBlocks = useMemo(
     () => messages.some((m) => m.content.some((b) => b.type === 'thinking')),
+    [messages],
+  );
+
+  const hasResultData = useMemo(
+    () => messages.some((m) =>
+      m.role === 'system' && m.content.length === 0 && m.metadata &&
+      (m.metadata.costUsd != null || m.metadata.numTurns != null),
+    ),
     [messages],
   );
 
@@ -256,6 +267,9 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
             </span>
           )}
           {hasThinkingBlocks && <ReasoningToggleButton />}
+          {hasResultData && (
+            <StatsToggleButton active={showStats} onToggle={() => setShowStats((v) => !v)} />
+          )}
           {isRunning && (
             <Loader2 className="w-3.5 h-3.5 animate-spin text-yellow-500 shrink-0" />
           )}
@@ -326,6 +340,11 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
           disabled={isRunning}
           requestListing={requestListing}
         />
+
+        {/* Thread stats bar */}
+        {showStats && activeThreadId && (
+          <ThreadStatsBar threadId={activeThreadId} messages={messages} />
+        )}
       </div>
       </ReasoningToggleProvider>
     </ThreadActionsContext.Provider>
@@ -347,6 +366,24 @@ function ReasoningToggleButton() {
     >
       <Brain className="w-3 h-3" />
       <span>{showAll ? 'Collapse all' : 'Expand all'}</span>
+    </button>
+  );
+}
+
+function StatsToggleButton({ active, onToggle }: { active: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      title={active ? 'Hide thread stats' : 'Show thread stats'}
+      className={`shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+        active
+          ? 'bg-emerald-500/15 text-emerald-400'
+          : 'bg-white/5 text-text-muted hover:text-text-secondary hover:bg-white/10'
+      }`}
+    >
+      <BarChart3 className="w-3 h-3" />
+      <span>Stats</span>
     </button>
   );
 }

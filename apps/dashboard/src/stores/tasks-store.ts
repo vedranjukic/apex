@@ -1,6 +1,19 @@
 import { create } from 'zustand';
 import { threadsApi, type Thread, type Message } from '../api/client';
 
+export interface McpServerInfo {
+  name: string;
+  status: string;
+}
+
+export interface ThreadSessionInfo {
+  model?: string;
+  tools?: string[];
+  mcpServers?: McpServerInfo[];
+  permissionMode?: string;
+  agentVersion?: string;
+}
+
 interface ThreadsState {
   projectId: string | null;
   threads: Thread[];
@@ -11,6 +24,7 @@ interface ThreadsState {
   error: string | null;
   searchQuery: string;
   threadScrollOffsets: Record<string, number>;
+  threadSessionInfo: Record<string, ThreadSessionInfo>;
   setSearchQuery: (q: string) => void;
   fetchThreads: (projectId: string) => Promise<void>;
   setActiveThread: (threadId: string) => Promise<void>;
@@ -22,6 +36,7 @@ interface ThreadsState {
   addMessage: (msg: Message) => void;
   updateThreadStatus: (threadId: string, status: string) => void;
   updateThread: (threadId: string, patch: Partial<Thread>) => void;
+  setThreadSessionInfo: (threadId: string, info: ThreadSessionInfo) => void;
   deleteThread: (id: string) => Promise<void>;
   setThreadScrollOffset: (threadId: string, offset: number) => void;
   reset: () => void;
@@ -37,6 +52,7 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
   error: null,
   searchQuery: '',
   threadScrollOffsets: {},
+  threadSessionInfo: {},
 
   setSearchQuery: (q) => set({ searchQuery: q }),
 
@@ -129,6 +145,11 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
     set({ threads });
   },
 
+  setThreadSessionInfo: (threadId, info) =>
+    set((state) => ({
+      threadSessionInfo: { ...state.threadSessionInfo, [threadId]: info },
+    })),
+
   deleteThread: async (id) => {
     await threadsApi.delete(id);
     const threads = get().threads.filter((c) => c.id !== id);
@@ -152,5 +173,6 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
       error: null,
       searchQuery: '',
       threadScrollOffsets: {},
+      threadSessionInfo: {},
     }),
 }));

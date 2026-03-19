@@ -7,6 +7,7 @@ export function useAgentSocket(projectId: string | undefined) {
   const socketRef = useRef<Socket | null>(null);
   const addMessage = useThreadsStore((s) => s.addMessage);
   const updateThreadStatus = useThreadsStore((s) => s.updateThreadStatus);
+  const setThreadSessionInfo = useThreadsStore((s) => s.setThreadSessionInfo);
   const planTextRef = useRef<Map<string, string[]>>(new Map());
 
   useEffect(() => {
@@ -54,6 +55,17 @@ export function useAgentSocket(projectId: string | undefined) {
       }
       if (!data.message) return;
       const msg = data.message;
+
+      if (msg.type === 'system' && msg.subtype === 'init') {
+        setThreadSessionInfo(data.threadId, {
+          model: msg.model,
+          tools: msg.tools,
+          mcpServers: msg.mcp_servers,
+          permissionMode: msg.permissionMode,
+          agentVersion: msg.claude_code_version,
+        });
+        return;
+      }
 
       if (msg.type === 'system' && msg.subtype === 'retry') {
         addMessage({
@@ -129,8 +141,13 @@ export function useAgentSocket(projectId: string | undefined) {
           metadata: {
             costUsd: msg.total_cost_usd,
             durationMs: msg.duration_ms,
+            durationApiMs: msg.duration_api_ms,
             numTurns: msg.num_turns,
             isError: msg.is_error,
+            inputTokens: msg.usage?.input_tokens,
+            outputTokens: msg.usage?.output_tokens,
+            cacheCreationInputTokens: msg.usage?.cache_creation_input_tokens,
+            cacheReadInputTokens: msg.usage?.cache_read_input_tokens,
           },
           createdAt: new Date().toISOString(),
         });
@@ -180,7 +197,7 @@ export function useAgentSocket(projectId: string | undefined) {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [projectId, addMessage, updateThreadStatus]);
+  }, [projectId, addMessage, updateThreadStatus, setThreadSessionInfo]);
 
   const sendPrompt = useCallback(
     (threadId: string, prompt: string, mode?: string, model?: string, agentType?: string) => {
