@@ -623,7 +623,7 @@ wss.on("connection", (ws) => {
 });
 
 // ── Port scanning ────────────────────────────────────
-const INTERNAL_PORTS = new Set([${port}, 9090, 22, OC_PORT]);
+const INTERNAL_PORTS = new Set([${port}, 9090, OC_PORT, 22, 25, 53, 445, 2375, 2376, 3306, 3389, 5432, 6379, 27017]);
 const portFs = require("fs");
 let lastPortsKey = "";
 let portInfoCache = new Map();

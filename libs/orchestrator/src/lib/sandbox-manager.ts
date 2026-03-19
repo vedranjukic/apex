@@ -82,6 +82,12 @@ type InternalSession = SandboxSession & {
   projectDir: string;
 };
 
+/** Ports filtered from auto-detection (infrastructure / well-known services) */
+const FILTERED_PORTS = new Set([
+  BRIDGE_PORT, 9090, 4096,
+  22, 25, 53, 445, 2375, 2376, 3306, 3389, 5432, 6379, 27017,
+]);
+
 /** TTL for cached Sandbox objects (avoid redundant daytona.get() calls) */
 const SANDBOX_CACHE_TTL = 60_000;
 /** How long to trust a "started" state without re-checking */
@@ -107,6 +113,8 @@ export class SandboxManager extends EventEmitter {
         config.anthropicApiKey || process.env["ANTHROPIC_API_KEY"] || "",
       openaiApiKey:
         config.openaiApiKey || process.env["OPENAI_API_KEY"] || "",
+      githubToken:
+        config.githubToken || process.env["GITHUB_TOKEN"] || "",
       snapshot:
         config.snapshot || process.env["DAYTONA_SNAPSHOT"] || "daytona-apex-3",
       timeoutMs: config.timeoutMs || 600000,
@@ -646,7 +654,7 @@ export class SandboxManager extends EventEmitter {
       if (lastColon === -1) continue;
       const portNum = parseInt(localAddr.substring(lastColon + 1), 10);
       if (isNaN(portNum) || seen.has(portNum)) continue;
-      if (portNum === BRIDGE_PORT || portNum === 9090 || portNum === 22 || portNum === 4096 || portNum === 53) continue;
+      if (FILTERED_PORTS.has(portNum)) continue;
       seen.add(portNum);
       let proc = "";
       const pidProg = parts[6] ?? parts[5] ?? "";
@@ -1532,12 +1540,31 @@ export class SandboxManager extends EventEmitter {
 
     if (gitRepo) {
       this.emit("status", session.sandboxId, "cloning_repo");
-      await sandbox.process.executeCommand(
-        `git clone ${gitRepo} .`,
-        projectDir,
-      );
+      if (this.config.githubToken) {
+        await sandbox.git.clone(
+          gitRepo,
+          projectDir,
+          undefined,
+          undefined,
+          "x-access-token",
+          this.config.githubToken,
+        );
+      } else {
+        await sandbox.process.executeCommand(
+          `git clone ${gitRepo} .`,
+          projectDir,
+        );
+      }
     } else {
       await sandbox.process.executeCommand("git init", projectDir);
+    }
+
+    if (this.config.githubToken) {
+      await sandbox.process.executeCommand(
+        `git config --global credential.helper store` +
+          ` && echo "https://x-access-token:${this.config.githubToken}@github.com" > ~/.git-credentials`,
+        projectDir,
+      );
     }
 
     const bridgeCode = getBridgeScript(BRIDGE_PORT, projectDir);

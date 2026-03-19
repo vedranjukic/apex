@@ -8,14 +8,14 @@ export function usePortsSocket(
 ) {
   const setPorts = usePortsStore((s) => s.setPorts);
   const setPreviewUrl = usePortsStore((s) => s.setPreviewUrl);
-  const reset = usePortsStore((s) => s.reset);
+  const bindProject = usePortsStore((s) => s.bindProject);
   const resolvedRef = useRef(new Set<number>());
 
   useEffect(() => {
     const socket = socketRef.current;
     if (!socket || !projectId) return;
 
-    reset();
+    bindProject(projectId);
     resolvedRef.current.clear();
 
     const resolvePreviewUrl = (port: number) => {
@@ -56,7 +56,7 @@ export function usePortsSocket(
     return () => {
       socket.off('ports_update', onPortsUpdate);
     };
-  }, [projectId, socketRef, setPorts, setPreviewUrl, reset]);
+  }, [projectId, socketRef, setPorts, setPreviewUrl, bindProject]);
 
   const requestPreviewUrl = useCallback(
     (port: number): Promise<{ url: string; token?: string }> => {

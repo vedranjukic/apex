@@ -19,11 +19,14 @@ export interface MergedPort {
   previewUrl: string;
 }
 
-const USER_PORTS_KEY = 'apex:userPorts';
+function userPortsKey(projectId: string): string {
+  return `apex:userPorts:${projectId}`;
+}
 
-function loadUserPorts(): number[] {
+function loadUserPorts(projectId: string | null): number[] {
+  if (!projectId) return [];
   try {
-    const raw = localStorage.getItem(USER_PORTS_KEY);
+    const raw = localStorage.getItem(userPortsKey(projectId));
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.filter((p: unknown) => typeof p === 'number') : [];
@@ -32,13 +35,15 @@ function loadUserPorts(): number[] {
   }
 }
 
-function saveUserPorts(ports: number[]) {
+function saveUserPorts(projectId: string | null, ports: number[]) {
+  if (!projectId) return;
   try {
-    localStorage.setItem(USER_PORTS_KEY, JSON.stringify(ports));
+    localStorage.setItem(userPortsKey(projectId), JSON.stringify(ports));
   } catch { /* ignore */ }
 }
 
 interface PortsState {
+  projectId: string | null;
   /** Auto-detected ports from the bridge scanner */
   ports: PortInfo[];
   /** Port numbers manually added by the user */
@@ -48,6 +53,7 @@ interface PortsState {
   /** Auto-detected ports the user has explicitly closed (suppressed until they disappear and reappear) */
   closedPorts: number[];
 
+  bindProject: (projectId: string) => void;
   setPorts: (ports: PortInfo[]) => void;
   addUserPort: (port: number) => void;
   removeUserPort: (port: number) => void;
@@ -59,10 +65,22 @@ interface PortsState {
 }
 
 export const usePortsStore = create<PortsState>((set, get) => ({
+  projectId: null,
   ports: [],
-  userPorts: loadUserPorts(),
+  userPorts: [],
   previewUrls: {},
   closedPorts: [],
+
+  bindProject: (projectId) => {
+    if (get().projectId === projectId) return;
+    set({
+      projectId,
+      ports: [],
+      previewUrls: {},
+      closedPorts: [],
+      userPorts: loadUserPorts(projectId),
+    });
+  },
 
   setPorts: (ports) => {
     const prev = get().ports;
@@ -73,16 +91,17 @@ export const usePortsStore = create<PortsState>((set, get) => ({
   },
 
   addUserPort: (port) => {
-    const { userPorts } = get();
+    const { userPorts, projectId } = get();
     if (userPorts.includes(port)) return;
     const updated = [...userPorts, port];
-    saveUserPorts(updated);
+    saveUserPorts(projectId, updated);
     set({ userPorts: updated });
   },
 
   removeUserPort: (port) => {
+    const { projectId } = get();
     const updated = get().userPorts.filter((p) => p !== port);
-    saveUserPorts(updated);
+    saveUserPorts(projectId, updated);
     set({ userPorts: updated });
   },
 
@@ -91,11 +110,11 @@ export const usePortsStore = create<PortsState>((set, get) => ({
   },
 
   closePort: (port) => {
-    const { userPorts, previewUrls, closedPorts } = get();
+    const { userPorts, previewUrls, closedPorts, projectId } = get();
     const newPreviewUrls = { ...previewUrls };
     delete newPreviewUrls[port];
     const updatedUserPorts = userPorts.filter((p) => p !== port);
-    saveUserPorts(updatedUserPorts);
+    saveUserPorts(projectId, updatedUserPorts);
     set({
       userPorts: updatedUserPorts,
       previewUrls: newPreviewUrls,
@@ -138,6 +157,7 @@ export const usePortsStore = create<PortsState>((set, get) => ({
   },
 
   reset: () => {
-    set({ ports: [], previewUrls: {}, closedPorts: [], userPorts: loadUserPorts() });
+    const { projectId } = get();
+    set({ ports: [], previewUrls: {}, closedPorts: [], userPorts: loadUserPorts(projectId) });
   },
 }));
