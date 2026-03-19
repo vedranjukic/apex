@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback, createContext, useContext, useRef, useEffect } from 'react';
-import { User, Bot, Info, Clock, Brain, ChevronDown, ChevronRight, Coins, Zap, PlugZap, Gauge, ArrowUpDown, Repeat } from 'lucide-react';
+import { User, Bot, Info, Clock, Brain, ChevronDown, ChevronRight } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Message, ContentBlock } from '../../api/client';
@@ -8,8 +8,7 @@ import { PlanBlock } from './plan-block';
 import { MarkdownBlock } from './markdown-block';
 import { usePlanStore, extractTitle, extractPlanBody, BUILD_PROMPT_PREFIX, PLAN_BLOCK_REGEX, PLAN_BLOCK_START } from '../../stores/plan-store';
 import { useThreadsStore } from '../../stores/tasks-store';
-import { getContextWindow, formatTokenCount } from '../../lib/model-context';
-import { cn } from '../../lib/cn';
+import { formatTokenCount } from '../../lib/model-context';
 
 // ── Plan deduplication (only first agent group shows the plan) ──
 
@@ -709,57 +708,9 @@ function AgentGroup({
 
 // ── Result summary (metadata row) ───────────────────
 
-function ResultSummaryPill({ icon: Icon, label, value, title, className }: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  value: string;
-  title?: string;
-  className?: string;
-}) {
-  return (
-    <span
-      title={title ?? `${label}: ${value}`}
-      className={cn(
-        'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-white/[0.04] border border-white/[0.06]',
-        className,
-      )}
-    >
-      <Icon className="w-3 h-3 shrink-0 opacity-60" />
-      <span className="text-text-muted">{label}</span>
-      <span className="text-text-secondary font-medium">{value}</span>
-    </span>
-  );
-}
-
-function ContextBar({ pct }: { pct: number }) {
-  const barColor = pct > 80 ? 'bg-red-400' : pct > 50 ? 'bg-yellow-400' : 'bg-accent';
-  return (
-    <span
-      title={`${pct.toFixed(1)}% of context window used`}
-      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-white/[0.04] border border-white/[0.06]"
-    >
-      <Gauge className="w-3 h-3 shrink-0 opacity-60" />
-      <span className="text-text-muted">Context</span>
-      <span className="flex items-center gap-1.5">
-        <span className="w-16 h-1.5 rounded-full bg-white/10 overflow-hidden">
-          <span
-            className={cn('block h-full rounded-full transition-all', barColor)}
-            style={{ width: `${Math.min(pct, 100)}%` }}
-          />
-        </span>
-        <span className="text-text-secondary font-medium">{pct.toFixed(1)}%</span>
-      </span>
-    </span>
-  );
-}
-
 function ResultSummary({ message }: { message: Message }) {
   const meta = message.metadata;
   if (!meta) return null;
-
-  const threadId = message.taskId;
-  const sessionInfo = useThreadsStore((s) => s.threadSessionInfo[threadId]);
-  const thread = useThreadsStore((s) => s.threads.find((t) => t.id === threadId));
 
   const inputTokens = meta.inputTokens != null ? Number(meta.inputTokens) : null;
   const outputTokens = meta.outputTokens != null ? Number(meta.outputTokens) : null;
@@ -767,82 +718,20 @@ function ResultSummary({ message }: { message: Message }) {
     ? (inputTokens ?? 0) + (outputTokens ?? 0)
     : null;
 
-  const cacheCreation = meta.cacheCreationInputTokens != null ? Number(meta.cacheCreationInputTokens) : null;
-  const cacheRead = meta.cacheReadInputTokens != null ? Number(meta.cacheReadInputTokens) : null;
-
-  const modelId = sessionInfo?.model ?? thread?.model ?? null;
-  const contextWindow = getContextWindow(modelId);
-  const contextPct = contextWindow && inputTokens != null
-    ? (inputTokens / contextWindow) * 100
-    : null;
-
-  const mcpServers = sessionInfo?.mcpServers;
-  const connectedMcps = mcpServers?.filter((s) => s.status === 'connected') ?? [];
-
-  const hasTokenData = totalTokens != null && totalTokens > 0;
   const hasCost = meta.costUsd != null;
+  const hasTokens = totalTokens != null && totalTokens > 0;
   const hasDuration = meta.durationMs != null;
 
-  if (!hasCost && !hasTokenData && !hasDuration) return null;
+  if (!hasCost && !hasTokens && !hasDuration) return null;
+
+  const parts: string[] = [];
+  if (hasCost) parts.push(`$${Number(meta.costUsd).toFixed(4)}`);
+  if (hasTokens) parts.push(`${formatTokenCount(totalTokens!)} tokens`);
+  if (hasDuration) parts.push(`${(Number(meta.durationMs) / 1000).toFixed(1)}s`);
 
   return (
-    <div className="px-4 py-2.5 bg-surface-thread/40 border-t border-white/[0.04]">
-      <div className="flex flex-wrap items-center justify-center gap-2 text-[11px]">
-        {/* Cost */}
-        {hasCost && (
-          <ResultSummaryPill
-            icon={Coins}
-            label="Cost"
-            value={`$${Number(meta.costUsd).toFixed(4)}`}
-          />
-        )}
-
-        {/* Tokens */}
-        {hasTokenData && (
-          <ResultSummaryPill
-            icon={ArrowUpDown}
-            label="Tokens"
-            value={formatTokenCount(totalTokens!)}
-            title={[
-              inputTokens != null ? `Input: ${formatTokenCount(inputTokens)}` : null,
-              outputTokens != null ? `Output: ${formatTokenCount(outputTokens)}` : null,
-              cacheCreation != null ? `Cache write: ${formatTokenCount(cacheCreation)}` : null,
-              cacheRead != null ? `Cache read: ${formatTokenCount(cacheRead)}` : null,
-            ].filter(Boolean).join(' · ')}
-          />
-        )}
-
-        {/* Context % */}
-        {contextPct != null && <ContextBar pct={contextPct} />}
-
-        {/* Duration */}
-        {hasDuration && (
-          <ResultSummaryPill
-            icon={Clock}
-            label="Duration"
-            value={`${(Number(meta.durationMs) / 1000).toFixed(1)}s`}
-          />
-        )}
-
-        {/* Turns */}
-        {meta.numTurns != null && (
-          <ResultSummaryPill
-            icon={Repeat}
-            label="Turns"
-            value={String(meta.numTurns)}
-          />
-        )}
-
-        {/* MCP Servers */}
-        {connectedMcps.length > 0 && (
-          <ResultSummaryPill
-            icon={PlugZap}
-            label="MCPs"
-            value={String(connectedMcps.length)}
-            title={connectedMcps.map((s) => s.name).join(', ')}
-          />
-        )}
-      </div>
+    <div className="flex items-center justify-center px-4 py-1.5 text-[11px] text-text-muted">
+      {parts.join(' · ')}
     </div>
   );
 }

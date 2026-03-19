@@ -6,7 +6,7 @@ import type { CodeSelection } from '../../stores/editor-store';
 
 interface Props {
   projectId: string;
-  threadId: string;
+  threadId: string | null;
   projectName: string;
   onClose: () => void;
   onSendPrompt: (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => void;
@@ -27,6 +27,7 @@ export function ThreadPreviewPanel({
 }: Props) {
   const fetchThreads = useThreadsStore((s) => s.fetchThreads);
   const setActiveThread = useThreadsStore((s) => s.setActiveThread);
+  const startNewThread = useThreadsStore((s) => s.startNewThread);
   const prevProjectRef = useRef<string | null>(null);
   const [expanded, setExpanded] = useState(false);
 
@@ -34,12 +35,21 @@ export function ThreadPreviewPanel({
     const isNewProject = prevProjectRef.current !== projectId;
     prevProjectRef.current = projectId;
 
+    if (!threadId) {
+      if (isNewProject) {
+        fetchThreads(projectId).then(() => startNewThread());
+      } else {
+        startNewThread();
+      }
+      return;
+    }
+
     if (isNewProject) {
       fetchThreads(projectId).then(() => setActiveThread(threadId));
     } else {
       setActiveThread(threadId);
     }
-  }, [projectId, threadId, fetchThreads, setActiveThread]);
+  }, [projectId, threadId, fetchThreads, setActiveThread, startNewThread]);
 
   return (
     <div className={expanded

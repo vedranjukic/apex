@@ -8,7 +8,7 @@ function loadSavedTheme(): ThemeId {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved && themeIds.includes(saved as ThemeId)) return saved as ThemeId;
   } catch { /* ignore */ }
-  return 'midnight-blue';
+  return 'dark';
 }
 
 function applyThemeToDOM(id: ThemeId) {

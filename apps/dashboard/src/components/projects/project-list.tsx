@@ -79,9 +79,11 @@ function groupByForkFamily(projects: Project[]): ForkGroup[] {
 interface Props {
   onOpenProject: (id: string) => void;
   onSelectThread?: (projectId: string, threadId: string, projectName: string) => void;
+  onNewThread?: (projectId: string, projectName: string) => void;
+  activeProjectId?: string | null;
 }
 
-export function ProjectList({ onOpenProject, onSelectThread }: Props) {
+export function ProjectList({ onOpenProject, onSelectThread, onNewThread, activeProjectId }: Props) {
   const { projects, loading, fetchProjects, deleteProject } = useProjectsStore();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
@@ -143,6 +145,8 @@ export function ProjectList({ onOpenProject, onSelectThread }: Props) {
                   onOpen={() => onOpenProject(group.root.id)}
                   onDelete={() => deleteProject(group.root.id)}
                   onSelectThread={onSelectThread}
+                  onNewThread={onNewThread}
+                  activeProjectId={activeProjectId}
                 />
               ) : (
                 <ForkGroupCard
@@ -151,6 +155,8 @@ export function ProjectList({ onOpenProject, onSelectThread }: Props) {
                   onOpenProject={onOpenProject}
                   onDeleteProject={deleteProject}
                   onSelectThread={onSelectThread}
+                  onNewThread={onNewThread}
+                  activeProjectId={activeProjectId}
                 />
               ),
             )}
@@ -172,18 +178,25 @@ function ThreadList({
   projectId,
   projectName,
   onSelectThread,
+  activeProjectId,
 }: {
   threads: Thread[];
   projectId: string;
   projectName: string;
   onSelectThread?: (projectId: string, threadId: string, projectName: string) => void;
+  activeProjectId?: string | null;
 }) {
   if (!threads || threads.length === 0) return null;
 
   const running = threads.filter((c) => c.status === 'running').length;
   const errors = threads.filter((c) => c.status === 'error').length;
   const waiting = threads.filter((c) => c.status === 'waiting_for_input' || c.status === 'waiting_for_user_action').length;
-  const [expanded, setExpanded] = useState(waiting > 0);
+  const isActive = activeProjectId === projectId;
+  const [expanded, setExpanded] = useState(waiting > 0 || isActive);
+
+  useEffect(() => {
+    if (isActive) setExpanded(true);
+  }, [isActive]);
 
   return (
     <div className="mt-1.5">
@@ -249,11 +262,15 @@ function ForkGroupCard({
   onOpenProject,
   onDeleteProject,
   onSelectThread,
+  onNewThread,
+  activeProjectId,
 }: {
   group: ForkGroup;
   onOpenProject: (id: string) => void;
   onDeleteProject: (id: string) => void;
   onSelectThread?: (projectId: string, threadId: string, projectName: string) => void;
+  onNewThread?: (projectId: string, projectName: string) => void;
+  activeProjectId?: string | null;
 }) {
   const [expanded, setExpanded] = useState(true);
 
@@ -264,7 +281,9 @@ function ForkGroupCard({
         onOpen={() => onOpenProject(group.root.id)}
         onDelete={() => onDeleteProject(group.root.id)}
         onSelectThread={onSelectThread}
+        onNewThread={onNewThread}
         noBorder
+        activeProjectId={activeProjectId}
       />
 
       <button
@@ -289,6 +308,8 @@ function ForkGroupCard({
               onOpen={() => onOpenProject(fork.id)}
               onDelete={() => onDeleteProject(fork.id)}
               onSelectThread={onSelectThread}
+              onNewThread={onNewThread}
+              activeProjectId={activeProjectId}
             />
           ))}
         </div>
@@ -302,11 +323,15 @@ function ForkRow({
   onOpen,
   onDelete,
   onSelectThread,
+  onNewThread,
+  activeProjectId,
 }: {
   project: Project;
   onOpen: () => void;
   onDelete: () => void;
   onSelectThread?: (projectId: string, threadId: string, projectName: string) => void;
+  onNewThread?: (projectId: string, projectName: string) => void;
+  activeProjectId?: string | null;
 }) {
   const statusColors: Record<string, string> = {
     creating: 'text-yellow-400 bg-yellow-400/10',
@@ -347,6 +372,16 @@ function ForkRow({
         </div>
         <div className="flex items-center gap-1">
           <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onNewThread?.(project.id, project.branchName || project.name);
+            }}
+            className="p-1.5 rounded-lg hover:bg-surface-secondary text-text-secondary hover:text-primary transition-colors"
+            title="New thread"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+          <button
             onClick={onOpen}
             className="p-1.5 rounded-lg hover:bg-surface-secondary text-text-secondary hover:text-primary transition-colors"
             title="Open in new tab"
@@ -372,6 +407,7 @@ function ForkRow({
             projectId={project.id}
             projectName={name}
             onSelectThread={onSelectThread}
+            activeProjectId={activeProjectId}
           />
         </div>
       )}
@@ -384,13 +420,17 @@ function ProjectCard({
   onOpen,
   onDelete,
   onSelectThread,
+  onNewThread,
   noBorder,
+  activeProjectId,
 }: {
   project: Project;
   onOpen: () => void;
   onDelete: () => void;
   onSelectThread?: (projectId: string, threadId: string, projectName: string) => void;
+  onNewThread?: (projectId: string, projectName: string) => void;
   noBorder?: boolean;
+  activeProjectId?: string | null;
 }) {
   const statusColors: Record<string, string> = {
     creating: 'text-yellow-400 bg-yellow-400/10',
@@ -436,10 +476,21 @@ function ProjectCard({
               projectId={project.id}
               projectName={project.name}
               onSelectThread={onSelectThread}
+              activeProjectId={activeProjectId}
             />
           )}
         </div>
         <div className="flex items-center gap-1 ml-4">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onNewThread?.(project.id, project.name);
+            }}
+            className="p-1.5 rounded-lg hover:bg-surface-secondary text-text-secondary hover:text-primary transition-colors"
+            title="New thread"
+          >
+            <Plus className="w-4 h-4" />
+          </button>
           <button
             onClick={onOpen}
             className="p-1.5 rounded-lg hover:bg-surface-secondary text-text-secondary hover:text-primary transition-colors"

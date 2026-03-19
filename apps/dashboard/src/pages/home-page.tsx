@@ -51,6 +51,15 @@ export function HomePage() {
     [previewProjectId, previewThreadId],
   );
 
+  const handleNewThread = useCallback(
+    (projectId: string, projectName: string) => {
+      setPreviewProjectId(projectId);
+      setPreviewThreadId(null);
+      setPreviewProjectName(projectName);
+    },
+    [],
+  );
+
   const handleClosePreview = useCallback(() => {
     setPreviewProjectId(null);
     setPreviewThreadId(null);
@@ -97,8 +106,10 @@ export function HomePage() {
         <ProjectList
           onOpenProject={handleOpenProject}
           onSelectThread={handleSelectThread}
+          onNewThread={handleNewThread}
+          activeProjectId={previewProjectId}
         />
-        {previewProjectId && previewThreadId && (
+        {previewProjectId && (
           <ThreadPreviewPanel
             projectId={previewProjectId}
             threadId={previewThreadId}

@@ -93,7 +93,7 @@ function PanelContent({ category, projectId, fileActions, gitActions, searchFile
 
 const THEME_PREVIEWS: Record<ThemeId, { bg: string; sidebar: string; accent: string }> = {
   'midnight-blue': { bg: '#1e2132', sidebar: '#111827', accent: '#6366f1' },
-  dark: { bg: '#1e1e1e', sidebar: '#252526', accent: '#6366f1' },
+  dark: { bg: '#1e1e1e', sidebar: '#181818', accent: '#6366f1' },
   light: { bg: '#ffffff', sidebar: '#f3f3f3', accent: '#6366f1' },
 };
 
