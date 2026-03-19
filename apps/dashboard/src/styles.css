@@ -28,6 +28,36 @@
   --color-terminal-bg: var(--t-terminal-bg);
 }
 
+/* ── Dark Modern (default) ─────────────────────── */
+:root,
+[data-theme="dark"] {
+  --t-sidebar: #0f0f0f;
+  --t-sidebar-hover: #181818;
+  --t-sidebar-active: #222222;
+  --t-activity-bar: #0a0a0a;
+  --t-activity-bar-hover: #1a1a1a;
+  --t-surface: #141414;
+  --t-surface-secondary: #0f0f0f;
+  --t-surface-thread: #131313;
+  --t-border: #232323;
+  --t-primary: #6366f1;
+  --t-primary-hover: #4f46e5;
+  --t-accent: #10b981;
+  --t-danger: #ef4444;
+  --t-text-primary: #cccccc;
+  --t-text-secondary: #8a8a8a;
+  --t-text-muted: #5a5a5a;
+  --t-panel-text: #cccccc;
+  --t-panel-text-muted: #6e6e6e;
+  --t-panel-icon: #6e6e6e;
+  --t-panel-icon-active: #cccccc;
+  --t-panel-border: rgba(255,255,255,0.04);
+  --t-scrollbar-thumb: #2b2b2b;
+  --t-scrollbar-thumb-hover: #363636;
+  --t-terminal-bg: #0f0f0f;
+  color-scheme: dark;
+}
+
 /* ── Midnight Blue ────────────────────────────────── */
 [data-theme="midnight-blue"] {
   --t-sidebar: #111827;

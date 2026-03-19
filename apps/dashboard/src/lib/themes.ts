@@ -42,10 +42,10 @@ const midnightBlueMonaco: editor.IStandaloneThemeData = {
 };
 
 const midnightBlueTerminal: ITheme = {
-  background: '#1a1b26',
+  background: '#151929',
   foreground: '#c0caf5',
   cursor: '#c0caf5',
-  cursorAccent: '#1a1b26',
+  cursorAccent: '#151929',
   selectionBackground: '#33467c',
   black: '#15161e',
   red: '#f7768e',
