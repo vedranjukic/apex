@@ -185,6 +185,10 @@ export function ProjectStatusBar({ project, info, gitActions }: Props) {
             <ExternalLink className="w-2.5 h-2.5 opacity-60" />
           )}
         </button>
+
+        <span className="text-[10px] text-panel-text-muted/50 select-none">
+          v{__APP_VERSION__}
+        </span>
       </div>
     </div>
   );

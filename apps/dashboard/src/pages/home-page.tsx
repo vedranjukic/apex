@@ -121,6 +121,9 @@ export function HomePage() {
             onSendUserAnswer={sendUserAnswer}
           />
         )}
+        <span className="absolute bottom-2 right-3 text-[10px] text-panel-text-muted/50 select-none pointer-events-none">
+          v{__APP_VERSION__}
+        </span>
       </div>
     </AppShell>
   );

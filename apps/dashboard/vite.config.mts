@@ -2,6 +2,10 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const version = readFileSync(resolve(import.meta.dirname, '../../VERSION'), 'utf-8').trim();
 
 export default defineConfig(() => ({
   root: import.meta.dirname,
@@ -22,6 +26,9 @@ export default defineConfig(() => ({
     host: '0.0.0.0',
   },
   plugins: [react(), tailwindcss()],
+  define: {
+    __APP_VERSION__: JSON.stringify(version),
+  },
   build: {
     outDir: './dist',
     emptyOutDir: true,
