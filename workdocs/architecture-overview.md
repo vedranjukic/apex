@@ -91,7 +91,7 @@ Example: user asks *"start the dev server so I can watch it"* → Claude calls `
 - Server: NestJS `@WebSocketGateway` at namespace `/ws/agent`, path `/ws/socket.io`
 - Client: `socket.io-client` connects with same path
 - Vite proxy: `/ws` → `http://localhost:6000` with `ws: true`
-- Thread events: `subscribe_project`, `execute_thread`, `send_prompt`, `user_answer` (client→server); `agent_message`, `agent_status`, `agent_error` (server→client). `send_prompt` and `execute_thread` accept optional `agentType` to override the project default per-thread. `agent_status` values: `running`, `waiting_for_input`, `retrying`, `completed`, `error`
+- Thread events: `subscribe_project`, `execute_thread`, `send_prompt`, `user_answer` (client→server); `agent_message`, `agent_status`, `agent_error` (server→client). `send_prompt` and `execute_thread` accept optional `agentType` to override the project default per-thread. `agent_status` values: `running`, `waiting_for_input`, `retrying`, `completed`, `error`. `agent_message` carries `system`/`init` (MCP servers, tools, model), `assistant` (content blocks + usage), and `result` (cost, tokens, duration, turns) subtypes.
 - Terminal events: `terminal_create`, `terminal_input`, `terminal_resize`, `terminal_close`, `terminal_list` (client→server); `terminal_created`, `terminal_output`, `terminal_exit`, `terminal_error`, `terminal_list` (server→client)
 - File events: `file_list`, `file_create`, `file_rename`, `file_delete`, `file_move`, `file_read`, `file_write` (client→server); `file_list_result`, `file_op_result`, `file_changed`, `file_read_result`, `file_write_result` (server→client)
 - Project info events: `project_info` (client→server + server→client) – returns `{ gitBranch, projectDir }` for the status bar and file tree root
@@ -101,7 +101,8 @@ Example: user asks *"start the dev server so I can watch it"* → Claude calls `
 ## Message Rendering
 - Consecutive assistant messages are **grouped** into a single agent block (no repeated headers)
 - "Thought for Xs" label shows time between user prompt and first agent response
-- `result` messages stored with empty content (metadata only: cost, duration, turns) to avoid duplicating the last assistant text
+- `result` messages stored with empty content (metadata only: cost, duration, turns, tokens) to avoid duplicating the last assistant text. Rendered inline as simple text: `$0.0234 · 12.3k tokens · 4.2s`
+- **Thread Stats Bar**: toggled via a "Stats" button in the thread header. Shows aggregated stats across all runs: total cost, input/output token breakdown, context window usage % (color-coded bar), duration, turns, connected MCP servers. Data sources: result message metadata (cost, tokens, duration) + `threadSessionInfo` from `system`/`init` messages (MCP servers, model)
 - Tool use/result blocks rendered inline within the agent group
 - Text blocks with markdown headings (≥200 chars) auto-render in collapsible `MarkdownBlock` cards
 
@@ -185,8 +186,10 @@ apps/dashboard/src/stores/editor-store.ts        – Zustand store (useEditorSto
 apps/dashboard/src/stores/file-tree-store.ts     – Zustand store (useFileTreeStore) — directory cache, root path
 apps/dashboard/src/stores/plan-store.ts          – Zustand store (usePlanStore) — plan mode state + content extraction
 apps/dashboard/src/stores/agent-settings-store.ts – Zustand store — agent mode/model selection
-apps/dashboard/src/components/agent/agent-thread.tsx – Main thread panel
+apps/dashboard/src/components/agent/agent-thread.tsx – Main thread panel (stats toggle, reasoning toggle)
 apps/dashboard/src/components/agent/message-bubble.tsx – Message grouping + rendering (plan detection, markdown blocks)
+apps/dashboard/src/components/agent/thread-stats-bar.tsx – Aggregated thread stats bar (cost, tokens, context %, MCPs)
+apps/dashboard/src/lib/model-context.ts             – Model context window sizes + token formatting helpers
 apps/dashboard/src/components/agent/plan-block.tsx     – Inline plan card (markdown + Build button)
 apps/dashboard/src/components/agent/markdown-block.tsx  – Inline collapsible markdown card (summaries)
 apps/dashboard/src/components/editor/code-viewer.tsx      – Monaco-based file editor (syntax highlighting, save, snippet copy)

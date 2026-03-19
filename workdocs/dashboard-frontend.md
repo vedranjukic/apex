@@ -31,8 +31,9 @@ apps/dashboard/src/
 │   │   ├── project-status-bar.tsx  # Bottom status bar (project name, git branch picker, sync status, sandbox status, VS Code button)
 │   │   └── branch-picker.tsx      # Branch picker dropdown (create/checkout/list branches)
 │   ├── agent/
-│   │   ├── agent-thread.tsx          # Main thread area (header, message list, prompt input, welcome screen)
+│   │   ├── agent-thread.tsx          # Main thread area (header, message list, prompt input, stats toggle, welcome screen)
 │   │   ├── message-bubble.tsx      # Message grouping + rendering (user / agent / result / system bubbles)
+│   │   ├── thread-stats-bar.tsx    # Toggleable bottom bar showing aggregated thread stats (cost, tokens, context %, MCPs)
 │   │   ├── plan-block.tsx          # Collapsible inline card for plan-mode responses (markdown + Build button)
 │   │   ├── markdown-block.tsx      # Collapsible inline card for structured markdown (task overviews, summaries)
 │   │   ├── thread-actions-context.ts # React context for thread actions (sendPrompt, sendSilentPrompt, sendUserAnswer)
@@ -71,6 +72,7 @@ apps/dashboard/src/
 │   └── git-store.ts                # Zustand store — git status, branches, optimistic staging/unstaging
 └── lib/
     ├── cn.ts                       # clsx + tailwind-merge helper
+    ├── model-context.ts            # Model context window sizes + token formatting helpers
     ├── open-project.ts             # Opens project in new window (Electron) or tab (browser)
     └── reset-project-stores.ts     # Centralized reset of all project-specific Zustand stores
 ```
@@ -173,8 +175,9 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 
 | Component            | Purpose |
 | -------------------- | ------- |
-| **AgentThread**        | Orchestrates the thread view. Three states: **(1)** No active thread & not composing → `WelcomePrompt` (centered hero with sparkle icon, textarea, suggestion chips). **(2)** Composing new → minimal prompt UI. **(3)** Active thread → header + scrollable message list + `PromptInput`. Input is disabled while thread status is `running`. Provides `ThreadActionsContext` with `sendPrompt`, `sendSilentPrompt`, `sendUserAnswer`. |
-| **MessageBubble**    | Message grouping logic (`groupMessages`) + rendering. Groups flat messages into: **user** (single message), **agent** (consecutive assistant messages merged, with thinking-time indicator), **result** (metadata-only: cost, duration, turns), **system** (errors/info). `AgentGroup` detects plan-mode threads and renders `PlanBlock` instead of raw text. `UserBubble` hides build-prompt messages. |
+| **AgentThread**        | Orchestrates the thread view. Three states: **(1)** No active thread & not composing → `WelcomePrompt` (centered hero with sparkle icon, textarea, suggestion chips). **(2)** Composing new → minimal prompt UI. **(3)** Active thread → header + scrollable message list + `PromptInput` + optional `ThreadStatsBar`. Header includes a **Stats** toggle button (appears when result data exists) that shows/hides the stats bar below the prompt. Input is disabled while thread status is `running`. Provides `ThreadActionsContext` with `sendPrompt`, `sendSilentPrompt`, `sendUserAnswer`. |
+| **MessageBubble**    | Message grouping logic (`groupMessages`) + rendering. Groups flat messages into: **user** (single message), **agent** (consecutive assistant messages merged, with thinking-time indicator), **result** (inline text: cost · tokens · duration), **system** (errors/info). `AgentGroup` detects plan-mode threads and renders `PlanBlock` instead of raw text. `UserBubble` hides build-prompt messages. |
+| **ThreadStatsBar**   | Toggleable bottom bar (below prompt input) showing aggregated stats across all runs in the thread: total cost, input/output token breakdown, context window usage % (with color-coded progress bar), total duration, turns, connected MCP servers, and model name. Uses `threadSessionInfo` from `useThreadsStore` for MCP and model data, and `getContextWindow()` from `lib/model-context.ts` for context window sizes. |
 | **ContentBlockView** | Renders individual content blocks: `text` → `MarkdownBlock` card if the text has headings and is ≥200 chars, otherwise preformatted text with URL linking. `tool_use` → `ToolUseBlock` card. `tool_result` → bordered card with scrollable output. |
 | **PlanBlock**        | Collapsible inline card for plan-mode responses. Header with filename (slug + timestamp, e.g. `todo-app-plan_20260224T0700.md`), spinner/READY badge. Body renders markdown via `react-markdown` + `remark-gfm`. Footer has collapse toggle + **Build** button (sends plan to agent in `agent` mode via `sendSilentPrompt`). Build button states: active → building (spinner) → built (grayed checkmark). |
 | **MarkdownBlock**    | Collapsible inline card for structured text (task summaries, overviews). Same markdown rendering as PlanBlock but no Build button. Used automatically for text blocks with headings. |
@@ -184,7 +187,7 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 
 | Component                | Purpose |
 | ------------------------ | ------- |
-| **ProjectList**          | Centered card list (max-width 768px). Fetches projects on mount via `useProjectsStore`. Shows loading spinner, empty state, or grid of `ProjectCard`s. "New Project" button toggles `CreateProjectDialog`. |
+| **ProjectList**          | Centered card list (max-width 768px). Fetches projects on mount via `useProjectsStore`. Shows loading spinner, empty state, or grid of `ProjectCard`s. "New Project" button toggles `CreateProjectDialog`. Accepts `activeProjectId` prop — when a thread preview panel is open for a project, the `ThreadList` inside that project's card auto-expands. |
 | **ProjectCard**          | Bordered card displaying: project name, color-coded status badge, description, agent type label ("Claude Code" or "OpenCode"), creation date, open (external link) and delete (with confirm) buttons. |
 | **CreateProjectDialog**  | Modal overlay (`fixed inset-0 z-50`). Form fields: **Name** (required), **Description**, **Git Repository** (optional, cloned on create), **Agent** (select: Claude Code / OpenCode). Cancel + Create buttons. |
 
@@ -234,6 +237,8 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 | `createThread(…)`         | POST `/api/projects/:id/threads` |
 | `addMessage(msg)`       | Appends message (if for active thread) |
 | `updateThreadStatus(…)`   | Updates a thread's status in the list |
+| `threadSessionInfo`     | `Record<string, ThreadSessionInfo>` — per-thread init data (model, tools, MCP servers) from bridge `system`/`init` messages |
+| `setThreadSessionInfo(…)` | Stores session init data for a thread (called by `useAgentSocket` on `system`/`init` message) |
 | `deleteThread(id)`        | DELETE `/api/threads/:id` |
 | `reset()`               | Clears all state (called by `resetProjectStores()` on HomePage mount) |
 
@@ -361,6 +366,8 @@ All hooks share **one Socket.io connection** created by `useAgentSocket` (namesp
 - **Emits**: `subscribe_project`, `send_prompt` (with optional `agentType`), `execute_thread` (with optional `agentType`)
 - **Listens**: `subscribed`, `prompt_accepted`, `agent_message` (assistant turns & result summaries), `agent_status`, `agent_error`
 - Pushes received messages into `useThreadsStore` and updates thread statuses.
+- Handles `system`/`init` messages: captures MCP servers, tools, model, permission mode, and agent version into `useThreadsStore.setThreadSessionInfo()`.
+- Result messages include full token data: `inputTokens`, `outputTokens`, `cacheCreationInputTokens`, `cacheReadInputTokens`, `durationApiMs`.
 
 ### 6.2 `useTerminalSocket`
 
