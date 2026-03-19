@@ -585,6 +585,7 @@ const wss = new WebSocketServer({ server });
 wss.on("connection", (ws) => {
   log("\\u{1F517}", "Orchestrator connected");
   state.ws = ws;
+  lastPortsKey = "";
   ws.send(JSON.stringify({ type: "bridge_ready", port: PORT }));
 
   ws.on("message", (data) => {
@@ -623,41 +624,98 @@ wss.on("connection", (ws) => {
 
 // ── Port scanning ────────────────────────────────────
 const INTERNAL_PORTS = new Set([${port}, 9090, 22, OC_PORT]);
-let lastPortsJson = "";
-function parseNetstatOutput(output) {
-  const lines = output.split("\\n"); const ports = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line || line.indexOf("LISTEN") === -1) continue;
-    if (line.startsWith("Proto") || line.startsWith("Active")) continue;
-    const parts = line.split(/\\s+/);
-    if (parts.length < 6) continue;
-    const localAddr = parts[3] || "";
-    if (localAddr.startsWith("127.") || localAddr.startsWith("::1:")) continue;
-    const lastColon = localAddr.lastIndexOf(":");
-    if (lastColon === -1) continue;
-    const portNum = parseInt(localAddr.substring(lastColon + 1), 10);
-    if (isNaN(portNum) || INTERNAL_PORTS.has(portNum)) continue;
-    let proc = "";
-    const pidProg = parts[6] || parts[5] || "";
-    const slashIdx = pidProg.indexOf("/");
-    if (slashIdx !== -1) proc = pidProg.substring(slashIdx + 1);
-    if (proc === "daytona-daemon") continue;
-    ports.push({ port: portNum, protocol: "tcp", process: proc });
-  }
-  const seen = new Set();
-  return ports.filter((p) => { if (seen.has(p.port)) return false; seen.add(p.port); return true; }).sort((a, b) => a.port - b.port);
+const portFs = require("fs");
+let lastPortsKey = "";
+let portInfoCache = new Map();
+
+function readCmdline(pid) {
+  try { return portFs.readFileSync("/proc/" + pid + "/cmdline", "utf8").replace(/\\0/g, " ").trim(); } catch (e) { return ""; }
 }
+
+function scanListeningPorts() {
+  const portInodes = new Map();
+  const files = ["/proc/net/tcp", "/proc/net/tcp6"];
+  for (let f = 0; f < files.length; f++) {
+    try {
+      const content = portFs.readFileSync(files[f], "utf8");
+      const lines = content.split("\\n");
+      for (let i = 1; i < lines.length; i++) {
+        const fields = lines[i].trim().split(/\\s+/);
+        if (fields.length < 10 || fields[3] !== "0A") continue;
+        const local = fields[1];
+        const ci = local.lastIndexOf(":");
+        if (ci === -1) continue;
+        const hexIp = local.substring(0, ci);
+        if (hexIp === "0100007F" || hexIp === "00000000000000000000000001000000") continue;
+        const portNum = parseInt(local.substring(ci + 1), 16);
+        if (isNaN(portNum) || INTERNAL_PORTS.has(portNum) || portInodes.has(portNum)) continue;
+        portInodes.set(portNum, fields[9]);
+      }
+    } catch (e) {}
+  }
+  return portInodes;
+}
+
+function resolveProcesses(portInodes) {
+  const needInodes = new Set();
+  for (const [p, inode] of portInodes) { if (!portInfoCache.has(p)) needInodes.add(inode); }
+  const inodePid = new Map();
+  if (needInodes.size > 0) {
+    try {
+      const procs = portFs.readdirSync("/proc");
+      for (let i = 0; i < procs.length; i++) {
+        if (!/^\\d+$/.test(procs[i])) continue;
+        try {
+          const fds = portFs.readdirSync("/proc/" + procs[i] + "/fd");
+          for (let j = 0; j < fds.length; j++) {
+            try {
+              const link = portFs.readlinkSync("/proc/" + procs[i] + "/fd/" + fds[j]);
+              if (link.startsWith("socket:[")) {
+                const ino = link.slice(8, -1);
+                if (needInodes.has(ino)) {
+                  inodePid.set(ino, procs[i]);
+                  needInodes.delete(ino);
+                  if (needInodes.size === 0) break;
+                }
+              }
+            } catch (e) {}
+          }
+        } catch (e) {}
+        if (needInodes.size === 0) break;
+      }
+    } catch (e) {}
+  }
+  const newCache = new Map();
+  const result = [];
+  for (const [portNum, inode] of portInodes) {
+    let info = portInfoCache.get(portNum);
+    if (!info) {
+      const pid = inodePid.get(inode) || "";
+      const cmd = pid ? readCmdline(pid) : "";
+      const parts = cmd.split(" ");
+      const base = parts[0] ? parts[0].split("/").pop() : "";
+      if (base === "daytona-daemon") continue;
+      info = { process: base || "", command: cmd || base };
+    }
+    newCache.set(portNum, info);
+    result.push({ port: portNum, protocol: "tcp", process: info.process, command: info.command });
+  }
+  portInfoCache = newCache;
+  return result.sort((a, b) => a.port - b.port);
+}
+
 setInterval(() => {
   if (!state.ws || state.ws.readyState !== 1) return;
   try {
-    const proc = spawn("netstat", ["-tlnp"], { stdio: ["ignore", "pipe", "pipe"] });
-    let output = "";
-    proc.stdout.on("data", (chunk) => { output += chunk.toString(); });
-    proc.on("close", () => { const ports = parseNetstatOutput(output); const json = JSON.stringify(ports); if (json !== lastPortsJson) { lastPortsJson = json; state.ws.send(JSON.stringify({ type: "ports_update", ports })); } });
-    proc.on("error", () => {});
+    const portInodes = scanListeningPorts();
+    const sortedPorts = Array.from(portInodes.keys()).sort((a, b) => a - b);
+    const portsKey = sortedPorts.join(",");
+    if (portsKey === lastPortsKey) return;
+    lastPortsKey = portsKey;
+    const ports = resolveProcesses(portInodes);
+    state.ws.send(JSON.stringify({ type: "ports_update", ports }));
   } catch (e) {}
-}, 3000);
+}, 1000);
 
 server.listen(PORT, "0.0.0.0", () => { log("\\u{2705}", "Bridge ready on port " + PORT); });
 `;

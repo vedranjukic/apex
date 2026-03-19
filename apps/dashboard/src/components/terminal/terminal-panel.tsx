@@ -137,7 +137,7 @@ export function TerminalPanel({
       />
 
       {/* Header: toggle + tabs */}
-      <div className="flex items-center bg-sidebar flex-shrink-0">
+      <div className="flex items-center bg-sidebar flex-shrink-0 border-b border-border">
         <button
           onClick={togglePanel}
           className="flex items-center gap-1 px-2 py-1 text-xs text-text-muted hover:text-text-secondary transition-colors"

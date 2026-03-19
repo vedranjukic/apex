@@ -24,7 +24,7 @@ export function TerminalTabs({
   const isPortsActive = activeBottomTab === 'ports';
 
   return (
-    <div className="flex items-center gap-0.5 px-2 py-1 bg-sidebar border-b border-border min-h-[36px] overflow-x-auto">
+    <div className="flex items-center gap-0.5 px-2 py-1 bg-sidebar min-h-[36px] overflow-x-auto">
       {terminals.map((t) => {
         const isActive = t.id === activeTerminalId && !isPortsActive;
         return (

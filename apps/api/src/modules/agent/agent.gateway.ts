@@ -53,6 +53,9 @@ export class AgentGateway
   /** Track which sandboxes already have terminal event listeners attached */
   private terminalListenersBySandbox = new Set<string>();
 
+  /** Cache last ports_update per sandbox so new subscribers get current state */
+  private lastPortsBySandbox = new Map<string, { ports: unknown[] }>();
+
   constructor(
     private readonly projectsService: ProjectsService,
     private readonly projectsGateway: ProjectsGateway,
@@ -506,6 +509,37 @@ export class AgentGateway
         port: payload.port,
         error: String(err),
       });
+    }
+  }
+
+  @SubscribeMessage('get_ports')
+  async handleGetPorts(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { projectId: string },
+  ) {
+    try {
+      const project = await this.projectsService.findById(payload.projectId);
+      if (!project.sandboxId) return;
+
+      const manager = this.projectsService.getSandboxManager();
+      if (!manager) return;
+
+      let cached = manager.getLastPorts(project.sandboxId)
+        ?? this.lastPortsBySandbox.get(project.sandboxId);
+
+      if (!cached) {
+        try {
+          cached = await manager.scanPorts(project.sandboxId);
+        } catch (err) {
+          this.logger.debug(`get_ports scanPorts fallback failed: ${err}`);
+        }
+      }
+
+      if (cached) {
+        client.emit('ports_update', { ports: cached.ports });
+      }
+    } catch (err) {
+      this.logger.error(`get_ports error: ${err}`);
     }
   }
 
@@ -1476,6 +1510,7 @@ export class AgentGateway
 
     manager.on('ports_update', (sid, msg) => {
       if (sid !== sandboxId) return;
+      this.lastPortsBySandbox.set(sandboxId, { ports: msg.ports });
       this.emitToSubscribers(sandboxId, 'ports_update', { ports: msg.ports });
     });
   }

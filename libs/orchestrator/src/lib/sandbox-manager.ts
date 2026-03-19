@@ -17,6 +17,7 @@ import {
   BridgeTerminalError,
   BridgeTerminalList,
   BridgePortsUpdate,
+  PortInfo,
   LayoutData,
   FileEntry,
   SearchResult,
@@ -90,6 +91,7 @@ export class SandboxManager extends EventEmitter {
   private config: Required<OrchestratorConfig>;
   private daytona: Daytona | null = null;
   private sessions: Map<string, InternalSession> = new Map();
+  private lastPortsBySandbox = new Map<string, BridgePortsUpdate>();
   private sandboxCache = new Map<
     string,
     { sandbox: Sandbox; cachedAt: number }
@@ -619,6 +621,44 @@ export class SandboxManager extends EventEmitter {
     const sandbox = await this.ensureSandbox(sandboxId);
     const previewInfo = await sandbox.getPreviewLink(port);
     return { url: (previewInfo as any).url, token: (previewInfo as any).token };
+  }
+
+  getLastPorts(sandboxId: string): BridgePortsUpdate | undefined {
+    return this.lastPortsBySandbox.get(sandboxId);
+  }
+
+  async scanPorts(sandboxId: string): Promise<BridgePortsUpdate> {
+    const sandbox = await this.ensureSandbox(sandboxId);
+    const result = await sandbox.process.executeCommand(
+      `netstat -tlnp 2>/dev/null | grep LISTEN || true`,
+    );
+    const output = result.result ?? "";
+    const ports: PortInfo[] = [];
+    const seen = new Set<number>();
+    for (const line of output.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.includes("LISTEN")) continue;
+      const parts = trimmed.split(/\s+/);
+      if (parts.length < 6) continue;
+      const localAddr = parts[3] ?? "";
+      if (localAddr.startsWith("127.") || localAddr.startsWith("::1:")) continue;
+      const lastColon = localAddr.lastIndexOf(":");
+      if (lastColon === -1) continue;
+      const portNum = parseInt(localAddr.substring(lastColon + 1), 10);
+      if (isNaN(portNum) || seen.has(portNum)) continue;
+      if (portNum === BRIDGE_PORT || portNum === 9090 || portNum === 22 || portNum === 4096 || portNum === 53) continue;
+      seen.add(portNum);
+      let proc = "";
+      const pidProg = parts[6] ?? parts[5] ?? "";
+      const slash = pidProg.indexOf("/");
+      if (slash !== -1) proc = pidProg.substring(slash + 1);
+      if (proc === "daytona-daemon") continue;
+      ports.push({ port: portNum, protocol: "tcp", process: proc, command: proc });
+    }
+    ports.sort((a, b) => a.port - b.port);
+    const update: BridgePortsUpdate = { type: "ports_update", ports };
+    this.lastPortsBySandbox.set(sandboxId, update);
+    return update;
   }
 
   // ── Git methods ──────────────────────────────────
@@ -1781,6 +1821,7 @@ export class SandboxManager extends EventEmitter {
           } else if (msg.type === "file_changed") {
             this.emit("file_changed", session.sandboxId, msg.dirs);
           } else if (msg.type === "ports_update") {
+            this.lastPortsBySandbox.set(session.sandboxId, msg);
             this.emit("ports_update", session.sandboxId, msg);
           } else if (msg.type === "ask_user_pending") {
             session.status = "waiting_for_input";

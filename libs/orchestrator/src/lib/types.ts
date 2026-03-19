@@ -181,6 +181,7 @@ export interface PortInfo {
   port: number;
   protocol: 'tcp';
   process: string;
+  command: string;
 }
 
 export interface BridgePortsUpdate {
