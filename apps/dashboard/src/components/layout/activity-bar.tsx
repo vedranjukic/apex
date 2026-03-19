@@ -83,13 +83,17 @@ function ActivityButton({
   );
 }
 
+let projectListWindow: Window | null = null;
+
 function ProjectsButton() {
   const handleClick = () => {
     const apex = (window as any).apex;
     if (apex?.focusOrOpenWindow) {
       apex.focusOrOpenWindow('/');
+    } else if (projectListWindow && !projectListWindow.closed) {
+      projectListWindow.focus();
     } else {
-      window.open('/', 'project-list');
+      projectListWindow = window.open('/', 'project-list');
     }
   };
   return (
