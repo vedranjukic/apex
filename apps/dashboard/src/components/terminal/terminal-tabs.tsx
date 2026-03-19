@@ -17,6 +17,8 @@ export function TerminalTabs({
   const activeBottomTab = useTerminalStore((s) => s.activeBottomTab);
   const setActive = useTerminalStore((s) => s.setActive);
   const setActiveBottomTab = useTerminalStore((s) => s.setActiveBottomTab);
+  const portsTabVisible = useTerminalStore((s) => s.portsTabVisible);
+  const hidePortsTab = useTerminalStore((s) => s.hidePortsTab);
   const portCount = usePortsStore((s) => s.ports.length);
 
   const isPortsActive = activeBottomTab === 'ports';
@@ -67,26 +69,45 @@ export function TerminalTabs({
         <Plus className="w-3.5 h-3.5" />
       </button>
 
-      <div className="ml-auto flex items-center">
-        <button
-          onClick={() => setActiveBottomTab('ports')}
-          className={cn(
-            'flex items-center gap-1.5 px-3 py-1 text-xs rounded-t transition-colors whitespace-nowrap',
-            isPortsActive
-              ? 'bg-terminal-bg text-text-primary'
-              : 'text-text-muted hover:text-text-secondary hover:bg-terminal-bg/50',
-          )}
-          title="Forwarded Ports"
-        >
-          <Radio className="w-3 h-3" />
-          <span>Ports</span>
-          {portCount > 0 && (
-            <span className="ml-0.5 px-1.5 py-0 rounded-full bg-primary/20 text-primary text-[10px] leading-4 font-medium">
-              {portCount}
+      {portsTabVisible && (
+        <div className="ml-auto flex items-center">
+          <button
+            onClick={() => setActiveBottomTab('ports')}
+            className={cn(
+              'group flex items-center gap-1.5 px-3 py-1 text-xs rounded-t transition-colors whitespace-nowrap',
+              isPortsActive
+                ? 'bg-terminal-bg text-text-primary'
+                : 'text-text-muted hover:text-text-secondary hover:bg-terminal-bg/50',
+            )}
+            title="Forwarded Ports"
+          >
+            <Radio className="w-3 h-3" />
+            <span>Ports</span>
+            {portCount > 0 && (
+              <span className="ml-0.5 px-1.5 py-0 rounded-full bg-primary/20 text-primary text-[10px] leading-4 font-medium">
+                {portCount}
+              </span>
+            )}
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(e) => {
+                e.stopPropagation();
+                hidePortsTab();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.stopPropagation();
+                  hidePortsTab();
+                }
+              }}
+              className="ml-1 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity"
+            >
+              <X className="w-3 h-3" />
             </span>
-          )}
-        </button>
-      </div>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

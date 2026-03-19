@@ -45,6 +45,7 @@ export function ProjectStatusBar({ project, info, gitActions }: Props) {
   const portCount = usePortsStore((s) => s.ports.length);
   const openPanel = useTerminalStore((s) => s.openPanel);
   const setActiveBottomTab = useTerminalStore((s) => s.setActiveBottomTab);
+  const showPortsTab = useTerminalStore((s) => s.showPortsTab);
 
   const branchLabel = storeBranch || info.gitBranch || project.gitRepo;
   const sandboxReady = project.status === 'running' && !!project.sandboxId;
@@ -61,9 +62,10 @@ export function ProjectStatusBar({ project, info, gitActions }: Props) {
   const ideLabel = preferredIDE === 'cursor' ? 'Cursor' : 'VS Code';
 
   const openPortsPanel = useCallback(() => {
+    showPortsTab();
     openPanel();
     setActiveBottomTab('ports');
-  }, [openPanel, setActiveBottomTab]);
+  }, [showPortsTab, openPanel, setActiveBottomTab]);
 
   const openIDE = useCallback(async () => {
     if (!sandboxReady) return;

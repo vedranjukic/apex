@@ -17,6 +17,8 @@ interface TerminalState {
   activeTerminalId: string | null;
   /** Which bottom panel section is active */
   activeBottomTab: BottomTab;
+  /** Whether the Ports tab is shown in the tab bar */
+  portsTabVisible: boolean;
   /** Whether the terminal panel is visible */
   panelOpen: boolean;
   /** Height of the terminal panel in pixels */
@@ -33,6 +35,8 @@ interface TerminalState {
   removeTerminal: (id: string) => void;
   setActive: (id: string | null) => void;
   setActiveBottomTab: (tab: BottomTab) => void;
+  showPortsTab: () => void;
+  hidePortsTab: () => void;
   /** Replace all terminals (used on reconnect / terminal_list) */
   setTerminals: (list: TerminalInfo[]) => void;
   togglePanel: () => void;
@@ -56,6 +60,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   terminals: [],
   activeTerminalId: null,
   activeBottomTab: 'terminals',
+  portsTabVisible: true,
   panelOpen: false,
   panelHeight: DEFAULT_PANEL_HEIGHT,
   terminalsLoaded: false,
@@ -69,6 +74,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       terminals: [],
       activeTerminalId: null,
       activeBottomTab: 'terminals',
+      portsTabVisible: true,
       panelOpen: false,
       panelHeight: DEFAULT_PANEL_HEIGHT,
       terminalsLoaded: false,
@@ -102,6 +108,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   setActive: (id) => set({ activeTerminalId: id, activeBottomTab: 'terminals' }),
   setActiveBottomTab: (tab) => set({ activeBottomTab: tab }),
+  showPortsTab: () => set({ portsTabVisible: true }),
+  hidePortsTab: () => set({ portsTabVisible: false, activeBottomTab: 'terminals' }),
 
   setTerminals: (list) => {
     const current = get();
@@ -162,6 +170,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       terminals: [],
       activeTerminalId: null,
       activeBottomTab: 'terminals',
+      portsTabVisible: true,
       panelOpen: false,
       panelHeight: DEFAULT_PANEL_HEIGHT,
       terminalsLoaded: false,
