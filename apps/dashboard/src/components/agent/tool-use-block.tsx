@@ -1046,27 +1046,27 @@ function GenericToolBlock({
 }) {
   const [expanded, setExpanded] = useState(false);
   const json = JSON.stringify(input, null, 2);
-  const isLong = json.split('\n').length > 8;
 
   return (
-    <div className="border border-border rounded-lg overflow-hidden bg-surface text-sm">
+    <div className={cn(
+      "border border-border rounded-lg overflow-hidden bg-surface text-sm transition-opacity",
+      !expanded && "opacity-50",
+    )}>
       <button
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-2 w-full px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-surface-secondary transition-colors"
       >
         <Wrench className="w-3.5 h-3.5" />
         <span>{name ?? 'Tool'}</span>
-        {isLong && (
-          <span className="ml-auto">
-            {expanded ? (
-              <ChevronDown className="w-3 h-3" />
-            ) : (
-              <ChevronRight className="w-3 h-3" />
-            )}
-          </span>
-        )}
+        <span className="ml-auto">
+          {expanded ? (
+            <ChevronDown className="w-3 h-3" />
+          ) : (
+            <ChevronRight className="w-3 h-3" />
+          )}
+        </span>
       </button>
-      {(!isLong || expanded) && (
+      {expanded && (
         <pre className="px-3 py-2 text-xs text-text-muted overflow-x-auto border-t border-border">
           {json}
         </pre>
