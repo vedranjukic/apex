@@ -33,6 +33,7 @@ export class ProjectsService implements OnModuleInit {
       this.sandboxManager = new SandboxManager({
         anthropicApiKey: process.env.ANTHROPIC_API_KEY,
         openaiApiKey: process.env.OPENAI_API_KEY,
+        githubToken: process.env.GITHUB_TOKEN,
       });
       await this.sandboxManager.initialize();
       this.logger.log(

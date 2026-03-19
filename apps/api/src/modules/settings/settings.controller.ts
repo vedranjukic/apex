@@ -1,13 +1,19 @@
 import { Controller, Get, Put, Body, Inject, forwardRef } from '@nestjs/common';
-import { SettingsService } from './settings.service';
+import { SettingsService, type SettingSource } from './settings.service';
 import { ProjectsService } from '../projects/projects.service';
+
+const SECRET_KEYS = new Set(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'DAYTONA_API_KEY', 'GITHUB_TOKEN']);
 
 function maskValue(key: string, value: string): string {
   if (!value) return '';
-  const isSecret = key.includes('API_KEY');
-  if (!isSecret) return value;
+  if (!SECRET_KEYS.has(key)) return value;
   if (value.length <= 8) return '••••';
   return value.slice(0, 4) + '••••' + value.slice(-4);
+}
+
+interface SettingResponse {
+  value: string;
+  source: SettingSource;
 }
 
 @Controller('settings')
@@ -26,12 +32,14 @@ export class SettingsController {
   }
 
   @Get()
-  async getAll(): Promise<Record<string, string>> {
-    const settings = await this.settingsService.getAll();
-    const result: Record<string, string> = {};
-    for (const [key, value] of Object.entries(settings)) {
-      const isSecret = key.includes('API_KEY');
-      result[key] = isSecret ? maskValue(key, value) : value;
+  async getAll(): Promise<Record<string, SettingResponse>> {
+    const entries = await this.settingsService.getAllWithMeta();
+    const result: Record<string, SettingResponse> = {};
+    for (const [key, entry] of Object.entries(entries)) {
+      result[key] = {
+        value: maskValue(key, entry.value),
+        source: entry.source,
+      };
     }
     return result;
   }

@@ -318,6 +318,7 @@ export interface SandboxSession {
 export interface OrchestratorConfig {
   anthropicApiKey?: string;
   openaiApiKey?: string;
+  githubToken?: string;
   snapshot?: string;
   timeoutMs?: number;
 }

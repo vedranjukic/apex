@@ -120,9 +120,16 @@ export const configApi = {
 };
 
 // ── Settings ─────────────────────────────────────────
+export type SettingSource = 'settings' | 'env' | 'none';
+
+export interface SettingEntry {
+  value: string;
+  source: SettingSource;
+}
+
 export const settingsApi = {
   visible: () => request<{ visible: boolean }>('/settings/visible'),
-  get: () => request<Record<string, string>>('/settings'),
+  get: () => request<Record<string, SettingEntry>>('/settings'),
   update: (settings: Record<string, string>) =>
     request<{ ok: boolean }>('/settings', {
       method: 'PUT',

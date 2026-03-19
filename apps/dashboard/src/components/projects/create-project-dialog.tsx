@@ -78,7 +78,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
               placeholder="https://github.com/user/repo.git"
               className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
             />
-            <p className="text-xs text-text-muted mt-1">Optional. The repo will be cloned into the project folder.</p>
+            <p className="text-xs text-text-muted mt-1">Optional. The repo will be cloned into the project folder. For private repos, add a GitHub token in <a href="/settings" className="underline hover:text-text-primary">Settings</a>.</p>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
