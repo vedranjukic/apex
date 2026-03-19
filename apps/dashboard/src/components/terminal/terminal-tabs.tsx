@@ -24,7 +24,7 @@ export function TerminalTabs({
   const isPortsActive = activeBottomTab === 'ports';
 
   return (
-    <div className="flex items-center gap-0.5 px-2 py-1 bg-sidebar min-h-[36px] overflow-x-auto">
+    <div className="flex items-center gap-0.5 px-2 py-1 bg-sidebar min-h-[36px] overflow-x-auto flex-1 min-w-0">
       {terminals.map((t) => {
         const isActive = t.id === activeTerminalId && !isPortsActive;
         return (
@@ -32,7 +32,7 @@ export function TerminalTabs({
             key={t.id}
             onClick={() => setActive(t.id)}
             className={cn(
-              'group flex items-center gap-1.5 px-3 py-1 text-xs rounded-t transition-colors whitespace-nowrap',
+              'group flex items-center gap-1.5 px-3 py-1 text-xs rounded-t transition-colors whitespace-nowrap border-r border-border',
               isActive
                 ? 'bg-terminal-bg text-text-primary'
                 : 'text-text-muted hover:text-text-secondary hover:bg-terminal-bg/50',
@@ -74,7 +74,7 @@ export function TerminalTabs({
           <button
             onClick={() => setActiveBottomTab('ports')}
             className={cn(
-              'group flex items-center gap-1.5 px-3 py-1 text-xs rounded-t transition-colors whitespace-nowrap',
+              'group flex items-center gap-1.5 px-3 py-1 text-xs rounded-t transition-colors whitespace-nowrap border-r border-border',
               isPortsActive
                 ? 'bg-terminal-bg text-text-primary'
                 : 'text-text-muted hover:text-text-secondary hover:bg-terminal-bg/50',

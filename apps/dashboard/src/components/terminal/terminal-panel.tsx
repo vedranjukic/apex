@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react';
-import { ChevronDown, ChevronUp, TerminalSquare } from 'lucide-react';
+import { ChevronDown, TerminalSquare } from 'lucide-react';
 import { useTerminalStore } from '../../stores/terminal-store';
 import { TerminalTabs } from './terminal-tabs';
 import { TerminalTab } from './terminal-tab';
@@ -37,6 +37,7 @@ export function TerminalPanel({
 }: TerminalPanelProps) {
   const terminals = useTerminalStore((s) => s.terminals);
   const terminalsLoaded = useTerminalStore((s) => s.terminalsLoaded);
+  const bridgeResponded = useTerminalStore((s) => s.bridgeResponded);
   const activeTerminalId = useTerminalStore((s) => s.activeTerminalId);
   const activeBottomTab = useTerminalStore((s) => s.activeBottomTab);
   const panelOpen = useTerminalStore((s) => s.panelOpen);
@@ -64,10 +65,9 @@ export function TerminalPanel({
 
   const autoCreated = useRef(false);
   useEffect(() => {
-    if (!terminalsLoaded || !sandboxReady) return;
+    if (!terminalsLoaded || !bridgeResponded || !sandboxReady) return;
     if (autoCreated.current) return;
-    const hasShellTerminal = terminals.some((t) => t.id.startsWith('term-'));
-    if (hasShellTerminal) {
+    if (terminals.length > 0) {
       autoCreated.current = true;
       return;
     }
@@ -77,7 +77,7 @@ export function TerminalPanel({
     const name = `Terminal ${num}`;
     addTerminal({ id, name, status: 'alive' }, { silent: true });
     createTerminal(id, 80, 24, name);
-  }, [terminalsLoaded, sandboxReady, terminals, addTerminal, createTerminal, getNextTerminalNumber]);
+  }, [terminalsLoaded, bridgeResponded, sandboxReady, terminals, addTerminal, createTerminal, getNextTerminalNumber]);
 
   // ── Drag resize ──
 
@@ -109,18 +109,7 @@ export function TerminalPanel({
   );
 
   if (!panelOpen) {
-    return (
-      <div className="border-t border-border bg-sidebar">
-        <button
-          onClick={togglePanel}
-          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-text-muted hover:text-text-secondary transition-colors"
-        >
-          <TerminalSquare className="w-3.5 h-3.5" />
-          <span>Terminal</span>
-          <ChevronUp className="w-3 h-3 ml-auto" />
-        </button>
-      </div>
-    );
+    return null;
   }
 
   const showPorts = activeBottomTab === 'ports';
@@ -136,19 +125,19 @@ export function TerminalPanel({
         className="h-1 cursor-row-resize bg-sidebar hover:bg-primary/40 transition-colors flex-shrink-0"
       />
 
-      {/* Header: toggle + tabs */}
+      {/* Header: tabs + toggle */}
       <div className="flex items-center bg-sidebar flex-shrink-0 border-b border-border">
-        <button
-          onClick={togglePanel}
-          className="flex items-center gap-1 px-2 py-1 text-xs text-text-muted hover:text-text-secondary transition-colors"
-          title="Hide Panel"
-        >
-          <ChevronDown className="w-3 h-3" />
-        </button>
         <TerminalTabs
           onCreateTerminal={handleCreateTerminal}
           onCloseTerminal={handleCloseTerminal}
         />
+        <button
+          onClick={togglePanel}
+          className="flex items-center gap-1 px-2 py-1 ml-auto text-xs text-text-muted hover:text-text-secondary transition-colors flex-shrink-0"
+          title="Hide Panel"
+        >
+          <ChevronDown className="w-3 h-3" />
+        </button>
       </div>
 
       {/* Viewport */}

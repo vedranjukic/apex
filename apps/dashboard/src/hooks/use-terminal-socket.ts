@@ -200,7 +200,7 @@ export function useTerminalSocket(
         name: t.name,
         status: 'alive' as const,
       }));
-      setTerminals(infos);
+      setTerminals(infos, true);
 
       for (const t of data.terminals) {
         reg.clearBuffer(t.id);

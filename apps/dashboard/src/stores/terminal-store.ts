@@ -25,6 +25,8 @@ interface TerminalState {
   panelHeight: number;
   /** True after the first terminal_list response has been processed */
   terminalsLoaded: boolean;
+  /** True only if terminal_list came from the bridge (not a timeout fallback) */
+  bridgeResponded: boolean;
   /** Layout preference saved before terminals load — applied by setTerminals */
   _pendingLayout: { panelOpen: boolean; activeTerminalId: string | null } | null;
 
@@ -38,13 +40,13 @@ interface TerminalState {
   showPortsTab: () => void;
   hidePortsTab: () => void;
   /** Replace all terminals (used on reconnect / terminal_list) */
-  setTerminals: (list: TerminalInfo[]) => void;
+  setTerminals: (list: TerminalInfo[], fromBridge?: boolean) => void;
   togglePanel: () => void;
   openPanel: () => void;
   closePanel: () => void;
   setPanelHeight: (height: number) => void;
   /** Apply saved layout from the sandbox */
-  applyLayout: (layout: { terminalPanelOpen: boolean; terminalPanelHeight: number; activeTerminalId: string | null }) => void;
+  applyLayout: (layout: { terminalPanelOpen: boolean; terminalPanelHeight: number; activeTerminalId: string | null; portsTabVisible?: boolean }) => void;
   /** Counter for naming new terminals sequentially */
   nextTerminalNumber: number;
   /** Increment counter and return the new value */
@@ -60,10 +62,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   terminals: [],
   activeTerminalId: null,
   activeBottomTab: 'terminals',
-  portsTabVisible: true,
+  portsTabVisible: false,
   panelOpen: false,
   panelHeight: DEFAULT_PANEL_HEIGHT,
   terminalsLoaded: false,
+  bridgeResponded: false,
   _pendingLayout: null,
   nextTerminalNumber: 0,
 
@@ -74,10 +77,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       terminals: [],
       activeTerminalId: null,
       activeBottomTab: 'terminals',
-      portsTabVisible: true,
+      portsTabVisible: false,
       panelOpen: false,
       panelHeight: DEFAULT_PANEL_HEIGHT,
       terminalsLoaded: false,
+      bridgeResponded: false,
       _pendingLayout: null,
       nextTerminalNumber: 0,
     });
@@ -111,23 +115,36 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   showPortsTab: () => set({ portsTabVisible: true }),
   hidePortsTab: () => set({ portsTabVisible: false, activeBottomTab: 'terminals' }),
 
-  setTerminals: (list) => {
+  setTerminals: (list, fromBridge) => {
     const current = get();
     const pending = current._pendingLayout;
 
-    // If layout was saved before terminals loaded, apply it now
     const desiredActiveId = pending?.activeTerminalId ?? current.activeTerminalId;
     const desiredPanelOpen = pending?.panelOpen ?? current.panelOpen;
 
+    const bridgeIds = new Set(list.map((t) => t.id));
+    const optimistic = current.terminals.filter(
+      (t) => !bridgeIds.has(t.id),
+    );
+    const merged = [...list, ...optimistic];
+
+    let maxNum = current.nextTerminalNumber;
+    for (const t of merged) {
+      const m = t.name.match(/^Terminal\s+(\d+)$/);
+      if (m) maxNum = Math.max(maxNum, Number(m[1]));
+    }
+
     set({
-      terminals: list,
+      terminals: merged,
       terminalsLoaded: true,
+      bridgeResponded: fromBridge ? true : current.bridgeResponded,
       _pendingLayout: null,
+      nextTerminalNumber: maxNum,
       activeTerminalId:
-        list.find((t) => t.id === desiredActiveId)
+        merged.find((t) => t.id === desiredActiveId)
           ? desiredActiveId
-          : list[0]?.id ?? null,
-      panelOpen: list.length > 0 ? (desiredPanelOpen || true) : desiredPanelOpen,
+          : merged[0]?.id ?? null,
+      panelOpen: merged.length > 0 ? (desiredPanelOpen || true) : desiredPanelOpen,
     });
   },
 
@@ -138,16 +155,16 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   applyLayout: (layout) => {
     const { terminalsLoaded } = get();
+    if (layout.portsTabVisible !== undefined) {
+      set({ portsTabVisible: layout.portsTabVisible });
+    }
     if (terminalsLoaded) {
-      // Terminals already loaded — apply everything directly
       set({
         panelOpen: layout.terminalPanelOpen,
         panelHeight: layout.terminalPanelHeight,
         activeTerminalId: layout.activeTerminalId,
       });
     } else {
-      // Terminals haven't loaded yet — apply height now, defer open/active
-      // until setTerminals fires so the panel doesn't appear empty
       set({
         panelHeight: layout.terminalPanelHeight,
         _pendingLayout: {
@@ -170,10 +187,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       terminals: [],
       activeTerminalId: null,
       activeBottomTab: 'terminals',
-      portsTabVisible: true,
+      portsTabVisible: false,
       panelOpen: false,
       panelHeight: DEFAULT_PANEL_HEIGHT,
       terminalsLoaded: false,
+      bridgeResponded: false,
       _pendingLayout: null,
       nextTerminalNumber: 0,
     }),

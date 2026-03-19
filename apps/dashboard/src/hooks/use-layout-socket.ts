@@ -15,6 +15,7 @@ interface LayoutData {
   terminalPanelOpen: boolean;
   terminalPanelHeight: number;
   activeTerminalId: string | null;
+  portsTabVisible?: boolean;
   activeThreadId: string | null;
   leftSidebarOpen?: boolean;
   rightSidebarOpen?: boolean;
@@ -184,6 +185,7 @@ export function useLayoutSocket(
       terminalPanelOpen: term.panelOpen,
       terminalPanelHeight: term.panelHeight,
       activeTerminalId: term.activeTerminalId,
+      portsTabVisible: term.portsTabVisible,
       activeThreadId: threads.activeThreadId,
       threadScrollOffsets: threads.threadScrollOffsets,
       leftSidebarOpen: panels.leftSidebarOpen,
@@ -201,7 +203,8 @@ export function useLayoutSocket(
       if (
         state.panelOpen !== prevState.panelOpen ||
         state.panelHeight !== prevState.panelHeight ||
-        state.activeTerminalId !== prevState.activeTerminalId
+        state.activeTerminalId !== prevState.activeTerminalId ||
+        state.portsTabVisible !== prevState.portsTabVisible
       ) {
         saveLayout(getLayoutSnapshot());
       }
