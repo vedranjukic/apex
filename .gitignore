@@ -53,9 +53,7 @@ Thumbs.db
 vite.config.*.timestamp*
 
 # Database
-data/*.sqlite
-data/*.sqlite-journal
-data/*.sqlite-wal
+data/
 
 # Environment variables
 .env
