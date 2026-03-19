@@ -92,7 +92,7 @@ export function ProjectStatusBar({ project, info, gitActions }: Props) {
   }, [project.id, sandboxReady, nativeIDEAvailable, apexBridge, preferredIDE]);
 
   return (
-    <div className="h-7 border-t border-panel-border bg-sidebar flex items-center px-3 shrink-0 text-xs text-panel-text-muted select-none gap-4">
+    <div className="h-7 border-t border-panel-border bg-activity-bar flex items-center px-3 shrink-0 text-xs text-panel-text-muted select-none gap-4">
       {/* Git branch / repo */}
       {branchLabel && (
         <div className="relative">

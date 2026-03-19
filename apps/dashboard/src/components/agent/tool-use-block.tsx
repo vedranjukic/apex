@@ -897,15 +897,13 @@ function AskQuestionBlock({ input, toolUseId }: { input: Input; toolUseId?: stri
                           ) : (
                             <div
                               className={[
-                                'w-4 h-4 rounded-full border-2 flex items-center justify-center transition-colors',
+                                'w-5 h-5 rounded flex items-center justify-center text-[11px] font-semibold leading-none transition-colors',
                                 isSelected
-                                  ? 'border-primary'
-                                  : 'border-text-muted',
+                                  ? 'bg-primary text-white'
+                                  : 'bg-surface-secondary text-text-secondary border border-border',
                               ].join(' ')}
                             >
-                              {isSelected && (
-                                <div className="w-2 h-2 rounded-full bg-primary" />
-                              )}
+                              {String.fromCharCode(65 + oi)}
                             </div>
                           )}
                         </span>

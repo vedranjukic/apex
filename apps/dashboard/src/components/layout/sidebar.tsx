@@ -64,7 +64,7 @@ export function Sidebar({ projectId }: SidebarProps) {
     : threads;
 
   return (
-    <aside className="w-72 bg-sidebar text-panel-text flex flex-col shrink-0 h-full">
+    <aside className="w-72 bg-sidebar text-panel-text flex flex-col shrink-0 h-full border-l border-panel-border">
       {/* Open Files Section */}
       <div className="flex flex-col">
         <button

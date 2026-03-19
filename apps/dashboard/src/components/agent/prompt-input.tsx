@@ -335,7 +335,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
     );
 
     return (
-      <div className="border-t border-border bg-surface-thread p-4 relative">
+      <div className="border-t border-border bg-sidebar p-4 relative">
         <div className="max-w-3xl mx-auto">
           <div className="relative">
             <div
@@ -348,7 +348,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
               aria-placeholder={placeholder}
               aria-disabled={disabled}
               data-placeholder={placeholder}
-              className="prompt-editor px-4 py-3 bg-sidebar border border-border rounded-t-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50 max-h-32 overflow-y-auto whitespace-pre-wrap break-words"
+              className="prompt-editor px-4 py-3 bg-surface-thread border border-border rounded-t-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50 max-h-32 overflow-y-auto whitespace-pre-wrap break-words"
               style={{ minHeight: '44px' }}
               suppressContentEditableWarning
               onClick={() => {
@@ -370,7 +370,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
           </div>
 
           {/* Toolbar row */}
-          <div className="flex items-center gap-1 px-2 py-1.5 bg-sidebar border border-t-0 border-border rounded-b-xl">
+          <div className="flex items-center gap-1 px-2 py-1.5 bg-surface-thread border border-t-0 border-border rounded-b-xl">
             {!hideAgentDropdown && <AgentDropdown />}
             <ModelDropdown />
             <div className="flex-1" />

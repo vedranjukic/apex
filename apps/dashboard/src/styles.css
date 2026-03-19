@@ -60,15 +60,15 @@
 /* ── Dark Modern (default) ─────────────────────── */
 :root,
 [data-theme="dark"] {
-  --t-sidebar: #181818;
-  --t-sidebar-hover: #1f1f1f;
-  --t-sidebar-active: #2a2a2a;
-  --t-activity-bar: #181818;
-  --t-activity-bar-hover: #222222;
-  --t-surface: #1e1e1e;
-  --t-surface-secondary: #181818;
-  --t-surface-thread: #222222;
-  --t-border: #2b2b2b;
+  --t-sidebar: #0f0f0f;
+  --t-sidebar-hover: #181818;
+  --t-sidebar-active: #222222;
+  --t-activity-bar: #0a0a0a;
+  --t-activity-bar-hover: #1a1a1a;
+  --t-surface: #141414;
+  --t-surface-secondary: #0f0f0f;
+  --t-surface-thread: #131313;
+  --t-border: #232323;
   --t-primary: #6366f1;
   --t-primary-hover: #4f46e5;
   --t-accent: #10b981;
@@ -81,9 +81,9 @@
   --t-panel-icon: #6e6e6e;
   --t-panel-icon-active: #cccccc;
   --t-panel-border: rgba(255,255,255,0.04);
-  --t-scrollbar-thumb: #333333;
-  --t-scrollbar-thumb-hover: #3e3e3e;
-  --t-terminal-bg: #181818;
+  --t-scrollbar-thumb: #2b2b2b;
+  --t-scrollbar-thumb-hover: #363636;
+  --t-terminal-bg: #0f0f0f;
   color-scheme: dark;
 }
 
