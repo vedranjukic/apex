@@ -110,7 +110,7 @@ function startOpenCodeServe() {
   log("\\u{1F680}", "Starting opencode serve on port " + OC_PORT);
   const ocBin = "/home/daytona/.opencode/bin/opencode";
   const dotEnvVars = loadDotEnv(PROJECT_DIR);
-  const serveEnv = { ...process.env, ...dotEnvVars, HOME: "/home/daytona" };
+  const serveEnv = { ...process.env, ...dotEnvVars, HOME: "/home/daytona", NODE_TLS_REJECT_UNAUTHORIZED: "0" };
   ocServeProc = spawn(ocBin, ["serve", "--port", String(OC_PORT), "--hostname", "127.0.0.1"], {
     cwd: PROJECT_DIR,
     env: serveEnv,
