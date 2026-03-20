@@ -1,106 +1,75 @@
-import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { TaskEntity } from '../../database/entities/task.entity';
-import { MessageEntity } from '../../database/entities/message.entity';
+import { eq, desc, asc } from 'drizzle-orm';
+import { db } from '../../database/db';
+import { tasks, messages } from '../../database/schema';
 
-@Injectable()
-export class ThreadsService implements OnModuleInit {
-  constructor(
-    @InjectRepository(TaskEntity)
-    private readonly threadRepo: Repository<TaskEntity>,
-    @InjectRepository(MessageEntity)
-    private readonly messageRepo: Repository<MessageEntity>,
-  ) {}
+export type Task = typeof tasks.$inferSelect;
+export type Message = typeof messages.$inferSelect;
 
-  async onModuleInit() {
-    await this.threadRepo
-      .createQueryBuilder()
-      .update()
-      .set({ status: 'completed' })
-      .where('status = :status', { status: 'idle' })
-      .execute();
+class ThreadsService {
+  async init() {
+    await db.update(tasks).set({ status: 'completed' }).where(eq(tasks.status, 'idle'));
   }
 
-  async findByProject(projectId: string): Promise<TaskEntity[]> {
-    return this.threadRepo.find({
-      where: { projectId },
-      order: { createdAt: 'DESC' },
-    });
+  async findByProject(projectId: string): Promise<Task[]> {
+    return db.select().from(tasks).where(eq(tasks.projectId, projectId)).orderBy(desc(tasks.createdAt));
   }
 
-  async findById(id: string): Promise<TaskEntity> {
-    const thread = await this.threadRepo.findOne({
-      where: { id },
-      relations: ['messages'],
+  async findById(id: string): Promise<Task & { messages?: Message[] }> {
+    const thread = await db.query.tasks.findFirst({
+      where: eq(tasks.id, id),
+      with: { messages: { orderBy: [asc(messages.createdAt)] } },
     });
-    if (!thread) throw new NotFoundException(`Thread ${id} not found`);
-    if (thread.messages) {
-      thread.messages.sort(
-        (a, b) =>
-          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-      );
-    }
+    if (!thread) throw new Error(`Thread ${id} not found`);
     return thread;
   }
 
-  async create(
-    projectId: string,
-    data: { prompt: string; agentType?: string },
-  ): Promise<TaskEntity> {
-    const title =
-      data.prompt.length > 100
-        ? data.prompt.substring(0, 100) + '…'
-        : data.prompt;
+  async create(projectId: string, data: { prompt: string; agentType?: string }): Promise<Task & { messages?: Message[] }> {
+    const title = data.prompt.length > 100 ? data.prompt.substring(0, 100) + '…' : data.prompt;
+    const id = crypto.randomUUID();
 
-    const thread = this.threadRepo.create({
+    await db.insert(tasks).values({
+      id,
       projectId,
       title,
       status: 'completed',
       agentType: data.agentType ?? null,
     });
-    const saved = await this.threadRepo.save(thread);
 
-    await this.addMessage(saved.id, {
+    await this.addMessage(id, {
       role: 'user',
       content: [{ type: 'text', text: data.prompt }],
       metadata: null,
     });
 
-    return this.findById(saved.id);
+    return this.findById(id);
   }
 
-  async updateStatus(id: string, status: string): Promise<TaskEntity> {
-    await this.threadRepo.update(id, { status });
+  async updateStatus(id: string, status: string): Promise<Task & { messages?: Message[] }> {
+    await db.update(tasks).set({ status, updatedAt: new Date().toISOString() }).where(eq(tasks.id, id));
     return this.findById(id);
   }
 
   async updateClaudeSessionId(threadId: string, sessionId: string): Promise<void> {
-    await this.threadRepo.update(threadId, { claudeSessionId: sessionId });
+    await db.update(tasks).set({ claudeSessionId: sessionId, updatedAt: new Date().toISOString() }).where(eq(tasks.id, threadId));
   }
 
   async updateMode(threadId: string, mode: string): Promise<void> {
-    await this.threadRepo.update(threadId, { mode });
+    await db.update(tasks).set({ mode, updatedAt: new Date().toISOString() }).where(eq(tasks.id, threadId));
   }
 
   async updateAgentType(threadId: string, agentType: string): Promise<void> {
-    await this.threadRepo.update(threadId, { agentType });
+    await db.update(tasks).set({ agentType, updatedAt: new Date().toISOString() }).where(eq(tasks.id, threadId));
   }
 
   async updateModel(threadId: string, model: string): Promise<void> {
-    await this.threadRepo
-      .createQueryBuilder()
-      .update()
-      .set({ model: (model || null) as any })
-      .where('id = :id', { id: threadId })
-      .execute();
+    await db.update(tasks).set({ model: model || null, updatedAt: new Date().toISOString() }).where(eq(tasks.id, threadId));
   }
 
   async updatePlanData(
     threadId: string,
     planData: { id: string; title: string; filename: string; content: string },
   ): Promise<void> {
-    await this.threadRepo.update(threadId, { planData });
+    await db.update(tasks).set({ planData, updatedAt: new Date().toISOString() }).where(eq(tasks.id, threadId));
   }
 
   async addMessage(
@@ -110,25 +79,26 @@ export class ThreadsService implements OnModuleInit {
       content: Record<string, unknown>[];
       metadata?: Record<string, unknown> | null;
     },
-  ): Promise<MessageEntity> {
-    const msg = this.messageRepo.create({
-      taskId: threadId, // DB column is still 'taskId'
+  ): Promise<Message> {
+    const id = crypto.randomUUID();
+    await db.insert(messages).values({
+      id,
+      taskId: threadId,
       role: data.role,
       content: data.content,
       metadata: data.metadata || null,
     });
-    return this.messageRepo.save(msg);
+    const msg = await db.query.messages.findFirst({ where: eq(messages.id, id) });
+    return msg!;
   }
 
-  async getMessages(threadId: string): Promise<MessageEntity[]> {
-    return this.messageRepo.find({
-      where: { taskId: threadId },
-      order: { createdAt: 'ASC' },
-    });
+  async getMessages(threadId: string): Promise<Message[]> {
+    return db.select().from(messages).where(eq(messages.taskId, threadId)).orderBy(asc(messages.createdAt));
   }
 
   async remove(id: string): Promise<void> {
-    const thread = await this.findById(id);
-    await this.threadRepo.remove(thread);
+    await db.delete(tasks).where(eq(tasks.id, id));
   }
 }
+
+export const threadsService = new ThreadsService();

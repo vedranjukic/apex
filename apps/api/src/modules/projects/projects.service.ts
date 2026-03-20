@@ -1,23 +1,15 @@
-import { Injectable, NotFoundException, BadRequestException, Logger, Inject, forwardRef, OnModuleInit } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { ProjectEntity } from '../../database/entities/project.entity';
+import { eq, or, isNull, isNotNull, and, asc, desc, sql } from 'drizzle-orm';
+import { db } from '../../database/db';
+import { projects, tasks } from '../../database/schema';
 import { SandboxManager } from '@apex/orchestrator';
-import { ProjectsGateway } from './projects.gateway';
+import { projectsWsBroadcast } from './projects.ws';
 
-@Injectable()
-export class ProjectsService implements OnModuleInit {
-  private readonly logger = new Logger(ProjectsService.name);
+export type Project = typeof projects.$inferSelect & { threads?: (typeof tasks.$inferSelect)[] };
+
+class ProjectsService {
   private sandboxManager: SandboxManager | null = null;
 
-  constructor(
-    @InjectRepository(ProjectEntity)
-    private readonly repo: Repository<ProjectEntity>,
-    @Inject(forwardRef(() => ProjectsGateway))
-    private readonly gateway: ProjectsGateway,
-  ) {}
-
-  async onModuleInit() {
+  async init() {
     await this.initSandboxManager();
   }
 
@@ -27,7 +19,7 @@ export class ProjectsService implements OnModuleInit {
     const provider = (process.env.SANDBOX_PROVIDER as 'daytona' | 'docker' | 'apple-container') || 'daytona';
 
     if (provider === 'daytona' && !hasAnthropicKey && !hasDaytonaKey) {
-      this.logger.warn('SandboxManager skipped – no API keys configured (set them in Settings)');
+      console.log('[projects] SandboxManager skipped – no API keys configured');
       this.sandboxManager = null;
       return;
     }
@@ -39,17 +31,15 @@ export class ProjectsService implements OnModuleInit {
         provider,
       });
       await this.sandboxManager.initialize();
-      this.logger.log(
-        `SandboxManager initialized (provider=${provider}, anthropicKey=${hasAnthropicKey}, daytonaKey=${hasDaytonaKey})`,
-      );
+      console.log(`[projects] SandboxManager initialized (provider=${provider})`);
     } catch (err) {
-      this.logger.error(`SandboxManager init failed: ${err instanceof Error ? err.stack : err}`);
+      console.error(`[projects] SandboxManager init failed:`, err);
       this.sandboxManager = null;
     }
   }
 
   async reinitSandboxManager() {
-    this.logger.log('Re-initializing SandboxManager with updated settings...');
+    console.log('[projects] Re-initializing SandboxManager...');
     await this.initSandboxManager();
   }
 
@@ -59,34 +49,26 @@ export class ProjectsService implements OnModuleInit {
     return this.sandboxManager !== null;
   }
 
-  async reconcileSandboxStatus(projectId: string): Promise<ProjectEntity> {
+  async reconcileSandboxStatus(projectId: string): Promise<Project> {
     const project = await this.findById(projectId);
     if (!project.sandboxId) return project;
     if (!(await this.ensureSandboxManager())) return project;
 
     try {
       const actualState = await this.sandboxManager!.getSandboxState(project.sandboxId);
-      this.logger.log(`Sandbox ${project.sandboxId} actual state: ${actualState}, DB status: ${project.status}`);
-
       const stateToStatus: Record<string, string> = {
-        started: 'running',
-        stopped: 'stopped',
-        starting: 'starting',
-        stopping: 'stopped',
-        error: 'error',
-        archived: 'stopped',
+        started: 'running', stopped: 'stopped', starting: 'starting',
+        stopping: 'stopped', error: 'error', archived: 'stopped',
       };
       const expectedStatus = stateToStatus[actualState];
-
       if (expectedStatus && expectedStatus !== project.status && project.status !== 'creating') {
-        this.logger.log(`Reconciling project ${projectId}: ${project.status} → ${expectedStatus}`);
-        await this.repo.update(projectId, { status: expectedStatus, statusError: null });
+        await db.update(projects).set({ status: expectedStatus, statusError: null }).where(eq(projects.id, projectId));
         const updated = await this.findById(projectId);
-        this.gateway.notifyUpdated(updated);
+        projectsWsBroadcast('project_updated', updated);
         return updated;
       }
     } catch (err) {
-      this.logger.warn(`Failed to reconcile sandbox status for ${projectId}: ${err}`);
+      console.warn(`[projects] Failed to reconcile sandbox status for ${projectId}:`, err);
     }
     return project;
   }
@@ -95,51 +77,42 @@ export class ProjectsService implements OnModuleInit {
     const project = await this.findById(projectId);
     if (project.status !== 'stopped' && project.status !== 'error') return;
 
-    if (!(await this.ensureSandboxManager())) {
-      this.logger.warn(`Cannot start/provision sandbox for ${projectId} – no SandboxManager`);
-      return;
-    }
+    if (!(await this.ensureSandboxManager())) return;
 
     if (project.sandboxId) {
       try {
-        this.logger.log(`Starting stopped sandbox ${project.sandboxId} for project ${projectId}...`);
-        await this.repo.update(projectId, { status: 'starting' });
-        this.gateway.notifyUpdated(await this.findById(projectId));
-
+        await db.update(projects).set({ status: 'starting' }).where(eq(projects.id, projectId));
+        projectsWsBroadcast('project_updated', await this.findById(projectId));
         await this.sandboxManager!.reconnectSandbox(project.sandboxId, project.name);
-
-        await this.repo.update(projectId, { status: 'running', statusError: null });
-        this.logger.log(`Sandbox ${project.sandboxId} started successfully`);
-        this.gateway.notifyUpdated(await this.findById(projectId));
+        await db.update(projects).set({ status: 'running', statusError: null }).where(eq(projects.id, projectId));
+        projectsWsBroadcast('project_updated', await this.findById(projectId));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        this.logger.error(`Failed to start sandbox ${project.sandboxId}: ${message}`);
-        await this.repo.update(projectId, { status: 'error', statusError: message });
-        this.gateway.notifyUpdated(await this.findById(projectId));
+        await db.update(projects).set({ status: 'error', statusError: message }).where(eq(projects.id, projectId));
+        projectsWsBroadcast('project_updated', await this.findById(projectId));
       }
     } else {
-      this.logger.log(`No sandboxId for project ${projectId} – provisioning new sandbox`);
-      await this.repo.update(projectId, { status: 'creating' });
-      this.gateway.notifyUpdated(await this.findById(projectId));
+      await db.update(projects).set({ status: 'creating' }).where(eq(projects.id, projectId));
+      projectsWsBroadcast('project_updated', await this.findById(projectId));
       await this.provisionSandbox(projectId, project.sandboxSnapshot, project.name, project.gitRepo, project.agentType);
     }
   }
 
-  async findAllByUser(userId: string): Promise<ProjectEntity[]> {
-    return this.repo.find({
-      where: { userId },
-      order: { createdAt: 'DESC' },
-      relations: ['threads'],
-    });
+  async findAllByUser(userId: string): Promise<Project[]> {
+    return db.query.projects.findMany({
+      where: and(eq(projects.userId, userId), isNull(projects.deletedAt)),
+      orderBy: [desc(projects.createdAt)],
+      with: { threads: true },
+    }) as Promise<Project[]>;
   }
 
-  async findById(id: string): Promise<ProjectEntity> {
-    const project = await this.repo.findOne({
-      where: { id },
-      relations: ['threads'],
+  async findById(id: string): Promise<Project> {
+    const project = await db.query.projects.findFirst({
+      where: and(eq(projects.id, id), isNull(projects.deletedAt)),
+      with: { threads: true },
     });
-    if (!project) throw new NotFoundException(`Project ${id} not found`);
-    return project;
+    if (!project) throw new Error(`Project ${id} not found`);
+    return project as Project;
   }
 
   async create(
@@ -152,8 +125,10 @@ export class ProjectsService implements OnModuleInit {
       gitRepo?: string;
       agentConfig?: Record<string, unknown>;
     },
-  ): Promise<ProjectEntity> {
-    const project = this.repo.create({
+  ): Promise<Project> {
+    const id = crypto.randomUUID();
+    await db.insert(projects).values({
+      id,
       userId,
       name: data.name,
       description: data.description || '',
@@ -163,146 +138,86 @@ export class ProjectsService implements OnModuleInit {
       agentConfig: data.agentConfig || null,
       status: 'creating',
     });
-    const saved = await this.repo.save(project);
-    this.gateway.notifyCreated(saved);
+    const saved = await this.findById(id);
+    projectsWsBroadcast('project_created', saved);
 
-    // Asynchronously create the Daytona sandbox
     this.provisionSandbox(saved.id, saved.sandboxSnapshot, saved.name, saved.gitRepo, saved.agentType).catch((err) => {
-      this.logger.error(`Failed to provision sandbox for project ${saved.id}: ${err}`);
+      console.error(`[projects] Failed to provision sandbox for project ${saved.id}:`, err);
     });
 
     return saved;
   }
 
-  async update(
-    id: string,
-    data: Partial<
-      Pick<ProjectEntity, 'name' | 'description' | 'status' | 'agentConfig'>
-    >,
-  ): Promise<ProjectEntity> {
-    await this.repo.update(id, data as any);
+  async update(id: string, data: Partial<Pick<typeof projects.$inferSelect, 'name' | 'description' | 'status' | 'agentConfig'>>): Promise<Project> {
+    await db.update(projects).set({ ...data, updatedAt: new Date().toISOString() } as any).where(eq(projects.id, id));
     const updated = await this.findById(id);
-    this.gateway.notifyUpdated(updated);
+    projectsWsBroadcast('project_updated', updated);
     return updated;
   }
 
   async remove(id: string): Promise<void> {
     const project = await this.findById(id);
-    const projectId = project.id;
     const sandboxId = project.sandboxId;
 
-    // Collect sandbox IDs from the entire fork family (including soft-deleted
-    // members) so we can clean up orphaned sandboxes after a successful delete.
     let familySandboxIds: string[] = [];
     try {
       const family = await this.findForkFamily(id);
-      familySandboxIds = family
-        .filter((m) => m.sandboxId && m.id !== id)
-        .map((m) => m.sandboxId!);
-    } catch {
-      // project may not belong to a fork family
-    }
+      familySandboxIds = family.filter((m) => m.sandboxId && m.id !== id).map((m) => m.sandboxId!);
+    } catch { /* not part of a fork family */ }
 
     if (sandboxId && this.sandboxManager) {
       const deleted = await this.deleteOrStopSandbox(sandboxId);
-
       if (deleted) {
-        // Sandbox is gone — hard-delete the project record.
-        await this.repo.remove(project);
+        await db.delete(projects).where(eq(projects.id, id));
       } else {
-        // Sandbox couldn't be deleted (e.g. it still has fork children).
-        // Soft-delete the project so the fork family query can still
-        // discover this sandbox for cleanup when the children are removed.
-        await this.repo.softRemove(project);
+        await db.update(projects).set({ deletedAt: new Date().toISOString() }).where(eq(projects.id, id));
       }
     } else {
-      // No sandbox to worry about — hard-delete.
-      await this.repo.remove(project);
+      await db.delete(projects).where(eq(projects.id, id));
     }
 
-    this.gateway.notifyDeleted(projectId);
+    projectsWsBroadcast('project_deleted', { id });
 
-    // After a successful sandbox deletion, ancestor/sibling sandboxes that
-    // previously couldn't be removed may now be eligible.
     if (sandboxId && this.sandboxManager && familySandboxIds.length > 0) {
-      this.cleanupOrphanedFamilySandboxes(familySandboxIds).catch((err) => {
-        this.logger.warn(`Error cleaning up orphaned family sandboxes: ${err}`);
-      });
+      this.cleanupOrphanedFamilySandboxes(familySandboxIds).catch(() => {});
     }
   }
 
-  /**
-   * Try to delete a sandbox; if that fails (e.g. it still has fork children),
-   * stop it instead.  Returns `true` when the sandbox was fully deleted.
-   */
   private async deleteOrStopSandbox(sandboxId: string): Promise<boolean> {
     if (!this.sandboxManager) return false;
     try {
       await this.sandboxManager.deleteSandbox(sandboxId);
       return true;
-    } catch (err) {
-      this.logger.warn(
-        `Failed to delete sandbox ${sandboxId}, attempting stop: ${err}`,
-      );
-      try {
-        await this.sandboxManager.stopSandbox(sandboxId);
-      } catch (stopErr) {
-        this.logger.warn(`Failed to stop sandbox ${sandboxId}: ${stopErr}`);
-      }
+    } catch {
+      try { await this.sandboxManager.stopSandbox(sandboxId); } catch { /* ignore */ }
       return false;
     }
   }
 
-  /**
-   * For each sandbox ID, check whether any *live* (non-deleted) project still
-   * references it.  Orphaned sandboxes are deleted (or stopped as fallback),
-   * and their soft-deleted project records are hard-deleted.
-   */
-  private async cleanupOrphanedFamilySandboxes(
-    sandboxIds: string[],
-  ): Promise<void> {
+  private async cleanupOrphanedFamilySandboxes(sandboxIds: string[]): Promise<void> {
     if (!this.sandboxManager) return;
-
     for (const sbId of sandboxIds) {
-      // Only live projects count — soft-deleted ones are already "gone".
-      const liveRefCount = await this.repo.count({
-        where: { sandboxId: sbId },
-      });
-      if (liveRefCount > 0) continue;
-
-      this.logger.log(`Cleaning up orphaned sandbox ${sbId}`);
+      const liveCount = await db.select({ count: sql<number>`count(*)` }).from(projects).where(and(eq(projects.sandboxId, sbId), isNull(projects.deletedAt)));
+      if ((liveCount[0]?.count ?? 0) > 0) continue;
       const deleted = await this.deleteOrStopSandbox(sbId);
-
       if (deleted) {
-        // Hard-delete the soft-deleted project record that held this sandbox.
-        const ghost = await this.repo
-          .createQueryBuilder('p')
-          .withDeleted()
-          .where('p.sandboxId = :sbId', { sbId })
-          .andWhere('p.deletedAt IS NOT NULL')
-          .getOne();
-        if (ghost) {
-          await this.repo.remove(ghost);
-          this.logger.log(`Removed soft-deleted project ${ghost.id}`);
-        }
+        const ghost = await db.query.projects.findFirst({
+          where: and(eq(projects.sandboxId, sbId), isNotNull(projects.deletedAt)),
+        });
+        if (ghost) await db.delete(projects).where(eq(projects.id, ghost.id));
       }
     }
   }
 
-  async forkProject(
-    sourceProjectId: string,
-    branchName: string,
-  ): Promise<ProjectEntity> {
+  async forkProject(sourceProjectId: string, branchName: string): Promise<Project> {
     const source = await this.findById(sourceProjectId);
+    if (!source.sandboxId) throw new Error('Source project has no sandbox — cannot fork');
 
-    if (!source.sandboxId) {
-      throw new BadRequestException('Source project has no sandbox — cannot fork');
-    }
-
-    // Resolve root: if source is itself a fork, use its root; otherwise source IS the root
     const rootId = source.forkedFromId ?? source.id;
+    const id = crypto.randomUUID();
 
-    const project = this.repo.create({
+    await db.insert(projects).values({
+      id,
       userId: source.userId,
       name: `${source.name} (${branchName})`,
       description: source.description,
@@ -314,118 +229,76 @@ export class ProjectsService implements OnModuleInit {
       branchName,
       status: 'creating',
     });
-    const saved = await this.repo.save(project);
-    this.gateway.notifyCreated(saved);
+    const saved = await this.findById(id);
+    projectsWsBroadcast('project_created', saved);
 
-    // Resolve the root project's name for the sandbox directory path.
-    // The forked sandbox's filesystem uses the root's directory layout.
     const rootName = source.forkedFromId
       ? (await this.findById(source.forkedFromId)).name
       : source.name;
 
     this.provisionFork(saved.id, source.sandboxId, branchName, rootName).catch((err) => {
-      this.logger.error(`Failed to provision fork for project ${saved.id}: ${err}`);
+      console.error(`[projects] Failed to provision fork for project ${saved.id}:`, err);
     });
 
     return saved;
   }
 
-  async findForkFamily(projectId: string): Promise<ProjectEntity[]> {
-    // Use withDeleted so we can resolve a soft-deleted root project.
-    const project = await this.repo.findOne({
-      withDeleted: true,
-      where: { id: projectId },
-    });
-    if (!project) throw new NotFoundException(`Project ${projectId} not found`);
+  async findForkFamily(projectId: string): Promise<Project[]> {
+    const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
+    if (!project) throw new Error(`Project ${projectId} not found`);
     const rootId = project.forkedFromId ?? project.id;
 
-    // Include soft-deleted projects so we can discover orphaned sandboxes
-    // whose project was removed but whose sandbox couldn't be deleted yet.
-    return this.repo.find({
-      withDeleted: true,
-      where: [
-        { id: rootId },
-        { forkedFromId: rootId },
-      ],
-      order: { createdAt: 'ASC' },
-      relations: ['threads'],
-    });
+    return db.query.projects.findMany({
+      where: or(eq(projects.id, rootId), eq(projects.forkedFromId, rootId)),
+      orderBy: [asc(projects.createdAt)],
+      with: { threads: true },
+    }) as Promise<Project[]>;
   }
 
   getSandboxManager(): SandboxManager | null {
     return this.sandboxManager;
   }
 
-  // ── Private ──────────────────────────────────────
-
   private async provisionSandbox(
-    projectId: string,
-    snapshot: string,
-    projectName?: string,
-    gitRepo?: string | null,
-    agentType?: string,
+    projectId: string, snapshot: string, projectName?: string,
+    gitRepo?: string | null, agentType?: string,
   ): Promise<void> {
     if (!(await this.ensureSandboxManager())) {
-      this.logger.warn('No SandboxManager – skipping sandbox creation (configure API keys in Settings)');
-      await this.repo.update(projectId, { status: 'stopped' });
-      const project = await this.findById(projectId);
-      this.gateway.notifyUpdated(project);
+      await db.update(projects).set({ status: 'stopped' }).where(eq(projects.id, projectId));
+      projectsWsBroadcast('project_updated', await this.findById(projectId));
       return;
     }
-
     try {
       const sandboxId = await this.sandboxManager!.createSandbox(snapshot, projectName, gitRepo || undefined, agentType);
-      await this.repo.update(projectId, {
-        sandboxId,
-        status: 'running',
-        statusError: null,
-      });
-      this.logger.log(`Sandbox ${sandboxId} provisioned for project ${projectId}`);
-      const project = await this.findById(projectId);
-      this.gateway.notifyUpdated(project);
+      await db.update(projects).set({ sandboxId, status: 'running', statusError: null }).where(eq(projects.id, projectId));
+      projectsWsBroadcast('project_updated', await this.findById(projectId));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await this.repo.update(projectId, { status: 'error', statusError: message });
-      const project = await this.findById(projectId);
-      this.gateway.notifyUpdated(project);
+      await db.update(projects).set({ status: 'error', statusError: message }).where(eq(projects.id, projectId));
+      projectsWsBroadcast('project_updated', await this.findById(projectId));
       throw err;
     }
   }
 
   private async provisionFork(
-    projectId: string,
-    sourceSandboxId: string,
-    branchName: string,
-    projectName?: string,
+    projectId: string, sourceSandboxId: string, branchName: string, projectName?: string,
   ): Promise<void> {
     if (!(await this.ensureSandboxManager())) {
-      this.logger.warn('No SandboxManager – skipping fork (configure API keys in Settings)');
-      await this.repo.update(projectId, { status: 'stopped' });
-      const project = await this.findById(projectId);
-      this.gateway.notifyUpdated(project);
+      await db.update(projects).set({ status: 'stopped' }).where(eq(projects.id, projectId));
+      projectsWsBroadcast('project_updated', await this.findById(projectId));
       return;
     }
-
     try {
-      const sandboxId = await this.sandboxManager!.forkSandbox(
-        sourceSandboxId,
-        branchName,
-        projectName,
-      );
-      await this.repo.update(projectId, {
-        sandboxId,
-        status: 'running',
-        statusError: null,
-      });
-      this.logger.log(`Forked sandbox ${sandboxId} provisioned for project ${projectId}`);
-      const project = await this.findById(projectId);
-      this.gateway.notifyUpdated(project);
+      const sandboxId = await this.sandboxManager!.forkSandbox(sourceSandboxId, branchName, projectName);
+      await db.update(projects).set({ sandboxId, status: 'running', statusError: null }).where(eq(projects.id, projectId));
+      projectsWsBroadcast('project_updated', await this.findById(projectId));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await this.repo.update(projectId, { status: 'error', statusError: message });
-      const project = await this.findById(projectId);
-      this.gateway.notifyUpdated(project);
+      await db.update(projects).set({ status: 'error', statusError: message }).where(eq(projects.id, projectId));
+      projectsWsBroadcast('project_updated', await this.findById(projectId));
       throw err;
     }
   }
 }
+
+export const projectsService = new ProjectsService();

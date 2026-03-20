@@ -1,6 +1,6 @@
-import { Controller, Get, Put, Body, Inject, forwardRef } from '@nestjs/common';
-import { SettingsService, type SettingSource } from './settings.service';
-import { ProjectsService } from '../projects/projects.service';
+import { Elysia } from 'elysia';
+import { settingsService, type SettingSource } from './settings.service';
+import { projectsService } from '../projects/projects.service';
 
 const SECRET_KEYS = new Set(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'DAYTONA_API_KEY', 'GITHUB_TOKEN']);
 
@@ -16,24 +16,14 @@ interface SettingResponse {
   source: SettingSource;
 }
 
-@Controller('settings')
-export class SettingsController {
-  constructor(
-    private readonly settingsService: SettingsService,
-    @Inject(forwardRef(() => ProjectsService))
-    private readonly projectsService: ProjectsService,
-  ) {}
-
-  @Get('visible')
-  getVisible(): { visible: boolean } {
+export const settingsRoutes = new Elysia({ prefix: '/api/settings' })
+  .get('/visible', () => {
     const env = process.env['SETTINGS_VISIBLE'];
     const visible = env === undefined || env === '' || env === 'true' || env === '1';
     return { visible };
-  }
-
-  @Get()
-  async getAll(): Promise<Record<string, SettingResponse>> {
-    const entries = await this.settingsService.getAllWithMeta();
+  })
+  .get('/', async () => {
+    const entries = await settingsService.getAllWithMeta();
     const result: Record<string, SettingResponse> = {};
     for (const [key, entry] of Object.entries(entries)) {
       result[key] = {
@@ -42,19 +32,17 @@ export class SettingsController {
       };
     }
     return result;
-  }
-
-  @Put()
-  async update(@Body() body: Record<string, string>): Promise<{ ok: boolean }> {
+  })
+  .put('/', async ({ body }) => {
+    const raw = body as Record<string, string>;
     const filtered: Record<string, string> = {};
-    for (const [key, value] of Object.entries(body)) {
+    for (const [key, value] of Object.entries(raw)) {
       if (value.includes('••••')) continue;
       filtered[key] = value;
     }
     if (Object.keys(filtered).length > 0) {
-      await this.settingsService.setAll(filtered);
-      await this.projectsService.reinitSandboxManager();
+      await settingsService.setAll(filtered);
+      await projectsService.reinitSandboxManager();
     }
     return { ok: true };
-  }
-}
+  });

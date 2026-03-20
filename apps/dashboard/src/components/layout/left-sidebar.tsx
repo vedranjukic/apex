@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import type { Socket } from 'socket.io-client';
+import type { ReconnectingWebSocket } from '../../lib/reconnecting-ws';
 import { ActivityBar, type ActivityCategory } from './activity-bar';
 import { SidePanel } from './side-panel';
 import { usePanelsStore } from '../../stores/panels-store';
@@ -18,7 +18,7 @@ interface LeftSidebarProps {
     excludePattern?: string;
   }) => void;
   readFile: (path: string) => void;
-  socket: { current: Socket | null };
+  socket: { current: ReconnectingWebSocket | null };
   sendPrompt: (threadId: string, prompt: string, mode?: string, model?: string) => void;
   onAnalyzeGitignore?: (prompt: string) => Promise<void>;
 }

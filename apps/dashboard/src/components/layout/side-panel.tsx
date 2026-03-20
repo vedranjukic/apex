@@ -1,5 +1,5 @@
 import { Settings, Palette, Check, RefreshCw } from 'lucide-react';
-import type { Socket } from 'socket.io-client';
+import type { ReconnectingWebSocket } from '../../lib/reconnecting-ws';
 import type { ActivityCategory } from './activity-bar';
 import { FileTree, type FileTreeActions } from '../explorer/file-tree';
 import { SearchPanel } from '../search/search-panel';
@@ -22,7 +22,7 @@ interface SidePanelProps {
     excludePattern?: string;
   }) => void;
   readFile: (path: string) => void;
-  socket: { current: Socket | null };
+  socket: { current: ReconnectingWebSocket | null };
   sendPrompt: (threadId: string, prompt: string, mode?: string, model?: string) => void;
   onAnalyzeGitignore?: (prompt: string) => Promise<void>;
 }

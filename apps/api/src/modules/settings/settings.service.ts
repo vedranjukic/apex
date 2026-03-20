@@ -1,7 +1,6 @@
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { SettingEntity } from './setting.entity';
+import { eq } from 'drizzle-orm';
+import { db } from '../../database/db';
+import { settings } from '../../database/schema';
 
 export const ALLOWED_KEYS = new Set([
   'ANTHROPIC_API_KEY',
@@ -19,26 +18,20 @@ export interface SettingEntry {
   source: SettingSource;
 }
 
-@Injectable()
-export class SettingsService implements OnModuleInit {
-  private readonly logger = new Logger(SettingsService.name);
+class SettingsService {
   private readonly envSnapshot: Record<string, string> = {};
 
-  constructor(
-    @InjectRepository(SettingEntity)
-    private readonly repo: Repository<SettingEntity>,
-  ) {
+  constructor() {
     for (const key of ALLOWED_KEYS) {
       const v = process.env[key];
       if (v) this.envSnapshot[key] = v;
     }
   }
 
-  async onModuleInit() {
+  async init() {
     await this.applyToEnv();
   }
 
-  /** Return effective value + source for every allowed key. */
   async getAllWithMeta(): Promise<Record<string, SettingEntry>> {
     const dbValues = await this.getDbValues();
     const result: Record<string, SettingEntry> = {};
@@ -55,9 +48,8 @@ export class SettingsService implements OnModuleInit {
     return result;
   }
 
-  /** Return only DB-stored values. */
   async getDbValues(): Promise<Record<string, string>> {
-    const rows = await this.repo.find();
+    const rows = await db.select().from(settings);
     const result: Record<string, string> = {};
     for (const row of rows) {
       if (ALLOWED_KEYS.has(row.key) && row.value) {
@@ -69,25 +61,26 @@ export class SettingsService implements OnModuleInit {
 
   async get(key: string): Promise<string | null> {
     if (!ALLOWED_KEYS.has(key)) return null;
-    const row = await this.repo.findOneBy({ key });
+    const row = await db.query.settings.findFirst({ where: eq(settings.key, key) });
     if (row?.value) return row.value;
     return this.envSnapshot[key] ?? null;
   }
 
-  /** Save settings. Empty values delete the DB row so the env var fallback is restored. */
-  async setAll(settings: Record<string, string>): Promise<void> {
-    for (const [key, value] of Object.entries(settings)) {
+  async setAll(vals: Record<string, string>): Promise<void> {
+    for (const [key, value] of Object.entries(vals)) {
       if (!ALLOWED_KEYS.has(key)) continue;
       if (value) {
-        await this.repo.upsert({ key, value }, ['key']);
+        await db.insert(settings).values({ key, value }).onConflictDoUpdate({
+          target: settings.key,
+          set: { value, updatedAt: new Date().toISOString() },
+        });
       } else {
-        await this.repo.delete({ key });
+        await db.delete(settings).where(eq(settings.key, key));
       }
     }
     await this.applyToEnv();
   }
 
-  /** Apply effective values (DB overrides env) to process.env. */
   async applyToEnv(): Promise<void> {
     const dbValues = await this.getDbValues();
     let applied = 0;
@@ -101,7 +94,9 @@ export class SettingsService implements OnModuleInit {
       }
     }
     if (applied > 0) {
-      this.logger.log(`Applied ${applied} effective setting(s) to process.env`);
+      console.log(`[settings] Applied ${applied} effective setting(s) to process.env`);
     }
   }
 }
+
+export const settingsService = new SettingsService();

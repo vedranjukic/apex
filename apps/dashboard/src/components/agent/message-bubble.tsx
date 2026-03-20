@@ -6,7 +6,7 @@ import type { Message, ContentBlock } from '../../api/client';
 import { ToolUseBlock, BashGroupBlock, TransientSearchBlock, normalizeTool, type BashItem } from './tool-use-block';
 import { PlanBlock } from './plan-block';
 import { MarkdownBlock } from './markdown-block';
-import { usePlanStore, extractTitle, extractPlanBody, isPlanContent, BUILD_PROMPT_PREFIX, PLAN_BLOCK_REGEX, PLAN_BLOCK_START } from '../../stores/plan-store';
+import { usePlanStore, extractTitle, extractPlanBody, isPlanContent, BUILD_PROMPT_PREFIX, PLAN_BLOCK_START } from '../../stores/plan-store';
 import { useThreadsStore } from '../../stores/tasks-store';
 import { formatTokenCount } from '../../lib/model-context';
 
@@ -509,7 +509,7 @@ function AgentGroup({
   const derivedPlan = useMemo((): DerivedPlan | null => {
     if (isAfterBuild) return null;
 
-    if (storePlan && isPlanContent(storePlan.content)) {
+    if (storePlan) {
       return {
         filename: storePlan.filename,
         content: storePlan.content,
@@ -644,9 +644,9 @@ function AgentGroup({
                 .filter((b): b is ContentBlock & { text: string } => b.type === 'text' && !!b.text)
                 .map((b) => b.text)
                 .join('\n\n');
-              // Only render plan via fallback if this group can claim it
-              const canShowPlan = claimPlan(groupKey);
-              const fallbackPlanBody = canShowPlan && hasPlanBlock(fullText) ? extractPlanFromText(fullText) : null;
+              const hasFallbackPlan = hasPlanBlock(fullText);
+              const canShowPlan = hasFallbackPlan && claimPlan(groupKey);
+              const fallbackPlanBody = canShowPlan ? extractPlanFromText(fullText) : null;
 
               let planRendered = false;
               return groupConsecutiveBash(allBlocks, blockReceivedAt, messages).map((item, i) => {

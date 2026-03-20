@@ -1,57 +1,46 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { UserEntity } from '../../database/entities/user.entity';
+import { eq } from 'drizzle-orm';
+import { db } from '../../database/db';
+import { users } from '../../database/schema';
 
-/** Well-known default dev user – used until OAuth is wired up. */
 const DEFAULT_USER_ID = '00000000-0000-0000-0000-000000000001';
 
-@Injectable()
-export class UsersService implements OnModuleInit {
-  constructor(
-    @InjectRepository(UserEntity)
-    private readonly repo: Repository<UserEntity>,
-  ) {}
-
-  /** Seed the default dev user on first start. */
-  async onModuleInit() {
-    const exists = await this.repo.findOneBy({ id: DEFAULT_USER_ID });
-    if (!exists) {
-      await this.repo.save(
-        this.repo.create({
-          id: DEFAULT_USER_ID,
-          email: 'dev@apex.local',
-          name: 'Developer',
-          avatarUrl: null,
-          oauthProvider: null,
-          oauthProviderId: null,
-        }),
-      );
+class UsersService {
+  async init() {
+    const existing = await db.query.users.findFirst({ where: eq(users.id, DEFAULT_USER_ID) });
+    if (!existing) {
+      await db.insert(users).values({
+        id: DEFAULT_USER_ID,
+        email: 'dev@apex.local',
+        name: 'Developer',
+        avatarUrl: null,
+        oauthProvider: null,
+        oauthProviderId: null,
+      });
     }
   }
 
-  /** For now, always return the default dev user. */
-  async getCurrentUser(): Promise<UserEntity> {
-    return this.repo.findOneByOrFail({ id: DEFAULT_USER_ID });
+  async getCurrentUser() {
+    const user = await db.query.users.findFirst({ where: eq(users.id, DEFAULT_USER_ID) });
+    if (!user) throw new Error('Default user not found');
+    return user;
   }
 
-  async findById(id: string): Promise<UserEntity | null> {
-    return this.repo.findOneBy({ id });
+  async findById(id: string) {
+    return db.query.users.findFirst({ where: eq(users.id, id) }) ?? null;
   }
 
-  async findByEmail(email: string): Promise<UserEntity | null> {
-    return this.repo.findOneBy({ email });
+  async findByEmail(email: string) {
+    return db.query.users.findFirst({ where: eq(users.email, email) }) ?? null;
   }
 
-  async update(
-    id: string,
-    data: Partial<Pick<UserEntity, 'name' | 'avatarUrl'>>,
-  ): Promise<UserEntity> {
-    await this.repo.update(id, data);
-    return this.repo.findOneByOrFail({ id });
+  async update(id: string, data: Partial<Pick<typeof users.$inferSelect, 'name' | 'avatarUrl'>>) {
+    await db.update(users).set(data).where(eq(users.id, id));
+    return this.findById(id);
   }
 
   getDefaultUserId(): string {
     return DEFAULT_USER_ID;
   }
 }
+
+export const usersService = new UsersService();

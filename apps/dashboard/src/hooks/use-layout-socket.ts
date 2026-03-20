@@ -1,13 +1,11 @@
 import { useEffect, useCallback, useRef, useState } from 'react';
-import type { Socket } from 'socket.io-client';
+import type { ReconnectingWebSocket } from '../lib/reconnecting-ws';
 import { useTerminalStore } from '../stores/terminal-store';
 import { useThreadsStore } from '../stores/tasks-store';
 import { usePanelsStore } from '../stores/panels-store';
 import { useEditorStore, type OpenFile } from '../stores/editor-store';
 
-/** Debounce delay for layout saves (ms) */
 const SAVE_DEBOUNCE_MS = 500;
-/** Max time to wait for layout data before giving up (ms) */
 const LOAD_TIMEOUT_MS = 3000;
 const LOCAL_STORAGE_PREFIX = 'apex-layout:';
 
@@ -28,30 +26,19 @@ interface LayoutData {
 }
 
 function saveLocalLayout(projectId: string, data: LayoutData): void {
-  try {
-    localStorage.setItem(LOCAL_STORAGE_PREFIX + projectId, JSON.stringify(data));
-  } catch { /* quota exceeded or unavailable — ignore */ }
+  try { localStorage.setItem(LOCAL_STORAGE_PREFIX + projectId, JSON.stringify(data)); } catch { /* ignore */ }
 }
 
 function loadLocalLayout(projectId: string): LayoutData | null {
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_PREFIX + projectId);
     return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-/**
- * Hook that persists and restores layout state to/from the sandbox.
- * Shares the Socket.io connection from useAgentSocket.
- *
- * Returns `layoutReady` — false while the saved layout is being fetched,
- * true once layout has been applied (or timed out / no data).
- */
 export function useLayoutSocket(
   projectId: string | undefined,
-  socketRef: { current: Socket | null },
+  socketRef: { current: ReconnectingWebSocket | null },
 ) {
   const applyTerminalLayout = useTerminalStore((s) => s.applyLayout);
   const setActiveThread = useThreadsStore((s) => s.setActiveThread);
@@ -66,112 +53,61 @@ export function useLayoutSocket(
   const applyLayout = useCallback(
     (layout: LayoutData) => {
       applyTerminalLayout(layout);
-      if (layout.activeThreadId) {
-        setActiveThread(layout.activeThreadId);
-      }
-      if (layout.leftSidebarOpen !== undefined) {
-        setLeftSidebar(layout.leftSidebarOpen);
-      }
-      if (layout.rightSidebarOpen !== undefined) {
-        setRightSidebar(layout.rightSidebarOpen);
-      }
+      if (layout.activeThreadId) setActiveThread(layout.activeThreadId);
+      if (layout.leftSidebarOpen !== undefined) setLeftSidebar(layout.leftSidebarOpen);
+      if (layout.rightSidebarOpen !== undefined) setRightSidebar(layout.rightSidebarOpen);
       if (layout.threadScrollOffsets) {
-        for (const [threadId, offset] of Object.entries(layout.threadScrollOffsets)) {
-          setThreadScrollOffset(threadId, offset);
-        }
+        for (const [threadId, offset] of Object.entries(layout.threadScrollOffsets)) setThreadScrollOffset(threadId, offset);
       } else if (layout.threadScrollOffset !== undefined && layout.activeThreadId) {
         setThreadScrollOffset(layout.activeThreadId, layout.threadScrollOffset);
       }
-      applyEditorLayout({
-        openFiles: layout.openFiles,
-        activeFilePath: layout.activeFilePath,
-        activeView: layout.activeView,
-        fileScrollOffsets: layout.fileScrollOffsets,
-      });
+      applyEditorLayout({ openFiles: layout.openFiles, activeFilePath: layout.activeFilePath, activeView: layout.activeView, fileScrollOffsets: layout.fileScrollOffsets });
     },
     [applyTerminalLayout, setActiveThread, setThreadScrollOffset, setLeftSidebar, setRightSidebar, applyEditorLayout],
   );
 
-  // ── Listen for layout_data from server, with localStorage fallback ──
   useEffect(() => {
-    const socket = socketRef.current;
+    const ws = socketRef.current;
     if (!projectId) return;
-
     layoutLoaded.current = false;
     setLayoutReady(false);
 
-    // Apply localStorage backup immediately so the UI is never blank
     const local = loadLocalLayout(projectId);
-    if (local) {
-      applyLayout(local);
-    }
+    if (local) applyLayout(local);
 
-    if (!socket) {
-      layoutLoaded.current = true;
-      setLayoutReady(true);
-      return;
-    }
+    if (!ws) { layoutLoaded.current = true; setLayoutReady(true); return; }
 
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const markReady = () => { layoutLoaded.current = true; setLayoutReady(true); if (timeoutId) { clearTimeout(timeoutId); timeoutId = null; } };
 
-    const markReady = () => {
-      layoutLoaded.current = true;
-      setLayoutReady(true);
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-    };
-
-    const onLayoutData = (data: { data: LayoutData | null }) => {
-      console.log('[ws] layout_data:', data);
-      if (data.data) {
-        applyLayout(data.data);
-      }
+    const onLayoutData = (data: any) => {
+      if (data.payload?.data) applyLayout(data.payload.data);
       markReady();
     };
 
-    socket.on('layout_data', onLayoutData);
-
+    ws.on('layout_data', onLayoutData);
     const absoluteTimeout = setTimeout(markReady, LOAD_TIMEOUT_MS + 1000);
 
-    const requestLayout = () => {
-      socket.emit('layout_load', { projectId });
-      timeoutId = setTimeout(markReady, LOAD_TIMEOUT_MS);
-    };
-
-    const onConnect = () => requestLayout();
-
-    if (socket.connected) {
-      requestLayout();
-    }
-    socket.on('connect', onConnect);
+    const requestLayout = () => { ws.send('layout_load', { projectId }); timeoutId = setTimeout(markReady, LOAD_TIMEOUT_MS); };
+    const onConnect = (status: string) => { if (status === 'connected') requestLayout(); };
+    if (ws.connected) requestLayout();
+    ws.onStatus(onConnect as any);
 
     return () => {
-      socket.off('layout_data', onLayoutData);
-      socket.off('connect', onConnect);
+      ws.off('layout_data', onLayoutData);
+      ws.offStatus(onConnect as any);
       if (timeoutId) clearTimeout(timeoutId);
       clearTimeout(absoluteTimeout);
       layoutLoaded.current = false;
     };
   }, [projectId, socketRef, applyLayout]);
 
-  // ── Save layout (debounced to server, immediate to localStorage) ──
   const saveLayout = useCallback(
     (layout: LayoutData) => {
       if (!projectId || !layoutLoaded.current) return;
-
       saveLocalLayout(projectId, layout);
-
-      if (debounceTimer.current) {
-        clearTimeout(debounceTimer.current);
-      }
-      debounceTimer.current = setTimeout(() => {
-        socketRef.current?.emit('layout_save', {
-          projectId,
-          layout,
-        });
-      }, SAVE_DEBOUNCE_MS);
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      debounceTimer.current = setTimeout(() => { socketRef.current?.send('layout_save', { projectId, layout }); }, SAVE_DEBOUNCE_MS);
     },
     [projectId, socketRef],
   );
@@ -182,72 +118,33 @@ export function useLayoutSocket(
     const panels = usePanelsStore.getState();
     const editor = useEditorStore.getState();
     return {
-      terminalPanelOpen: term.panelOpen,
-      terminalPanelHeight: term.panelHeight,
-      activeTerminalId: term.activeTerminalId,
-      portsTabVisible: term.portsTabVisible,
-      activeThreadId: threads.activeThreadId,
-      threadScrollOffsets: threads.threadScrollOffsets,
-      leftSidebarOpen: panels.leftSidebarOpen,
-      rightSidebarOpen: panels.rightSidebarOpen,
-      openFiles: editor.openFiles,
-      activeFilePath: editor.activeFilePath,
-      activeView: editor.activeView,
-      fileScrollOffsets: editor.fileScrollOffsets,
+      terminalPanelOpen: term.panelOpen, terminalPanelHeight: term.panelHeight,
+      activeTerminalId: term.activeTerminalId, portsTabVisible: term.portsTabVisible,
+      activeThreadId: threads.activeThreadId, threadScrollOffsets: threads.threadScrollOffsets,
+      leftSidebarOpen: panels.leftSidebarOpen, rightSidebarOpen: panels.rightSidebarOpen,
+      openFiles: editor.openFiles, activeFilePath: editor.activeFilePath,
+      activeView: editor.activeView, fileScrollOffsets: editor.fileScrollOffsets,
     };
   }, []);
 
-  // ── Auto-save whenever relevant store state changes ──
   useEffect(() => {
     const unsubTerminal = useTerminalStore.subscribe((state, prevState) => {
-      if (
-        state.panelOpen !== prevState.panelOpen ||
-        state.panelHeight !== prevState.panelHeight ||
-        state.activeTerminalId !== prevState.activeTerminalId ||
-        state.portsTabVisible !== prevState.portsTabVisible
-      ) {
+      if (state.panelOpen !== prevState.panelOpen || state.panelHeight !== prevState.panelHeight ||
+          state.activeTerminalId !== prevState.activeTerminalId || state.portsTabVisible !== prevState.portsTabVisible) {
         saveLayout(getLayoutSnapshot());
       }
     });
-
     const unsubThreads = useThreadsStore.subscribe((state, prevState) => {
-      if (
-        state.activeThreadId !== prevState.activeThreadId ||
-        state.threadScrollOffsets !== prevState.threadScrollOffsets
-      ) {
-        saveLayout(getLayoutSnapshot());
-      }
+      if (state.activeThreadId !== prevState.activeThreadId || state.threadScrollOffsets !== prevState.threadScrollOffsets) saveLayout(getLayoutSnapshot());
     });
-
     const unsubPanels = usePanelsStore.subscribe((state, prevState) => {
-      if (
-        state.leftSidebarOpen !== prevState.leftSidebarOpen ||
-        state.rightSidebarOpen !== prevState.rightSidebarOpen
-      ) {
-        saveLayout(getLayoutSnapshot());
-      }
+      if (state.leftSidebarOpen !== prevState.leftSidebarOpen || state.rightSidebarOpen !== prevState.rightSidebarOpen) saveLayout(getLayoutSnapshot());
     });
-
     const unsubEditor = useEditorStore.subscribe((state, prevState) => {
-      if (
-        state.openFiles !== prevState.openFiles ||
-        state.activeFilePath !== prevState.activeFilePath ||
-        state.activeView !== prevState.activeView ||
-        state.fileScrollOffsets !== prevState.fileScrollOffsets
-      ) {
-        saveLayout(getLayoutSnapshot());
-      }
+      if (state.openFiles !== prevState.openFiles || state.activeFilePath !== prevState.activeFilePath ||
+          state.activeView !== prevState.activeView || state.fileScrollOffsets !== prevState.fileScrollOffsets) saveLayout(getLayoutSnapshot());
     });
-
-    return () => {
-      unsubTerminal();
-      unsubThreads();
-      unsubPanels();
-      unsubEditor();
-      if (debounceTimer.current) {
-        clearTimeout(debounceTimer.current);
-      }
-    };
+    return () => { unsubTerminal(); unsubThreads(); unsubPanels(); unsubEditor(); if (debounceTimer.current) clearTimeout(debounceTimer.current); };
   }, [saveLayout, getLayoutSnapshot]);
 
   return { layoutReady };

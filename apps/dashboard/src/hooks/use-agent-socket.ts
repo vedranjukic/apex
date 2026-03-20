@@ -1,10 +1,10 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { io, Socket } from 'socket.io-client';
+import { ReconnectingWebSocket } from '../lib/reconnecting-ws';
 import { useThreadsStore } from '../stores/tasks-store';
 import { usePlanStore, isPlanContent } from '../stores/plan-store';
 
 export function useAgentSocket(projectId: string | undefined) {
-  const socketRef = useRef<Socket | null>(null);
+  const wsRef = useRef<ReconnectingWebSocket | null>(null);
   const addMessage = useThreadsStore((s) => s.addMessage);
   const updateThreadStatus = useThreadsStore((s) => s.updateThreadStatus);
   const setThreadSessionInfo = useThreadsStore((s) => s.setThreadSessionInfo);
@@ -13,51 +13,33 @@ export function useAgentSocket(projectId: string | undefined) {
   useEffect(() => {
     if (!projectId) return;
 
-    const socket = io('/ws/agent', {
-      path: '/ws/socket.io',
-      transports: ['polling', 'websocket'],
-      autoConnect: true,
-    });
+    const ws = new ReconnectingWebSocket('/ws/agent');
+    wsRef.current = ws;
 
-    socketRef.current = socket;
-
-    socket.on('connect', () => {
-      console.log('[ws] connected, subscribing to project', projectId);
-      socket.emit('subscribe_project', { projectId });
-    });
-
-    socket.on('subscribed', (data: any) => {
-      console.log('[ws] subscribed:', data);
-    });
-
-    socket.on('prompt_accepted', (data: any) => {
-      console.log('[ws] prompt accepted:', data);
-    });
-
-    socket.on('agent_message', (data: any) => {
-      if (import.meta.env.DEV) {
-        const msg = data.message;
-        console.log('[ws] agent_message:', msg?.type, { threadId: data.threadId, ...msg });
-        const content = msg?.message?.content ?? msg?.content;
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (block?.type === 'text' && block.text) {
-              console.log('[ws]   text:', block.text.slice(0, 300) + (block.text.length > 300 ? '...' : ''));
-            }
-            if (block?.type === 'tool_use') {
-              console.log('[ws]   tool_use:', block.name, block.input);
-            }
-            if (block?.type === 'tool_result') {
-              console.log('[ws]   tool_result:', block.tool_use_id, String(block.content ?? '').slice(0, 150));
-            }
-          }
-        }
+    ws.onStatus((status) => {
+      if (status === 'connected') {
+        console.log('[ws] connected, subscribing to project', projectId);
+        ws.send('subscribe_project', { projectId });
+      } else if (status === 'disconnected') {
+        console.log('[ws] disconnected');
       }
-      if (!data.message) return;
-      const msg = data.message;
+    });
+
+    ws.on('subscribed', (data) => {
+      console.log('[ws] subscribed:', data.payload);
+    });
+
+    ws.on('prompt_accepted', (data) => {
+      console.log('[ws] prompt accepted:', data.payload);
+    });
+
+    ws.on('agent_message', (data) => {
+      const msg = data.payload?.message;
+      const threadId = data.payload?.threadId;
+      if (!msg) return;
 
       if (msg.type === 'system' && msg.subtype === 'init') {
-        setThreadSessionInfo(data.threadId, {
+        setThreadSessionInfo(threadId, {
           model: msg.model,
           tools: msg.tools,
           mcpServers: msg.mcp_servers,
@@ -70,7 +52,7 @@ export function useAgentSocket(projectId: string | undefined) {
       if (msg.type === 'system' && msg.subtype === 'retry') {
         addMessage({
           id: crypto.randomUUID(),
-          taskId: data.threadId,
+          taskId: threadId,
           role: 'system',
           content: [{ type: 'text', text: msg.text || 'Agent stopped responding. Restarting…' }],
           metadata: null,
@@ -86,7 +68,7 @@ export function useAgentSocket(projectId: string | undefined) {
         if (hasToolResult) {
           addMessage({
             id: msg.uuid || crypto.randomUUID(),
-            taskId: data.threadId,
+            taskId: threadId,
             role: 'user',
             content: msg.message.content,
             metadata: null,
@@ -98,54 +80,41 @@ export function useAgentSocket(projectId: string | undefined) {
 
       if (msg.type === 'assistant' && msg.message?.content) {
         const planStore = usePlanStore.getState();
-        const activePlan = planStore.getPlanByThreadId(data.threadId);
-        if (planStore.isThreadPlan(data.threadId) && !activePlan?.isComplete) {
+        const activePlan = planStore.getPlanByThreadId(threadId);
+        if (planStore.isThreadPlan(threadId) && !activePlan?.isComplete) {
           const textParts: string[] = [];
           for (const block of msg.message.content) {
-            if (block.type === 'text' && block.text) {
-              textParts.push(block.text);
-            }
+            if (block.type === 'text' && block.text) textParts.push(block.text);
           }
           if (textParts.length > 0) {
-            const existing = planTextRef.current.get(data.threadId) || [];
+            const existing = planTextRef.current.get(threadId) || [];
             existing.push(...textParts);
-            planTextRef.current.set(data.threadId, existing);
-
+            planTextRef.current.set(threadId, existing);
             const fullContent = existing.join('\n\n');
-            if (activePlan) {
-              planStore.updatePlanContent(activePlan.id, fullContent);
-            } else {
-              planStore.createPlan(data.threadId, fullContent);
-            }
+            if (activePlan) planStore.updatePlanContent(activePlan.id, fullContent);
+            else planStore.createPlan(threadId, fullContent);
           }
         }
 
         addMessage({
           id: msg.uuid || crypto.randomUUID(),
-          taskId: data.threadId,
+          taskId: threadId,
           role: 'assistant',
           content: msg.message.content,
-          metadata: {
-            model: msg.message.model,
-            stopReason: msg.message.stop_reason,
-          },
+          metadata: { model: msg.message.model, stopReason: msg.message.stop_reason },
           createdAt: new Date().toISOString(),
           _receivedAt: Date.now(),
         } as any);
       } else if (msg.type === 'result') {
         addMessage({
           id: msg.uuid || crypto.randomUUID(),
-          taskId: data.threadId,
+          taskId: threadId,
           role: 'system',
           content: [],
           metadata: {
-            costUsd: msg.total_cost_usd,
-            durationMs: msg.duration_ms,
-            durationApiMs: msg.duration_api_ms,
-            numTurns: msg.num_turns,
-            isError: msg.is_error,
-            inputTokens: msg.usage?.input_tokens,
-            outputTokens: msg.usage?.output_tokens,
+            costUsd: msg.total_cost_usd, durationMs: msg.duration_ms, durationApiMs: msg.duration_api_ms,
+            numTurns: msg.num_turns, isError: msg.is_error,
+            inputTokens: msg.usage?.input_tokens, outputTokens: msg.usage?.output_tokens,
             cacheCreationInputTokens: msg.usage?.cache_creation_input_tokens,
             cacheReadInputTokens: msg.usage?.cache_read_input_tokens,
           },
@@ -153,83 +122,73 @@ export function useAgentSocket(projectId: string | undefined) {
         });
 
         const planStore = usePlanStore.getState();
-        if (planStore.isThreadPlan(data.threadId)) {
-          const plan = planStore.getPlanByThreadId(data.threadId);
+        if (planStore.isThreadPlan(threadId)) {
+          const plan = planStore.getPlanByThreadId(threadId);
           if (plan && !plan.isComplete) {
-            if (isPlanContent(plan.content)) {
+            const rawText = planTextRef.current.get(threadId)?.join('\n\n') || '';
+            if (isPlanContent(rawText) || isPlanContent(plan.content)) {
               planStore.completePlan(plan.id);
               const planData = { id: plan.id, title: plan.title, filename: plan.filename, content: plan.content };
-              useThreadsStore.getState().updateThread(data.threadId, { planData });
-              socket.emit('save_plan', { threadId: data.threadId, plan: planData });
+              useThreadsStore.getState().updateThread(threadId, { planData });
+              ws.send('save_plan', { threadId, plan: planData });
             } else {
-              planStore.removePlanByThreadId(data.threadId);
+              planStore.removePlanByThreadId(threadId);
             }
           }
         }
       }
     });
 
-    socket.on('agent_status', (data: any) => {
-      console.log('[ws] agent_status:', data);
-      updateThreadStatus(data.threadId, data.status === 'retrying' ? 'running' : data.status);
+    ws.on('agent_status', (data) => {
+      console.log('[ws] agent_status:', data.payload);
+      updateThreadStatus(data.payload.threadId, data.payload.status === 'retrying' ? 'running' : data.payload.status);
     });
 
-    socket.on('agent_error', (data: any) => {
-      console.error('[ws] agent_error:', data);
-      if (data.threadId) {
-        updateThreadStatus(data.threadId, 'error');
+    ws.on('agent_error', (data) => {
+      console.error('[ws] agent_error:', data.payload);
+      if (data.payload.threadId) {
+        updateThreadStatus(data.payload.threadId, 'error');
         addMessage({
           id: crypto.randomUUID(),
-          taskId: data.threadId,
+          taskId: data.payload.threadId,
           role: 'system',
-          content: [{ type: 'text', text: `Error: ${data.error}` }],
+          content: [{ type: 'text', text: `Error: ${data.payload.error}` }],
           metadata: null,
           createdAt: new Date().toISOString(),
         });
       }
     });
 
-    socket.on('disconnect', (reason) => {
-      console.log('[ws] disconnected:', reason);
-    });
-
-    socket.on('connect_error', (err) => {
-      console.error('[ws] connect_error:', err.message);
-    });
-
     return () => {
-      socket.disconnect();
-      socketRef.current = null;
+      ws.destroy();
+      wsRef.current = null;
     };
   }, [projectId, addMessage, updateThreadStatus, setThreadSessionInfo]);
 
   const sendPrompt = useCallback(
     (threadId: string, prompt: string, mode?: string, model?: string, agentType?: string) => {
-      console.log('[ws] emit send_prompt', threadId);
       if (mode === 'plan') {
         usePlanStore.getState().markThreadAsPlan(threadId);
         planTextRef.current.delete(threadId);
       }
-      socketRef.current?.emit('send_prompt', { threadId, prompt, mode, model, agentType });
+      wsRef.current?.send('send_prompt', { threadId, prompt, mode, model, agentType });
     },
     [],
   );
 
   const executeThread = useCallback(
     (threadId: string, mode?: string, model?: string, agentType?: string) => {
-      console.log('[ws] emit execute_thread', threadId, { mode, model, agentType });
       if (mode === 'plan') {
         usePlanStore.getState().markThreadAsPlan(threadId);
         planTextRef.current.delete(threadId);
       }
-      socketRef.current?.emit('execute_thread', { threadId, mode, model, agentType });
+      wsRef.current?.send('execute_thread', { threadId, mode, model, agentType });
     },
     [],
   );
 
   const sendUserAnswer = useCallback(
     (threadId: string, toolUseId: string, answer: string) => {
-      console.log('[ws] emit user_answer', threadId, toolUseId);
       addMessage({
         id: crypto.randomUUID(),
         taskId: threadId,
@@ -238,10 +197,10 @@ export function useAgentSocket(projectId: string | undefined) {
         metadata: null,
         createdAt: new Date().toISOString(),
       });
-      socketRef.current?.emit('user_answer', { threadId, toolUseId, answer });
+      wsRef.current?.send('user_answer', { threadId, toolUseId, answer });
     },
     [addMessage],
   );
 
-  return { sendPrompt, executeThread, sendUserAnswer, socket: socketRef };
+  return { sendPrompt, executeThread, sendUserAnswer, socket: wsRef };
 }

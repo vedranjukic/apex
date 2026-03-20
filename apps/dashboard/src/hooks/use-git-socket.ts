@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useRef } from 'react';
-import type { Socket } from 'socket.io-client';
+import type { ReconnectingWebSocket } from '../lib/reconnecting-ws';
 import { useGitStore, type GitStatusData, type GitBranchEntry } from '../stores/git-store';
 
 const POLL_INTERVAL_MS = 5_000;
@@ -19,7 +19,7 @@ export interface GitActions {
 
 export function useGitSocket(
   projectId: string | undefined,
-  socketRef: { current: Socket | null },
+  socketRef: { current: ReconnectingWebSocket | null },
 ): GitActions {
   const setStatus = useGitStore((s) => s.setStatus);
   const setBranches = useGitStore((s) => s.setBranches);
@@ -30,147 +30,56 @@ export function useGitSocket(
   const intervalRef = useRef<ReturnType<typeof setInterval>>();
 
   useEffect(() => {
-    const socket = socketRef.current;
-    if (!projectId || !socket) return;
+    const ws = socketRef.current;
+    if (!projectId || !ws) return;
 
-    const onGitStatusResult = (data: GitStatusData & { error?: string }) => {
-      if (data.error) {
-        console.warn('[ws] git_status_result error:', data.error);
-      }
-      setStatus(data);
+    const onGitStatusResult = (data: any) => {
+      const d = data.payload;
+      if (d.error) console.warn('[ws] git_status_result error:', d.error);
+      setStatus(d);
     };
-
-    const onGitOpResult = (data: { ok: boolean; op?: string; error?: string }) => {
-      if (!data.ok) {
-        console.error('[ws] git_op_result error:', data.error);
-      }
+    const onGitOpResult = (data: any) => {
+      const d = data.payload;
+      if (!d.ok) console.error('[ws] git_op_result error:', d.error);
       useGitStore.setState({ optimisticUntil: 0 });
       setLoading(false);
     };
-
-    const onGitBranchesResult = (data: { branches: GitBranchEntry[]; error?: string }) => {
-      if (data.error) {
-        console.warn('[ws] git_branches_result error:', data.error);
-      }
-      setBranches(data.branches ?? []);
+    const onGitBranchesResult = (data: any) => {
+      const d = data.payload;
+      if (d.error) console.warn('[ws] git_branches_result error:', d.error);
+      setBranches(d.branches ?? []);
     };
 
-    socket.on('git_status_result', onGitStatusResult);
-    socket.on('git_op_result', onGitOpResult);
-    socket.on('git_branches_result', onGitBranchesResult);
+    ws.on('git_status_result', onGitStatusResult);
+    ws.on('git_op_result', onGitOpResult);
+    ws.on('git_branches_result', onGitBranchesResult);
 
-    const poll = () => {
-      if (socket.connected && boundProjectId.current) {
-        socket.emit('git_status', { projectId: boundProjectId.current });
-      }
-    };
-
-    const onConnect = () => {
-      setTimeout(poll, 1000);
-    };
-
-    if (socket.connected) {
-      setTimeout(poll, 1000);
-    }
-    socket.on('connect', onConnect);
-
+    const poll = () => { if (ws.connected && boundProjectId.current) ws.send('git_status', { projectId: boundProjectId.current }); };
+    const onConnect = (status: string) => { if (status === 'connected') setTimeout(poll, 1000); };
+    if (ws.connected) setTimeout(poll, 1000);
+    ws.onStatus(onConnect as any);
     intervalRef.current = setInterval(poll, POLL_INTERVAL_MS);
 
     return () => {
-      socket.off('git_status_result', onGitStatusResult);
-      socket.off('git_op_result', onGitOpResult);
-      socket.off('git_branches_result', onGitBranchesResult);
-      socket.off('connect', onConnect);
+      ws.off('git_status_result', onGitStatusResult);
+      ws.off('git_op_result', onGitOpResult);
+      ws.off('git_branches_result', onGitBranchesResult);
+      ws.offStatus(onConnect as any);
       clearInterval(intervalRef.current);
       reset();
     };
   }, [projectId, socketRef, setStatus, setBranches, setLoading, reset]);
 
-  const requestStatus = useCallback(() => {
-    const socket = socketRef.current;
-    if (!socket?.connected || !boundProjectId.current) return;
-    socket.emit('git_status', { projectId: boundProjectId.current });
-  }, [socketRef]);
-
-  const stage = useCallback(
-    (paths: string[]) => {
-      const socket = socketRef.current;
-      if (!socket?.connected || !boundProjectId.current) return;
-      setLoading(true);
-      socket.emit('git_stage', { projectId: boundProjectId.current, paths });
-    },
-    [socketRef, setLoading],
-  );
-
-  const unstage = useCallback(
-    (paths: string[]) => {
-      const socket = socketRef.current;
-      if (!socket?.connected || !boundProjectId.current) return;
-      setLoading(true);
-      socket.emit('git_unstage', { projectId: boundProjectId.current, paths });
-    },
-    [socketRef, setLoading],
-  );
-
-  const discard = useCallback(
-    (paths: string[]) => {
-      const socket = socketRef.current;
-      if (!socket?.connected || !boundProjectId.current) return;
-      setLoading(true);
-      socket.emit('git_discard', { projectId: boundProjectId.current, paths });
-    },
-    [socketRef, setLoading],
-  );
-
-  const commit = useCallback(
-    (message: string, stageAll?: boolean) => {
-      const socket = socketRef.current;
-      if (!socket?.connected || !boundProjectId.current) return;
-      setLoading(true);
-      socket.emit('git_commit', { projectId: boundProjectId.current, message, stageAll: !!stageAll });
-    },
-    [socketRef, setLoading],
-  );
-
-  const push = useCallback(() => {
-    const socket = socketRef.current;
-    if (!socket?.connected || !boundProjectId.current) return;
-    setLoading(true);
-    socket.emit('git_push', { projectId: boundProjectId.current });
-  }, [socketRef, setLoading]);
-
-  const pull = useCallback(() => {
-    const socket = socketRef.current;
-    if (!socket?.connected || !boundProjectId.current) return;
-    setLoading(true);
-    socket.emit('git_pull', { projectId: boundProjectId.current });
-  }, [socketRef, setLoading]);
-
-  const listBranches = useCallback(() => {
-    const socket = socketRef.current;
-    if (!socket?.connected || !boundProjectId.current) return;
-    socket.emit('git_branches', { projectId: boundProjectId.current });
-  }, [socketRef]);
-
-  const createBranch = useCallback(
-    (name: string, startPoint?: string) => {
-      const socket = socketRef.current;
-      if (!socket?.connected || !boundProjectId.current) return;
-      setLoading(true);
-      socket.emit('git_create_branch', { projectId: boundProjectId.current, name, startPoint });
-    },
-    [socketRef, setLoading],
-  );
-
-  const checkout = useCallback(
-    (ref: string) => {
-      const socket = socketRef.current;
-      if (!socket?.connected || !boundProjectId.current) return;
-      setLoading(true);
-      socket.emit('git_checkout', { projectId: boundProjectId.current, ref });
-    },
-    [socketRef, setLoading],
-  );
+  const requestStatus = useCallback(() => { if (socketRef.current?.connected && boundProjectId.current) socketRef.current.send('git_status', { projectId: boundProjectId.current }); }, [socketRef]);
+  const stage = useCallback((paths: string[]) => { setLoading(true); socketRef.current?.send('git_stage', { projectId: boundProjectId.current, paths }); }, [socketRef, setLoading]);
+  const unstage = useCallback((paths: string[]) => { setLoading(true); socketRef.current?.send('git_unstage', { projectId: boundProjectId.current, paths }); }, [socketRef, setLoading]);
+  const discard = useCallback((paths: string[]) => { setLoading(true); socketRef.current?.send('git_discard', { projectId: boundProjectId.current, paths }); }, [socketRef, setLoading]);
+  const commit = useCallback((message: string, stageAll?: boolean) => { setLoading(true); socketRef.current?.send('git_commit', { projectId: boundProjectId.current, message, stageAll: !!stageAll }); }, [socketRef, setLoading]);
+  const push = useCallback(() => { setLoading(true); socketRef.current?.send('git_push', { projectId: boundProjectId.current }); }, [socketRef, setLoading]);
+  const pull = useCallback(() => { setLoading(true); socketRef.current?.send('git_pull', { projectId: boundProjectId.current }); }, [socketRef, setLoading]);
+  const listBranches = useCallback(() => { socketRef.current?.send('git_branches', { projectId: boundProjectId.current }); }, [socketRef]);
+  const createBranch = useCallback((name: string, startPoint?: string) => { setLoading(true); socketRef.current?.send('git_create_branch', { projectId: boundProjectId.current, name, startPoint }); }, [socketRef, setLoading]);
+  const checkout = useCallback((ref: string) => { setLoading(true); socketRef.current?.send('git_checkout', { projectId: boundProjectId.current, ref }); }, [socketRef, setLoading]);
 
   return { requestStatus, stage, unstage, discard, commit, push, pull, listBranches, createBranch, checkout };
 }

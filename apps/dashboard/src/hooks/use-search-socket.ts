@@ -1,12 +1,12 @@
 import { useEffect, useCallback, useRef } from 'react';
-import type { Socket } from 'socket.io-client';
+import type { ReconnectingWebSocket } from '../lib/reconnecting-ws';
 import { useSearchStore, type SearchResult } from '../stores/search-store';
 
 const SEARCH_TIMEOUT_MS = 35_000;
 
 export function useSearchSocket(
   projectId: string | undefined,
-  socketRef: { current: Socket | null },
+  socketRef: { current: ReconnectingWebSocket | null },
 ) {
   const setResults = useSearchStore((s) => s.setResults);
   const setIsSearching = useSearchStore((s) => s.setIsSearching);
@@ -15,59 +15,31 @@ export function useSearchSocket(
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
-    const socket = socketRef.current;
-    if (!projectId || !socket) return;
+    const ws = socketRef.current;
+    if (!projectId || !ws) return;
 
-    const onSearchResult = (data: {
-      query: string;
-      results: SearchResult[];
-      error?: string;
-    }) => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = undefined;
-      }
-      if (data.error) {
-        console.warn('[ws] file_search_result error:', data.error);
-      }
-      setResults(data.results);
+    const onSearchResult = (data: any) => {
+      const d = data.payload;
+      if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = undefined; }
+      if (d.error) console.warn('[ws] file_search_result error:', d.error);
+      setResults(d.results);
     };
 
-    socket.on('file_search_result', onSearchResult);
-
+    ws.on('file_search_result', onSearchResult);
     return () => {
-      socket.off('file_search_result', onSearchResult);
+      ws.off('file_search_result', onSearchResult);
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
   }, [projectId, socketRef, setResults, setIsSearching]);
 
   const search = useCallback(
-    (
-      query: string,
-      options?: {
-        matchCase?: boolean;
-        wholeWord?: boolean;
-        useRegex?: boolean;
-        includePattern?: string;
-        excludePattern?: string;
-      },
-    ) => {
-      const socket = socketRef.current;
-      if (!socket?.connected || !boundProjectId.current) return;
-
+    (query: string, options?: { matchCase?: boolean; wholeWord?: boolean; useRegex?: boolean; includePattern?: string; excludePattern?: string }) => {
+      const ws = socketRef.current;
+      if (!ws?.connected || !boundProjectId.current) return;
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
-
       setIsSearching(true);
-      socket.emit('file_search', {
-        projectId: boundProjectId.current,
-        query,
-        ...options,
-      });
-
-      timeoutRef.current = setTimeout(() => {
-        console.warn('[ws] file_search timed out');
-        setIsSearching(false);
-      }, SEARCH_TIMEOUT_MS);
+      ws.send('file_search', { projectId: boundProjectId.current, query, ...options });
+      timeoutRef.current = setTimeout(() => { setIsSearching(false); }, SEARCH_TIMEOUT_MS);
     },
     [socketRef, setIsSearching],
   );

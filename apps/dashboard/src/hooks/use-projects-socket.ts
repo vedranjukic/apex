@@ -1,39 +1,33 @@
 import { useEffect, useRef } from 'react';
-import { io, Socket } from 'socket.io-client';
+import { ReconnectingWebSocket } from '../lib/reconnecting-ws';
 import { useProjectsStore } from '../stores/projects-store';
 import type { Project } from '../api/client';
 
-/**
- * Connects to the /ws/projects namespace and keeps the Zustand
- * projects store in sync with server-side changes in real time.
- */
 export function useProjectsSocket() {
-  const socketRef = useRef<Socket | null>(null);
+  const wsRef = useRef<ReconnectingWebSocket | null>(null);
 
   useEffect(() => {
-    const socket = io('/ws/projects', {
-      path: '/ws/socket.io',
-      transports: ['polling', 'websocket'],
-      autoConnect: true,
-    });
+    const ws = new ReconnectingWebSocket('/ws/projects');
+    wsRef.current = ws;
 
-    socketRef.current = socket;
-
-    socket.on('project_created', (project: Project) => {
+    ws.on('project_created', (data) => {
+      const project = data.payload as Project;
       const { projects } = useProjectsStore.getState();
       if (!projects.some((p) => p.id === project.id)) {
         useProjectsStore.setState({ projects: [project, ...projects] });
       }
     });
 
-    socket.on('project_updated', (project: Project) => {
+    ws.on('project_updated', (data) => {
+      const project = data.payload as Project;
       const { projects } = useProjectsStore.getState();
       useProjectsStore.setState({
         projects: projects.map((p) => (p.id === project.id ? project : p)),
       });
     });
 
-    socket.on('project_deleted', ({ id }: { id: string }) => {
+    ws.on('project_deleted', (data) => {
+      const { id } = data.payload as { id: string };
       const { projects } = useProjectsStore.getState();
       useProjectsStore.setState({
         projects: projects.filter((p) => p.id !== id),
@@ -41,8 +35,8 @@ export function useProjectsSocket() {
     });
 
     return () => {
-      socket.disconnect();
-      socketRef.current = null;
+      ws.destroy();
+      wsRef.current = null;
     };
   }, []);
 }

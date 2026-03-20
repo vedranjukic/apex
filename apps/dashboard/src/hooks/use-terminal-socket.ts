@@ -1,132 +1,75 @@
 import { useEffect, useCallback, useRef } from 'react';
-import type { Socket } from 'socket.io-client';
+import type { ReconnectingWebSocket } from '../lib/reconnecting-ws';
 import { Terminal } from '@xterm/xterm';
 import { useTerminalStore, type TerminalInfo } from '../stores/terminal-store';
 
-/**
- * Buffered xterm map — stores xterm instances and buffers events
- * that arrive before the xterm is registered.
- */
 class XtermRegistry {
   private map = new Map<string, Terminal>();
   private buffers = new Map<string, Array<{ type: string; data: any }>>();
 
-  get(id: string): Terminal | undefined {
-    return this.map.get(id);
-  }
-
-  values(): IterableIterator<Terminal> {
-    return this.map.values();
-  }
-
-  entries(): IterableIterator<[string, Terminal]> {
-    return this.map.entries();
-  }
+  get(id: string): Terminal | undefined { return this.map.get(id); }
+  values(): IterableIterator<Terminal> { return this.map.values(); }
+  entries(): IterableIterator<[string, Terminal]> { return this.map.entries(); }
 
   register(id: string, xterm: Terminal) {
     this.map.set(id, xterm);
     const buf = this.buffers.get(id);
     if (buf) {
       for (const evt of buf) {
-        if (evt.type === 'output') {
-          xterm.write(evt.data);
-        } else if (evt.type === 'created') {
-          xterm.clear();
-        } else if (evt.type === 'error') {
-          xterm.write(`\r\n\x1b[31m[Error: ${evt.data}]\x1b[0m\r\n`);
-        } else if (evt.type === 'exit') {
-          xterm.write(
-            `\r\n\x1b[90m[Process exited with code ${evt.data}]\x1b[0m\r\n`,
-          );
-        }
+        if (evt.type === 'output') xterm.write(evt.data);
+        else if (evt.type === 'created') xterm.clear();
+        else if (evt.type === 'error') xterm.write(`\r\n\x1b[31m[Error: ${evt.data}]\x1b[0m\r\n`);
+        else if (evt.type === 'exit') xterm.write(`\r\n\x1b[90m[Process exited with code ${evt.data}]\x1b[0m\r\n`);
       }
     }
   }
 
-  unregister(id: string) {
-    this.map.delete(id);
-  }
+  unregister(id: string) { this.map.delete(id); }
+  destroy(id: string) { this.map.delete(id); this.buffers.delete(id); }
+  clearBuffer(id: string) { this.buffers.delete(id); }
 
-  destroy(id: string) {
-    this.map.delete(id);
-    this.buffers.delete(id);
-  }
-
-  clearBuffer(id: string) {
-    this.buffers.delete(id);
-  }
-
-  /** Dispose all xterm instances and clear everything */
   clear() {
-    for (const xterm of this.map.values()) {
-      xterm.dispose();
-    }
-    this.map.clear();
-    this.buffers.clear();
+    for (const xterm of this.map.values()) xterm.dispose();
+    this.map.clear(); this.buffers.clear();
   }
 
   writeOutput(id: string, data: string) {
     const xterm = this.map.get(id);
-    if (xterm) {
-      xterm.write(data);
-    } else {
-      this.buffer(id, { type: 'output', data });
-    }
+    if (xterm) xterm.write(data);
+    else this.buffer(id, { type: 'output', data });
   }
 
   markCreated(id: string) {
     const xterm = this.map.get(id);
-    if (xterm) {
-      xterm.clear();
-    } else {
-      this.buffer(id, { type: 'created', data: null });
-    }
+    if (xterm) xterm.clear();
+    else this.buffer(id, { type: 'created', data: null });
   }
 
   writeError(id: string, error: string) {
     const xterm = this.map.get(id);
-    if (xterm) {
-      xterm.write(`\r\n\x1b[31m[Error: ${error}]\x1b[0m\r\n`);
-    } else {
-      this.buffer(id, { type: 'error', data: error });
-    }
+    if (xterm) xterm.write(`\r\n\x1b[31m[Error: ${error}]\x1b[0m\r\n`);
+    else this.buffer(id, { type: 'error', data: error });
   }
 
   writeExit(id: string, exitCode: number) {
     const xterm = this.map.get(id);
-    if (xterm) {
-      xterm.write(
-        `\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`,
-      );
-    } else {
-      this.buffer(id, { type: 'exit', data: exitCode });
-    }
+    if (xterm) xterm.write(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
+    else this.buffer(id, { type: 'exit', data: exitCode });
   }
 
   broadcastError(error: string) {
-    for (const xterm of this.map.values()) {
-      xterm.write(`\r\n\x1b[31m[Error: ${error}]\x1b[0m\r\n`);
-    }
+    for (const xterm of this.map.values()) xterm.write(`\r\n\x1b[31m[Error: ${error}]\x1b[0m\r\n`);
   }
 
   private buffer(id: string, evt: { type: string; data: any }) {
-    if (!this.buffers.has(id)) {
-      this.buffers.set(id, []);
-    }
+    if (!this.buffers.has(id)) this.buffers.set(id, []);
     this.buffers.get(id)!.push(evt);
   }
 }
 
-/**
- * Hook that wires up terminal Socket.io events to xterm.js instances.
- * Shares the Socket.io connection from useAgentSocket.
- *
- * All terminal state is scoped to the current projectId — switching
- * projects clears the store and xterm registry immediately.
- */
 export function useTerminalSocket(
   projectId: string | undefined,
-  socketRef: { current: Socket | null },
+  socketRef: { current: ReconnectingWebSocket | null },
 ) {
   const registry = useRef(new XtermRegistry());
   const addTerminal = useTerminalStore((s) => s.addTerminal);
@@ -135,86 +78,52 @@ export function useTerminalSocket(
   const bindProject = useTerminalStore((s) => s.bindProject);
   const reset = useTerminalStore((s) => s.reset);
 
-  // ── Listen for terminal events from the server ──
   useEffect(() => {
-    const socket = socketRef.current;
-    if (!socket || !projectId) return;
+    const ws = socketRef.current;
+    if (!ws || !projectId) return;
 
-    // Scope the store + registry to this project.
-    // If projectId changed, this wipes stale terminals from the previous project.
     bindProject(projectId);
     registry.current.clear();
-
-    // Capture the projectId this effect was created for.
-    // All event handlers check this to ignore stale events.
     const boundProjectId = projectId;
-
-    const isStale = () =>
-      useTerminalStore.getState().projectId !== boundProjectId;
-
+    const isStale = () => useTerminalStore.getState().projectId !== boundProjectId;
     const reg = registry.current;
 
-    const onTerminalCreated = (data: { terminalId: string; name: string }) => {
+    const onTerminalCreated = (data: any) => {
       if (isStale()) return;
-      console.log('[ws] terminal_created:', data);
-      addTerminal({ id: data.terminalId, name: data.name, status: 'alive' });
-      reg.markCreated(data.terminalId);
+      const d = data.payload;
+      addTerminal({ id: d.terminalId, name: d.name, status: 'alive' });
+      reg.markCreated(d.terminalId);
     };
-
-    const onTerminalOutput = (data: { terminalId: string; data: string }) => {
+    const onTerminalOutput = (data: any) => {
       if (isStale()) return;
-      reg.writeOutput(data.terminalId, data.data);
+      reg.writeOutput(data.payload.terminalId, data.payload.data);
     };
-
-    const onTerminalExit = (data: { terminalId: string; exitCode: number }) => {
+    const onTerminalExit = (data: any) => {
       if (isStale()) return;
-      console.log('[ws] terminal_exit:', data);
-      reg.writeExit(data.terminalId, data.exitCode);
-      removeTerminal(data.terminalId);
+      reg.writeExit(data.payload.terminalId, data.payload.exitCode);
+      removeTerminal(data.payload.terminalId);
     };
-
-    const onTerminalError = (data: { terminalId?: string; error: string }) => {
+    const onTerminalError = (data: any) => {
       if (isStale()) return;
-      console.error('[ws] terminal_error:', data);
-      if (data.terminalId) {
-        reg.writeError(data.terminalId, data.error);
-      } else {
-        reg.broadcastError(data.error);
-      }
+      if (data.payload.terminalId) reg.writeError(data.payload.terminalId, data.payload.error);
+      else reg.broadcastError(data.payload.error);
     };
-
-    const onTerminalList = (data: {
-      terminals: Array<{
-        id: string;
-        name: string;
-        cols: number;
-        rows: number;
-        scrollback: string;
-      }>;
-    }) => {
+    const onTerminalList = (data: any) => {
       if (isStale()) return;
-      console.log('[ws] terminal_list:', data.terminals.length, 'terminals');
-
-      const infos: TerminalInfo[] = data.terminals.map((t) => ({
-        id: t.id,
-        name: t.name,
-        status: 'alive' as const,
-      }));
+      const terminals = data.payload.terminals || [];
+      const infos: TerminalInfo[] = terminals.map((t: any) => ({ id: t.id, name: t.name, status: 'alive' as const }));
       setTerminals(infos, true);
-
-      for (const t of data.terminals) {
+      for (const t of terminals) {
         reg.clearBuffer(t.id);
-        if (t.scrollback) {
-          reg.writeOutput(t.id, t.scrollback);
-        }
+        if (t.scrollback) reg.writeOutput(t.id, t.scrollback);
       }
     };
 
-    socket.on('terminal_created', onTerminalCreated);
-    socket.on('terminal_output', onTerminalOutput);
-    socket.on('terminal_exit', onTerminalExit);
-    socket.on('terminal_error', onTerminalError);
-    socket.on('terminal_list', onTerminalList);
+    ws.on('terminal_created', onTerminalCreated);
+    ws.on('terminal_output', onTerminalOutput);
+    ws.on('terminal_exit', onTerminalExit);
+    ws.on('terminal_error', onTerminalError);
+    ws.on('terminal_list', onTerminalList);
 
     const TERMINAL_LIST_TIMEOUT_MS = 8_000;
     let terminalListTimer: ReturnType<typeof setTimeout> | null = null;
@@ -223,122 +132,65 @@ export function useTerminalSocket(
       if (terminalListTimer) clearTimeout(terminalListTimer);
       terminalListTimer = setTimeout(() => {
         if (isStale()) return;
-        if (!useTerminalStore.getState().terminalsLoaded) {
-          console.warn('[ws] terminal_list timed out — unblocking UI with empty list');
-          setTerminals([]);
-        }
+        if (!useTerminalStore.getState().terminalsLoaded) setTerminals([]);
       }, TERMINAL_LIST_TIMEOUT_MS);
     };
 
     const requestTerminals = () => {
       if (isStale()) return;
-      socket.emit('terminal_list', { projectId: boundProjectId });
+      ws.send('terminal_list', { projectId: boundProjectId });
       ensureTerminalsLoaded();
     };
 
     const onConnect = () => requestTerminals();
-
-    if (socket.connected) {
-      requestTerminals();
-    }
-    socket.on('connect', onConnect);
+    ws.onStatus(onConnect);
+    if (ws.connected) requestTerminals();
 
     return () => {
-      socket.off('terminal_created', onTerminalCreated);
-      socket.off('terminal_output', onTerminalOutput);
-      socket.off('terminal_exit', onTerminalExit);
-      socket.off('terminal_error', onTerminalError);
-      socket.off('terminal_list', onTerminalList);
-      socket.off('connect', onConnect);
+      ws.off('terminal_created', onTerminalCreated);
+      ws.off('terminal_output', onTerminalOutput);
+      ws.off('terminal_exit', onTerminalExit);
+      ws.off('terminal_error', onTerminalError);
+      ws.off('terminal_list', onTerminalList);
+      ws.offStatus(onConnect);
       if (terminalListTimer) clearTimeout(terminalListTimer);
-      // Don't reset here — bindProject handles it on next mount
     };
   }, [projectId, socketRef, addTerminal, removeTerminal, setTerminals, bindProject, reset]);
-
-  // ── Actions ──
 
   const createTerminal = useCallback(
     (terminalId: string, cols: number, rows: number, name?: string) => {
       if (!projectId) return;
-      socketRef.current?.emit('terminal_create', {
-        projectId,
-        terminalId,
-        cols,
-        rows,
-        name,
-      });
-    },
-    [projectId, socketRef],
+      socketRef.current?.send('terminal_create', { projectId, terminalId, cols, rows, name });
+    }, [projectId, socketRef],
   );
-
   const sendInput = useCallback(
     (terminalId: string, data: string) => {
       if (!projectId) return;
-      socketRef.current?.emit('terminal_input', {
-        projectId,
-        terminalId,
-        data,
-      });
-    },
-    [projectId, socketRef],
+      socketRef.current?.send('terminal_input', { projectId, terminalId, data });
+    }, [projectId, socketRef],
   );
-
   const resize = useCallback(
     (terminalId: string, cols: number, rows: number) => {
       if (!projectId) return;
-      socketRef.current?.emit('terminal_resize', {
-        projectId,
-        terminalId,
-        cols,
-        rows,
-      });
-    },
-    [projectId, socketRef],
+      socketRef.current?.send('terminal_resize', { projectId, terminalId, cols, rows });
+    }, [projectId, socketRef],
   );
-
   const closeTerminal = useCallback(
     (terminalId: string) => {
       if (!projectId) return;
-      socketRef.current?.emit('terminal_close', {
-        projectId,
-        terminalId,
-      });
+      socketRef.current?.send('terminal_close', { projectId, terminalId });
       const xterm = registry.current.get(terminalId);
-      if (xterm) {
-        xterm.dispose();
-      }
+      if (xterm) xterm.dispose();
       registry.current.destroy(terminalId);
       removeTerminal(terminalId);
-    },
-    [projectId, socketRef, removeTerminal],
+    }, [projectId, socketRef, removeTerminal],
   );
-
   const requestTerminalList = useCallback(() => {
     if (!projectId) return;
-    socketRef.current?.emit('terminal_list', { projectId });
+    socketRef.current?.send('terminal_list', { projectId });
   }, [projectId, socketRef]);
+  const registerXterm = useCallback((terminalId: string, xterm: Terminal) => { registry.current.register(terminalId, xterm); }, []);
+  const unregisterXterm = useCallback((terminalId: string) => { registry.current.unregister(terminalId); }, []);
 
-  const registerXterm = useCallback(
-    (terminalId: string, xterm: Terminal) => {
-      registry.current.register(terminalId, xterm);
-    },
-    [],
-  );
-
-  const unregisterXterm = useCallback(
-    (terminalId: string) => {
-      registry.current.unregister(terminalId);
-    },
-    [],
-  );
-
-  return {
-    createTerminal,
-    sendInput,
-    resize,
-    closeTerminal,
-    requestTerminalList,
-    registerXterm,
-    unregisterXterm,
-  };
+  return { createTerminal, sendInput, resize, closeTerminal, requestTerminalList, registerXterm, unregisterXterm };
 }

@@ -1,11 +1,9 @@
-import { Controller, Get } from '@nestjs/common';
+import { Elysia } from 'elysia';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 
-@Controller('config')
-export class ConfigAppController {
-  @Get('keybindings')
-  async getKeybindings(): Promise<Record<string, string>> {
+export const configRoutes = new Elysia({ prefix: '/api/config' })
+  .get('/keybindings', async () => {
     try {
       const filePath = join(process.cwd(), 'keybindings.json');
       const raw = await readFile(filePath, 'utf-8');
@@ -13,5 +11,4 @@ export class ConfigAppController {
     } catch {
       return {};
     }
-  }
-}
+  });

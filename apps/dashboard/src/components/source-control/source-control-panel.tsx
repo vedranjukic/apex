@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { Socket } from 'socket.io-client';
+import type { ReconnectingWebSocket } from '../../lib/reconnecting-ws';
 import {
   ChevronDown,
   ChevronRight,
@@ -21,7 +21,7 @@ import { threadsApi, type Message } from '../../api/client';
 interface SourceControlPanelProps {
   gitActions: GitActions;
   projectId: string;
-  socket: { current: Socket | null };
+  socket: { current: ReconnectingWebSocket | null };
   sendPrompt: (threadId: string, prompt: string, mode?: string, model?: string) => void;
   onAnalyzeGitignore?: (prompt: string) => Promise<void>;
 }
@@ -129,13 +129,14 @@ export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt, 
       const tempThread = await threadsApi.create(projectId, { prompt: 'generate commit message' });
       generatingThreadId.current = tempThread.id;
 
-      const sock = socket.current;
-      if (!sock) { setGenerating(false); return; }
+      const ws = socket.current;
+      if (!ws) { setGenerating(false); return; }
 
       let accumulated = '';
-      const onMessage = (data: { threadId?: string; message?: { type: string; message?: { content?: Array<{ type: string; text?: string }> } } }) => {
-        if (data.threadId !== generatingThreadId.current) return;
-        const msg = data.message;
+      const onMessage = (data: { type: string; payload: any }) => {
+        const payload = data.payload;
+        if (payload.threadId !== generatingThreadId.current) return;
+        const msg = payload.message;
         if (!msg) return;
 
         if (msg.type === 'assistant' && msg.message?.content) {
@@ -147,21 +148,19 @@ export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt, 
           }
         }
         if (msg.type === 'result') {
-          sock.off('agent_message', onMessage);
+          ws.off('agent_message', onMessage);
           generatingThreadId.current = null;
           setGenerating(false);
-          // Clean up the temp thread
           threadsApi.delete(tempThread.id).catch(() => {});
         }
       };
 
-      sock.on('agent_message', onMessage);
+      ws.on('agent_message', onMessage);
       sendPrompt(tempThread.id, prompt, 'ask');
 
-      // Safety timeout
       setTimeout(() => {
         if (generatingThreadId.current === tempThread.id) {
-          sock.off('agent_message', onMessage);
+          ws.off('agent_message', onMessage);
           generatingThreadId.current = null;
           setGenerating(false);
         }
