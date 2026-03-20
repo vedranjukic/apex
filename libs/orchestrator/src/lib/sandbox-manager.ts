@@ -1,13 +1,19 @@
 /**
- * SandboxManager – creates / connects / manages Daytona sandboxes
+ * SandboxManager – creates / connects / manages sandboxes
  * and the WebSocket bridge that runs inside each one.
  *
- * Adapted from hack/ws-orchestrator (orchestrator-v2.ts).
+ * Provider-agnostic: the actual sandbox backend (Daytona, Docker, Apple
+ * Containers, …) is selected via {@link OrchestratorConfig.provider}.
  */
 
 import WebSocket from "ws";
-import { Daytona, Sandbox } from "@daytonaio/sdk";
 import crypto from "crypto";
+import {
+  createSandboxProvider,
+  type SandboxProvider,
+  type SandboxInstance,
+  type SandboxProviderType,
+} from "./providers/index.js";
 import { EventEmitter } from "events";
 import {
   BridgeMessage,
@@ -77,7 +83,7 @@ export declare interface SandboxManager {
 }
 
 type InternalSession = SandboxSession & {
-  sandbox: Sandbox;
+  sandbox: SandboxInstance;
   ws: WebSocket | null;
   projectDir: string;
 };
@@ -95,12 +101,12 @@ const STARTED_STATE_TTL = 30_000;
 
 export class SandboxManager extends EventEmitter {
   private config: Required<OrchestratorConfig>;
-  private daytona: Daytona | null = null;
+  private provider: SandboxProvider | null = null;
   private sessions: Map<string, InternalSession> = new Map();
   private lastPortsBySandbox = new Map<string, BridgePortsUpdate>();
   private sandboxCache = new Map<
     string,
-    { sandbox: Sandbox; cachedAt: number }
+    { sandbox: SandboxInstance; cachedAt: number }
   >();
   private startedAt = new Map<string, number>();
   private reconnectPromises = new Map<string, Promise<void>>();
@@ -118,11 +124,16 @@ export class SandboxManager extends EventEmitter {
       snapshot:
         config.snapshot || process.env["DAYTONA_SNAPSHOT"] || "daytona-apex-3",
       timeoutMs: config.timeoutMs || 600000,
+      provider:
+        (config.provider as SandboxProviderType) ||
+        (process.env["SANDBOX_PROVIDER"] as SandboxProviderType) ||
+        "daytona",
     };
   }
 
   async initialize(): Promise<void> {
-    this.daytona = new Daytona();
+    this.provider = createSandboxProvider(this.config.provider);
+    await this.provider.initialize();
   }
 
   /** Store a sandboxId → projectName mapping so reconnections use the correct project directory. */
@@ -137,9 +148,9 @@ export class SandboxManager extends EventEmitter {
     gitRepo?: string,
     agentType?: string,
   ): Promise<string> {
-    if (!this.daytona) throw new Error("SandboxManager not initialized");
+    if (!this.provider) throw new Error("SandboxManager not initialized");
 
-    const sandbox = await this.daytona.create({
+    const sandbox = await this.provider.create({
       snapshot: snapshot || this.config.snapshot,
       autoStopInterval: 0,
     });
@@ -179,7 +190,7 @@ export class SandboxManager extends EventEmitter {
     sandboxId: string,
     projectName?: string,
   ): Promise<void> {
-    if (!this.daytona) throw new Error("SandboxManager not initialized");
+    if (!this.provider) throw new Error("SandboxManager not initialized");
 
     if (projectName) this.projectNames.set(sandboxId, projectName);
 
@@ -259,8 +270,8 @@ export class SandboxManager extends EventEmitter {
             /* best-effort */
           }),
       ]);
-      session.previewUrl = (previewInfo as any).url;
-      session.previewToken = (previewInfo as any).token;
+      session.previewUrl = previewInfo.url;
+      session.previewToken = previewInfo.token ?? null;
       log("got preview URL");
 
       await this.connectWithRetry(session);
@@ -287,13 +298,13 @@ export class SandboxManager extends EventEmitter {
    * Get a Sandbox object, using a cache to avoid redundant daytona.get() calls
    * when multiple operations fire concurrently.
    */
-  private async getCachedSandbox(sandboxId: string): Promise<Sandbox> {
+  private async getCachedSandbox(sandboxId: string): Promise<SandboxInstance> {
     const cached = this.sandboxCache.get(sandboxId);
     if (cached && Date.now() - cached.cachedAt < SANDBOX_CACHE_TTL) {
       return cached.sandbox;
     }
-    if (!this.daytona) throw new Error("SandboxManager not initialized");
-    const sandbox = await this.daytona.get(sandboxId);
+    if (!this.provider) throw new Error("SandboxManager not initialized");
+    const sandbox = await this.provider.get(sandboxId);
     this.sandboxCache.set(sandboxId, { sandbox, cachedAt: Date.now() });
     return sandbox;
   }
@@ -304,7 +315,7 @@ export class SandboxManager extends EventEmitter {
    * Skips the expensive refreshData() API call when we have recent proof the
    * sandbox is running (active WS connection or recently verified state).
    */
-  private async ensureSandboxStarted(sandbox: Sandbox): Promise<void> {
+  private async ensureSandboxStarted(sandbox: SandboxInstance): Promise<void> {
     const session = this.sessions.get(sandbox.id);
     if (session?.ws?.readyState === WebSocket.OPEN) {
       return;
@@ -315,16 +326,13 @@ export class SandboxManager extends EventEmitter {
       return;
     }
 
-    if (typeof (sandbox as any).refreshData === "function") {
-      try {
-        await (sandbox as any).refreshData();
-      } catch {
-        /* best-effort */
-      }
+    try {
+      await sandbox.refreshState();
+    } catch {
+      /* best-effort */
     }
 
-    const state: string = (sandbox as any).state ?? "unknown";
-    if (state === "started") {
+    if (sandbox.state === "started") {
       this.startedAt.set(sandbox.id, Date.now());
       return;
     }
@@ -468,8 +476,8 @@ export class SandboxManager extends EventEmitter {
       return;
     }
 
-    if (!this.daytona) throw new Error("SandboxManager not initialized");
-    const sandbox = await this.daytona.get(sandboxId);
+    if (!this.provider) throw new Error("SandboxManager not initialized");
+    const sandbox = await this.provider.get(sandboxId);
     await sandbox.delete();
   }
 
@@ -488,8 +496,8 @@ export class SandboxManager extends EventEmitter {
       return;
     }
 
-    if (!this.daytona) throw new Error("SandboxManager not initialized");
-    const sandbox = await this.daytona.get(sandboxId);
+    if (!this.provider) throw new Error("SandboxManager not initialized");
+    const sandbox = await this.provider.get(sandboxId);
     await sandbox.stop();
   }
 
@@ -569,12 +577,12 @@ export class SandboxManager extends EventEmitter {
     sandboxId: string,
   ): Promise<{ url: string; token: string }> {
     const sandbox = await this.ensureSandbox(sandboxId);
-    // Signed URL valid for 8 hours (28800 seconds)
-    const signedInfo = await (sandbox as any).getSignedPreviewUrl(
-      VSCODE_PORT,
-      28800,
-    );
-    return { url: signedInfo.url, token: signedInfo.token };
+    if (!sandbox.getSignedPreviewUrl) {
+      const info = await sandbox.getPreviewLink(VSCODE_PORT);
+      return { url: info.url, token: info.token ?? "" };
+    }
+    const signedInfo = await sandbox.getSignedPreviewUrl(VSCODE_PORT, 28800);
+    return { url: signedInfo.url, token: signedInfo.token ?? "" };
   }
 
   /** Create an SSH access token for the sandbox (default 24 hours). */
@@ -590,6 +598,11 @@ export class SandboxManager extends EventEmitter {
     expiresAt: string;
   }> {
     const sandbox = await this.ensureSandbox(sandboxId);
+    if (!sandbox.createSshAccess) {
+      throw new Error(
+        `SSH access is not supported by the ${this.config.provider} provider`,
+      );
+    }
     const access = await sandbox.createSshAccess(expiresInMinutes);
     const { user, host, port } = this.parseSshCommand(access.sshCommand);
     const remotePath = this.getProjectDir(sandboxId);
@@ -628,7 +641,7 @@ export class SandboxManager extends EventEmitter {
   ): Promise<{ url: string; token: string }> {
     const sandbox = await this.ensureSandbox(sandboxId);
     const previewInfo = await sandbox.getPreviewLink(port);
-    return { url: (previewInfo as any).url, token: (previewInfo as any).token };
+    return { url: previewInfo.url, token: previewInfo.token ?? "" };
   }
 
   getLastPorts(sandboxId: string): BridgePortsUpdate | undefined {
@@ -1252,7 +1265,7 @@ export class SandboxManager extends EventEmitter {
    * This avoids depending on the external Daytona proxy and catches bridge crashes early.
    */
   private async waitForBridge(
-    sandbox: Sandbox,
+    sandbox: SandboxInstance,
     sandboxId: string,
     maxAttempts = 10,
     intervalMs = 1500,
@@ -1291,16 +1304,14 @@ export class SandboxManager extends EventEmitter {
   }
 
   async getSandboxState(sandboxId: string): Promise<string> {
-    if (!this.daytona) throw new Error("SandboxManager not initialized");
+    if (!this.provider) throw new Error("SandboxManager not initialized");
     const sandbox = await this.getCachedSandbox(sandboxId);
-    if (typeof (sandbox as any).refreshData === "function") {
-      try {
-        await (sandbox as any).refreshData();
-      } catch {
-        /* best-effort */
-      }
+    try {
+      await sandbox.refreshState();
+    } catch {
+      /* best-effort */
     }
-    const state = (sandbox as any).state ?? "unknown";
+    const state = sandbox.state ?? "unknown";
     if (state === "started") {
       this.startedAt.set(sandboxId, Date.now());
     }
@@ -1309,7 +1320,7 @@ export class SandboxManager extends EventEmitter {
 
   /** Get the Sandbox object (no WS required — used for direct SDK operations).
    *  Starts the sandbox if it is stopped. */
-  private async ensureSandbox(sandboxId: string): Promise<Sandbox> {
+  private async ensureSandbox(sandboxId: string): Promise<SandboxInstance> {
     const session = this.sessions.get(sandboxId);
     const sandbox = session
       ? session.sandbox
@@ -1377,8 +1388,8 @@ export class SandboxManager extends EventEmitter {
           try {
             const previewInfo =
               await session.sandbox.getPreviewLink(BRIDGE_PORT);
-            session.previewUrl = (previewInfo as any).url;
-            session.previewToken = (previewInfo as any).token;
+            session.previewUrl = previewInfo.url;
+            session.previewToken = previewInfo.token ?? null;
           } catch {
             /* keep existing */
           }
@@ -1404,7 +1415,7 @@ export class SandboxManager extends EventEmitter {
   }
 
   /** Quick (non-blocking) check if the bridge HTTP server is responding inside the sandbox */
-  private async quickBridgeCheck(sandbox: Sandbox): Promise<boolean> {
+  private async quickBridgeCheck(sandbox: SandboxInstance): Promise<boolean> {
     try {
       const result = await sandbox.process.executeCommand(
         `curl -sf http://localhost:${BRIDGE_PORT}/ 2>&1 || echo "BRIDGE_NOT_READY"`,
@@ -1517,8 +1528,8 @@ export class SandboxManager extends EventEmitter {
     await this.waitForBridge(sandbox, session.sandboxId);
 
     const previewInfo = await sandbox.getPreviewLink(BRIDGE_PORT);
-    session.previewUrl = (previewInfo as any).url;
-    session.previewToken = (previewInfo as any).token;
+    session.previewUrl = previewInfo.url;
+    session.previewToken = previewInfo.token ?? null;
   }
 
   private async installBridge(
@@ -1765,8 +1776,8 @@ export class SandboxManager extends EventEmitter {
     await this.waitForBridge(sandbox, session.sandboxId);
 
     const installPreviewInfo = await sandbox.getPreviewLink(BRIDGE_PORT);
-    session.previewUrl = (installPreviewInfo as any).url;
-    session.previewToken = (installPreviewInfo as any).token;
+    session.previewUrl = installPreviewInfo.url;
+    session.previewToken = installPreviewInfo.token ?? null;
 
     await this.connectWithRetry(session);
   }

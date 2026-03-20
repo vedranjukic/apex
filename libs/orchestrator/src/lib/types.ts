@@ -321,4 +321,6 @@ export interface OrchestratorConfig {
   githubToken?: string;
   snapshot?: string;
   timeoutMs?: number;
+  /** Sandbox provider backend. Defaults to `"daytona"`. */
+  provider?: 'daytona' | 'docker' | 'apple-container';
 }

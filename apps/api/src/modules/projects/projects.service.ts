@@ -24,7 +24,9 @@ export class ProjectsService implements OnModuleInit {
   private async initSandboxManager() {
     const hasAnthropicKey = !!process.env.ANTHROPIC_API_KEY;
     const hasDaytonaKey = !!process.env.DAYTONA_API_KEY;
-    if (!hasAnthropicKey && !hasDaytonaKey) {
+    const provider = (process.env.SANDBOX_PROVIDER as 'daytona' | 'docker' | 'apple-container') || 'daytona';
+
+    if (provider === 'daytona' && !hasAnthropicKey && !hasDaytonaKey) {
       this.logger.warn('SandboxManager skipped – no API keys configured (set them in Settings)');
       this.sandboxManager = null;
       return;
@@ -34,10 +36,11 @@ export class ProjectsService implements OnModuleInit {
         anthropicApiKey: process.env.ANTHROPIC_API_KEY,
         openaiApiKey: process.env.OPENAI_API_KEY,
         githubToken: process.env.GITHUB_TOKEN,
+        provider,
       });
       await this.sandboxManager.initialize();
       this.logger.log(
-        `SandboxManager initialized (anthropicKey=${hasAnthropicKey}, daytonaKey=${hasDaytonaKey})`,
+        `SandboxManager initialized (provider=${provider}, anthropicKey=${hasAnthropicKey}, daytonaKey=${hasDaytonaKey})`,
       );
     } catch (err) {
       this.logger.error(`SandboxManager init failed: ${err instanceof Error ? err.stack : err}`);
@@ -177,7 +180,7 @@ export class ProjectsService implements OnModuleInit {
       Pick<ProjectEntity, 'name' | 'description' | 'status' | 'agentConfig'>
     >,
   ): Promise<ProjectEntity> {
-    await this.repo.update(id, data);
+    await this.repo.update(id, data as any);
     const updated = await this.findById(id);
     this.gateway.notifyUpdated(updated);
     return updated;
@@ -371,7 +374,7 @@ export class ProjectsService implements OnModuleInit {
     }
 
     try {
-      const sandboxId = await this.sandboxManager.createSandbox(snapshot, projectName, gitRepo || undefined, agentType);
+      const sandboxId = await this.sandboxManager!.createSandbox(snapshot, projectName, gitRepo || undefined, agentType);
       await this.repo.update(projectId, {
         sandboxId,
         status: 'running',
@@ -404,7 +407,7 @@ export class ProjectsService implements OnModuleInit {
     }
 
     try {
-      const sandboxId = await this.sandboxManager.forkSandbox(
+      const sandboxId = await this.sandboxManager!.forkSandbox(
         sourceSandboxId,
         branchName,
         projectName,
