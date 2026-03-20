@@ -188,6 +188,15 @@ export class AgentGateway
     this.logger.log(`save_plan: threadId=${threadId} title="${plan.title}"`);
     try {
       await this.threadsService.updatePlanData(threadId, plan);
+      await this.updateThreadStatusAndNotify(threadId, 'waiting_for_user_action');
+      const thread = await this.threadsService.findById(threadId);
+      const project = await this.projectsService.findById(thread.projectId);
+      if (project?.sandboxId) {
+        this.emitToSubscribers(project.sandboxId, 'agent_status', {
+          threadId,
+          status: 'waiting_for_user_action',
+        });
+      }
       client.emit('plan_saved', { threadId, planId: plan.id });
     } catch (err) {
       this.logger.error(`save_plan error: ${err}`);
@@ -1262,11 +1271,7 @@ export class AgentGateway
           // manages the status transition via ask_user_resolved.
           const currentThread = await this.threadsService.findById(threadId);
           if (currentThread.status !== 'waiting_for_input') {
-            const finalStatus = data.is_error
-              ? 'error'
-              : currentThread.mode === 'plan'
-                ? 'waiting_for_user_action'
-                : 'completed';
+            const finalStatus = data.is_error ? 'error' : 'completed';
             await this.updateThreadStatusAndNotify(threadId, finalStatus);
             this.emitToSubscribers(project.sandboxId!, 'agent_status', {
               threadId,
@@ -1332,13 +1337,10 @@ export class AgentGateway
 
         const exitThread = await this.threadsService.findById(threadId);
         if (exitThread.status !== 'waiting_for_input') {
-          const exitStatus = (status === 'completed' && exitThread.mode === 'plan')
-            ? 'waiting_for_user_action'
-            : status;
-          await this.updateThreadStatusAndNotify(threadId, exitStatus);
+          await this.updateThreadStatusAndNotify(threadId, status);
           this.emitToSubscribers(project.sandboxId!, 'agent_status', {
             threadId,
-            status: exitStatus,
+            status,
           });
           cleanupHandler();
         }

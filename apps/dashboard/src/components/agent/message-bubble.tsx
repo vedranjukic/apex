@@ -6,7 +6,7 @@ import type { Message, ContentBlock } from '../../api/client';
 import { ToolUseBlock, BashGroupBlock, TransientSearchBlock, normalizeTool, type BashItem } from './tool-use-block';
 import { PlanBlock } from './plan-block';
 import { MarkdownBlock } from './markdown-block';
-import { usePlanStore, extractTitle, extractPlanBody, BUILD_PROMPT_PREFIX, PLAN_BLOCK_REGEX, PLAN_BLOCK_START } from '../../stores/plan-store';
+import { usePlanStore, extractTitle, extractPlanBody, isPlanContent, BUILD_PROMPT_PREFIX, PLAN_BLOCK_REGEX, PLAN_BLOCK_START } from '../../stores/plan-store';
 import { useThreadsStore } from '../../stores/tasks-store';
 import { formatTokenCount } from '../../lib/model-context';
 
@@ -361,20 +361,9 @@ interface DerivedPlan {
 
 const HEADING_RE = /^#{1,3}\s+/m;
 
-const PLAN_STRUCTURE_INDICATORS = /^#{1,3}\s+(Stack|File Structure|Project Structure|Implementation Steps|Features|Structure|Details)\b/gm;
+const hasPlanBlock = isPlanContent;
 
-const TASK_STRUCTURE_INDICATORS = /^#{1,3}\s+(Architecture|Breakdown|Worker|Task|Decomposition|Execution Flow|Verification|Subtask|Phase)\b/gm;
-
-/** True if text contains ```plan ... ``` block or plan/task-like structure */
-function hasPlanBlock(text: string): boolean {
-  if (PLAN_BLOCK_REGEX.test(text)) return true;
-  if (text.length < 150) return false;
-  const planIndicators = text.match(PLAN_STRUCTURE_INDICATORS);
-  if ((planIndicators?.length ?? 0) >= 2) return true;
-  const taskIndicators = text.match(TASK_STRUCTURE_INDICATORS);
-  if ((taskIndicators?.length ?? 0) >= 2) return true;
-  return false;
-}
+const STRUCTURE_HEADING_RE = /^#{1,3}\s+(Stack|File Structure|Project Structure|Implementation Steps|Features|Structure|Details)\b/gm;
 
 /** Extract plan content: prefers ```plan ... ``` (handles nested blocks), fallback to structure-based */
 function extractPlanFromText(text: string): string | null {
@@ -387,14 +376,12 @@ function extractPlanFromText(text: string): string | null {
     return fromFence;
   }
 
-  // Fallback: detect plan by structure (Stack, File Structure, Project Structure, etc.)
-  const structureMatches = text.match(PLAN_STRUCTURE_INDICATORS);
+  const structureMatches = text.match(STRUCTURE_HEADING_RE);
   if ((structureMatches?.length ?? 0) < 2 || text.length < 150) return null;
   const firstHeading = text.search(/(?:^|\n)#{1,3}\s+/m);
   const start = firstHeading >= 0 ? firstHeading : 0;
   const preamble = text.slice(0, start).trim();
   const body = text.slice(start).trim();
-  // Skip short preambles like "Got it. Here's the plan:"
   if (preamble && preamble.length < 80 && !preamble.includes('\n')) {
     return body;
   }
@@ -522,7 +509,7 @@ function AgentGroup({
   const derivedPlan = useMemo((): DerivedPlan | null => {
     if (isAfterBuild) return null;
 
-    if (storePlan) {
+    if (storePlan && isPlanContent(storePlan.content)) {
       return {
         filename: storePlan.filename,
         content: storePlan.content,
@@ -586,12 +573,14 @@ function AgentGroup({
           items.push({ kind: 'plan' });
           planInserted = true;
         } else if (hasPlanBlock(text)) {
-          // Structure-based plan: skip this block, add plan once
           items.push({ kind: 'plan' });
           planInserted = true;
         } else {
           items.push({ kind: 'block', block });
         }
+      } else {
+        items.push({ kind: 'plan' });
+        planInserted = true;
       }
     }
 

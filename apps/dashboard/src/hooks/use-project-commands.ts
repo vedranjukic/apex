@@ -2,7 +2,6 @@ import { useEffect, useRef } from 'react';
 import { useCommandStore, type Command } from '../stores/command-store';
 import { useTerminalStore } from '../stores/terminal-store';
 import { useThreadsStore } from '../stores/tasks-store';
-import { usePanelsStore } from '../stores/panels-store';
 import { useEditorStore } from '../stores/editor-store';
 import { useThemeStore } from '../stores/theme-store';
 
@@ -53,15 +52,6 @@ export function useProjectCommands({ createTerminal, sendPrompt, writeFile }: Us
           const name = `Terminal ${num}`;
           store.addTerminal({ id, name, status: 'alive' });
           depsRef.current.createTerminal(id, 80, 24, name);
-        },
-      },
-
-      {
-        id: 'project.fork',
-        label: 'Fork Project',
-        category: 'Project',
-        execute: () => {
-          usePanelsStore.getState().openPanel('forks');
         },
       },
 

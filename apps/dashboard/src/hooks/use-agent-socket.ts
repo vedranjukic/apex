@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useThreadsStore } from '../stores/tasks-store';
-import { usePlanStore } from '../stores/plan-store';
+import { usePlanStore, isPlanContent } from '../stores/plan-store';
 
 export function useAgentSocket(projectId: string | undefined) {
   const socketRef = useRef<Socket | null>(null);
@@ -156,10 +156,14 @@ export function useAgentSocket(projectId: string | undefined) {
         if (planStore.isThreadPlan(data.threadId)) {
           const plan = planStore.getPlanByThreadId(data.threadId);
           if (plan && !plan.isComplete) {
-            planStore.completePlan(plan.id);
-            const planData = { id: plan.id, title: plan.title, filename: plan.filename, content: plan.content };
-            useThreadsStore.getState().updateThread(data.threadId, { planData });
-            socket.emit('save_plan', { threadId: data.threadId, plan: planData });
+            if (isPlanContent(plan.content)) {
+              planStore.completePlan(plan.id);
+              const planData = { id: plan.id, title: plan.title, filename: plan.filename, content: plan.content };
+              useThreadsStore.getState().updateThread(data.threadId, { planData });
+              socket.emit('save_plan', { threadId: data.threadId, plan: planData });
+            } else {
+              planStore.removePlanByThreadId(data.threadId);
+            }
           }
         }
       }

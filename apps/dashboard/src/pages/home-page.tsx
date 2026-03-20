@@ -51,13 +51,22 @@ export function HomePage() {
     [previewProjectId, previewThreadId],
   );
 
+  const startNewThread = useThreadsStore((s) => s.startNewThread);
+  const fetchThreads = useThreadsStore((s) => s.fetchThreads);
+
   const handleNewThread = useCallback(
     (projectId: string, projectName: string) => {
+      const isNewProject = previewProjectId !== projectId;
       setPreviewProjectId(projectId);
       setPreviewThreadId(null);
       setPreviewProjectName(projectName);
+      if (!isNewProject) {
+        startNewThread();
+      } else {
+        fetchThreads(projectId).then(() => startNewThread());
+      }
     },
-    [],
+    [previewProjectId, startNewThread, fetchThreads],
   );
 
   const handleClosePreview = useCallback(() => {

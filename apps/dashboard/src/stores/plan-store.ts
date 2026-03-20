@@ -33,6 +33,7 @@ interface PlanState {
   completePlan: (planId: string) => void;
   getPlanByThreadId: (threadId: string) => Plan | undefined;
   getPlanById: (planId: string) => Plan | undefined;
+  removePlanByThreadId: (threadId: string) => void;
 }
 
 /**
@@ -76,6 +77,23 @@ export function generateFilename(title: string): string {
   const now = new Date();
   const ts = now.toISOString().replace(/[-:]/g, '').replace('T', 'T').slice(0, 13);
   return `${slug}_${ts}.md`;
+}
+
+const PLAN_STRUCTURE_INDICATORS = /^#{1,3}\s+(Stack|File Structure|Project Structure|Implementation Steps|Features|Structure|Details)\b/gm;
+const TASK_STRUCTURE_INDICATORS = /^#{1,3}\s+(Architecture|Breakdown|Worker|Task|Decomposition|Execution Flow|Verification|Subtask|Phase)\b/gm;
+
+/**
+ * Returns true if the text contains an explicit ```plan block or
+ * enough structural headings to be recognised as a plan/task breakdown.
+ */
+export function isPlanContent(text: string): boolean {
+  if (PLAN_BLOCK_REGEX.test(text)) return true;
+  if (text.length < 150) return false;
+  const planIndicators = text.match(PLAN_STRUCTURE_INDICATORS);
+  if ((planIndicators?.length ?? 0) >= 2) return true;
+  const taskIndicators = text.match(TASK_STRUCTURE_INDICATORS);
+  if ((taskIndicators?.length ?? 0) >= 2) return true;
+  return false;
 }
 
 export const usePlanStore = create<PlanState>((set, get) => ({
@@ -146,4 +164,15 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   getPlanByThreadId: (threadId) => get().plans.find((p) => p.threadId === threadId),
 
   getPlanById: (planId) => get().plans.find((p) => p.id === planId),
+
+  removePlanByThreadId: (threadId) => {
+    set((state) => ({
+      plans: state.plans.filter((p) => p.threadId !== threadId),
+      planThreadIds: (() => {
+        const next = new Set(state.planThreadIds);
+        next.delete(threadId);
+        return next;
+      })(),
+    }));
+  },
 }));
