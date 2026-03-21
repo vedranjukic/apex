@@ -21,6 +21,7 @@ export interface CreateProjectDto {
   description?: string;
   agentType: AgentType;
   sandboxSnapshot?: string;
+  provider?: string;
   agentConfig?: IAgentConfig;
 }
 

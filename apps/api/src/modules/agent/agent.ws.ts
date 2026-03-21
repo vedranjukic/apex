@@ -81,10 +81,10 @@ async function tryResolveProject(projectId: string) {
   try {
     const project = await projectsService.findById(projectId);
     if (!project.sandboxId) return null;
-    let manager = projectsService.getSandboxManager();
+    let manager = projectsService.getSandboxManager(project.provider);
     if (!manager) {
       await projectsService.reinitSandboxManager();
-      manager = projectsService.getSandboxManager();
+      manager = projectsService.getSandboxManager(project.provider);
     }
     if (!manager) return null;
     return { sandboxId: project.sandboxId, manager, project };
@@ -103,8 +103,8 @@ function resolveDefaultBranch(repoUrl: string): Promise<string | null> {
   });
 }
 
-function attachTerminalListeners(sandboxId: string) {
-  const manager = projectsService.getSandboxManager();
+function attachTerminalListeners(sandboxId: string, provider?: string) {
+  const manager = projectsService.getSandboxManager(provider);
   if (!manager) return;
 
   if (lastAttachedManager && lastAttachedManager.deref() !== manager) {
@@ -159,7 +159,7 @@ async function executeAgainstSandbox(
     emitTo(client, 'agent_error', { threadId, error: 'Project sandbox not ready' });
     return;
   }
-  const manager = projectsService.getSandboxManager();
+  const manager = projectsService.getSandboxManager(project.provider);
   if (!manager) {
     emitTo(client, 'agent_error', { threadId, error: 'Sandbox manager not available' });
     return;
@@ -354,11 +354,11 @@ async function handleMessage(client: WsClient, message: unknown) {
         let project = await projectsService.findById(payload.projectId);
         if (project.sandboxId) {
           subscribeTo(project.sandboxId, client.id);
-          attachTerminalListeners(project.sandboxId);
+          attachTerminalListeners(project.sandboxId, project.provider);
           if (project.status === 'stopped' || project.status === 'error') {
             reconcileAndStart(payload.projectId).catch(() => {});
           } else {
-            const manager = projectsService.getSandboxManager();
+            const manager = projectsService.getSandboxManager(project.provider);
             if (manager) {
               resolveDirName(project).then((dirName) => {
                 manager.reconnectSandbox(project.sandboxId!, dirName).catch(() => {});
@@ -420,7 +420,7 @@ async function handleMessage(client: WsClient, message: unknown) {
         const thread = await threadsService.findById(threadId);
         const project = await projectsService.findById(thread.projectId);
         if (!project.sandboxId) { emitTo(client, 'agent_error', { threadId, error: 'No sandbox' }); break; }
-        const manager = projectsService.getSandboxManager();
+        const manager = projectsService.getSandboxManager(project.provider);
         if (!manager) { emitTo(client, 'agent_error', { threadId, error: 'Sandbox manager not available' }); break; }
         await manager.sendUserAnswer(project.sandboxId, threadId, toolUseId, answer);
         await threadsService.addMessage(threadId, {
@@ -434,7 +434,7 @@ async function handleMessage(client: WsClient, message: unknown) {
         const thread = await threadsService.findById(threadId);
         const project = await projectsService.findById(thread.projectId);
         if (!project.sandboxId) break;
-        const manager = projectsService.getSandboxManager();
+        const manager = projectsService.getSandboxManager(project.provider);
         if (!manager) break;
         await manager.stopClaude(project.sandboxId, threadId);
         break;
@@ -443,7 +443,7 @@ async function handleMessage(client: WsClient, message: unknown) {
         const resolved = await tryResolveProject(payload.projectId);
         if (!resolved) { emitTo(client, 'terminal_error', { terminalId: payload.terminalId, error: 'Sandbox not ready' }); break; }
         subscribeTo(resolved.sandboxId, client.id);
-        attachTerminalListeners(resolved.sandboxId);
+        attachTerminalListeners(resolved.sandboxId, resolved.project.provider);
         const dirName = await resolveDirName(resolved.project);
         const cwd = resolveProjectDir(dirName);
         await Promise.race([
@@ -471,7 +471,7 @@ async function handleMessage(client: WsClient, message: unknown) {
         const resolved = await tryResolveProject(payload.projectId);
         if (resolved) {
           subscribeTo(resolved.sandboxId, client.id);
-          attachTerminalListeners(resolved.sandboxId);
+          attachTerminalListeners(resolved.sandboxId, resolved.project.provider);
           const timedOut = await Promise.race([
             resolved.manager.listTerminals(resolved.sandboxId).then(() => false),
             new Promise<boolean>((r) => setTimeout(() => r(true), 10_000)),
@@ -492,7 +492,7 @@ async function handleMessage(client: WsClient, message: unknown) {
       case 'get_ports': {
         const project = await projectsService.findById(payload.projectId);
         if (!project.sandboxId) break;
-        const manager = projectsService.getSandboxManager();
+        const manager = projectsService.getSandboxManager(project.provider);
         if (!manager) break;
         let cached = manager.getLastPorts(project.sandboxId) ?? lastPortsBySandbox.get(project.sandboxId);
         if (!cached) { try { cached = await manager.scanPorts(project.sandboxId); } catch { /* ignore */ } }

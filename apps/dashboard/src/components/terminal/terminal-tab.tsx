@@ -25,6 +25,7 @@ export function TerminalTab({
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const themeId = useThemeStore((s) => s.themeId);
 
   // Create xterm instance on mount
@@ -58,6 +59,7 @@ export function TerminalTab({
 
     xtermRef.current = xterm;
     fitAddonRef.current = fitAddon;
+    lastSizeRef.current = null;
     registerXterm(terminalId, xterm);
 
     return () => {
@@ -65,16 +67,19 @@ export function TerminalTab({
       xterm.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;
+      lastSizeRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminalId]);
 
-  // Fit when active tab changes or container resizes
   const handleFit = useCallback(() => {
     if (!fitAddonRef.current || !xtermRef.current) return;
     try {
       fitAddonRef.current.fit();
       const { cols, rows } = xtermRef.current;
+      const prev = lastSizeRef.current;
+      if (prev && prev.cols === cols && prev.rows === rows) return;
+      lastSizeRef.current = { cols, rows };
       onResize(terminalId, cols, rows);
     } catch {
       // ignore
@@ -83,7 +88,6 @@ export function TerminalTab({
 
   useEffect(() => {
     if (isActive) {
-      // Re-fit when tab becomes active
       requestAnimationFrame(handleFit);
     }
   }, [isActive, handleFit]);
@@ -95,16 +99,22 @@ export function TerminalTab({
     xtermRef.current.options.theme = t.terminalTheme;
   }, [themeId]);
 
-  // Watch for container resize
+  // Watch for container resize (debounced to avoid SIGWINCH storms)
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
+    let rafId: number | null = null;
     const resizeObserver = new ResizeObserver(() => {
-      if (isActive) handleFit();
+      if (!isActive) return;
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => { rafId = null; handleFit(); });
     });
     resizeObserver.observe(el);
-    return () => resizeObserver.disconnect();
+    return () => {
+      resizeObserver.disconnect();
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
   }, [isActive, handleFit]);
 
   return (

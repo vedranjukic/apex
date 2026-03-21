@@ -30,6 +30,7 @@ sqlite.exec(`
     description TEXT NOT NULL DEFAULT '',
     sandbox_id TEXT,
     sandbox_snapshot TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL DEFAULT 'daytona',
     status TEXT NOT NULL DEFAULT 'creating',
     status_error TEXT,
     agent_type TEXT NOT NULL DEFAULT 'build',
@@ -68,5 +69,8 @@ sqlite.exec(`
     updated_at TEXT NOT NULL
   );
 `);
+
+// Migrations for columns added after initial schema
+try { sqlite.exec(`ALTER TABLE projects ADD COLUMN provider TEXT NOT NULL DEFAULT 'daytona'`); } catch { /* column already exists */ }
 
 export const db = drizzle(sqlite, { schema });

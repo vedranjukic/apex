@@ -25,6 +25,7 @@ export interface Project {
   description: string;
   sandboxId: string | null;
   sandboxSnapshot: string;
+  provider: string;
   status: string;
   statusError: string | null;
   agentType: string;
@@ -40,7 +41,7 @@ export interface Project {
 export const projectsApi = {
   list: () => request<Project[]>('/projects'),
   get: (id: string) => request<Project>(`/projects/${id}`),
-  create: (data: { name: string; description?: string; agentType?: string; gitRepo?: string }) =>
+  create: (data: { name: string; description?: string; agentType?: string; provider?: string; gitRepo?: string }) =>
     request<Project>('/projects', {
       method: 'POST',
       body: JSON.stringify(data),

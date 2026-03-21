@@ -32,6 +32,7 @@ export interface IProject {
   description: string;
   sandboxId: string | null;
   sandboxSnapshot: string;
+  provider: string;
   status: ProjectStatus;
   agentType: AgentType | string;
   agentConfig: IAgentConfig;

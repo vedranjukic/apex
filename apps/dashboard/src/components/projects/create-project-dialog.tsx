@@ -1,6 +1,7 @@
 import { useState, FormEvent } from 'react';
-import { X } from 'lucide-react';
+import { X, Cloud, Container } from 'lucide-react';
 import { useProjectsStore } from '../../stores/projects-store';
+import { cn } from '../../lib/cn';
 
 interface Props {
   open: boolean;
@@ -8,10 +9,16 @@ interface Props {
   onCreated: (id: string) => void;
 }
 
+const PROVIDERS = [
+  { value: 'daytona', label: 'Daytona', sublabel: 'Cloud sandbox', icon: Cloud },
+  { value: 'docker', label: 'Docker', sublabel: 'Local container', icon: Container },
+] as const;
+
 export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   const createProject = useProjectsStore((s) => s.createProject);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [provider, setProvider] = useState('daytona');
   const [gitRepo, setGitRepo] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -25,11 +32,13 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
       const project = await createProject({
         name: name.trim(),
         description: description.trim(),
+        provider,
         gitRepo: gitRepo.trim() || undefined,
       });
       onCreated(project.id);
       setName('');
       setDescription('');
+      setProvider('daytona');
       setGitRepo('');
       onClose();
     } finally {
@@ -57,6 +66,35 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
               placeholder="My Project"
               className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Sandbox Provider</label>
+            <div className="grid grid-cols-2 gap-2">
+              {PROVIDERS.map((p) => {
+                const Icon = p.icon;
+                const selected = provider === p.value;
+                return (
+                  <button
+                    key={p.value}
+                    type="button"
+                    onClick={() => setProvider(p.value)}
+                    className={cn(
+                      'flex items-center gap-2 px-3 py-2 rounded-lg border text-sm transition-colors text-left',
+                      selected
+                        ? 'border-primary bg-primary/10 text-text-primary'
+                        : 'border-border hover:border-text-muted text-text-muted',
+                    )}
+                  >
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <div>
+                      <div className="font-medium">{p.label}</div>
+                      <div className="text-xs opacity-70">{p.sublabel}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div>

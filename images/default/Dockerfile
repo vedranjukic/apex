@@ -99,13 +99,18 @@ RUN bash -c "source /usr/local/share/nvm/nvm.sh && nvm install 25 && nvm use 25 
 
 RUN npm install -g ts-node@10.9.2 typescript@5.9.3 typescript-language-server@5.1.3 bun@1.3.6 @anthropic-ai/claude-code@2.1.19 openclaw@2026.2.1 opencode-ai@1.1.35 oh-my-openagent
 
+# Install Daytona daemon
+COPY assets/daytona-daemon /usr/local/bin/daytona-daemon
+RUN chmod +x /usr/local/bin/daytona-daemon
+
 # Create directory for computer use plugin
 RUN mkdir -p /usr/local/lib && chown daytona:daytona /usr/local/lib
 
 ENV LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8 \
     JAVA_HOME=/usr/lib/jvm/default-java \
-    GOPATH=/home/daytona/go
+    GOPATH=/home/daytona/go \
+    DAYTONA_SANDBOX_USER=daytona
 ENV PATH="${GOPATH}/bin:${JAVA_HOME}/bin:${PATH}"
 
 # Switch to Daytona user
@@ -119,5 +124,5 @@ RUN mkdir -p ~/.config/opencode \
     && echo '{"plugin":["oh-my-openagent"]}' > ~/.config/opencode/opencode.json \
     && echo '{}' > ~/.config/opencode/oh-my-openagent.json
 
-# Keep the container running indefinitely
-ENTRYPOINT [ "sleep", "infinity" ]
+# Start the Daytona daemon in the background, then keep the container alive
+ENTRYPOINT [ "/bin/sh", "-c", "/usr/local/bin/daytona-daemon & sleep infinity" ]

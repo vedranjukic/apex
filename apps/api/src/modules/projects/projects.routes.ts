@@ -28,7 +28,7 @@ export const projectsRoutes = new Elysia({ prefix: '/api/projects' })
       set.status = 503;
       return { error: 'Sandbox not ready' };
     }
-    const sm = projectsService.getSandboxManager();
+    const sm = projectsService.getSandboxManager(project.provider);
     if (!sm) {
       set.status = 503;
       return { error: 'Sandbox manager not available' };
@@ -46,7 +46,7 @@ export const projectsRoutes = new Elysia({ prefix: '/api/projects' })
       set.status = 503;
       return { error: 'Sandbox not ready' };
     }
-    const sm = projectsService.getSandboxManager();
+    const sm = projectsService.getSandboxManager(project.provider);
     if (!sm) {
       set.status = 503;
       return { error: 'Sandbox manager not available' };

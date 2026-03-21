@@ -320,6 +320,8 @@ export interface OrchestratorConfig {
   openaiApiKey?: string;
   githubToken?: string;
   snapshot?: string;
+  /** Container image for Docker / Apple Container providers. */
+  image?: string;
   timeoutMs?: number;
   /** Sandbox provider backend. Defaults to `"daytona"`. */
   provider?: 'daytona' | 'docker' | 'apple-container';

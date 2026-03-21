@@ -16,6 +16,7 @@
     }
   },
   "dependencies": {
+    "dockerode": "^4.0.7",
     "tslib": "^2.3.0"
   }
 }

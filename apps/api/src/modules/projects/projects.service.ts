@@ -6,56 +6,71 @@ import { projectsWsBroadcast } from './projects.ws';
 
 export type Project = typeof projects.$inferSelect & { threads?: (typeof tasks.$inferSelect)[] };
 
+type ProviderType = 'daytona' | 'docker' | 'apple-container';
+
 class ProjectsService {
-  private sandboxManager: SandboxManager | null = null;
+  private sandboxManagers = new Map<string, SandboxManager>();
 
   async init() {
-    await this.initSandboxManager();
+    await this.initSandboxManagers();
   }
 
-  private async initSandboxManager() {
-    const hasAnthropicKey = !!process.env.ANTHROPIC_API_KEY;
-    const hasDaytonaKey = !!process.env.DAYTONA_API_KEY;
-    const provider = (process.env.SANDBOX_PROVIDER as 'daytona' | 'docker' | 'apple-container') || 'daytona';
+  private async initSandboxManagers() {
+    this.sandboxManagers.clear();
 
-    if (provider === 'daytona' && !hasAnthropicKey && !hasDaytonaKey) {
-      console.log('[projects] SandboxManager skipped – no API keys configured');
-      this.sandboxManager = null;
-      return;
+    const sharedConfig = {
+      anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+      openaiApiKey: process.env.OPENAI_API_KEY,
+      githubToken: process.env.GITHUB_TOKEN,
+    };
+
+    const hasDaytonaKey = !!process.env.DAYTONA_API_KEY;
+    const hasAnthropicKey = !!process.env.ANTHROPIC_API_KEY;
+
+    if (hasDaytonaKey || hasAnthropicKey) {
+      try {
+        const mgr = new SandboxManager({ ...sharedConfig, provider: 'daytona' });
+        await mgr.initialize();
+        this.sandboxManagers.set('daytona', mgr);
+        console.log('[projects] SandboxManager initialized (provider=daytona)');
+      } catch (err) {
+        console.error('[projects] SandboxManager init failed (daytona):', err);
+      }
+    } else {
+      console.log('[projects] Daytona SandboxManager skipped – no API keys configured');
     }
+
     try {
-      this.sandboxManager = new SandboxManager({
-        anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-        openaiApiKey: process.env.OPENAI_API_KEY,
-        githubToken: process.env.GITHUB_TOKEN,
-        provider,
-      });
-      await this.sandboxManager.initialize();
-      console.log(`[projects] SandboxManager initialized (provider=${provider})`);
+      const mgr = new SandboxManager({ ...sharedConfig, provider: 'docker' });
+      await mgr.initialize();
+      this.sandboxManagers.set('docker', mgr);
+      console.log('[projects] SandboxManager initialized (provider=docker)');
     } catch (err) {
-      console.error(`[projects] SandboxManager init failed:`, err);
-      this.sandboxManager = null;
+      console.log('[projects] Docker SandboxManager skipped – Docker not available:', (err as Error).message);
     }
   }
 
   async reinitSandboxManager() {
-    console.log('[projects] Re-initializing SandboxManager...');
-    await this.initSandboxManager();
+    console.log('[projects] Re-initializing SandboxManagers...');
+    await this.initSandboxManagers();
   }
 
-  private async ensureSandboxManager(): Promise<boolean> {
-    if (this.sandboxManager) return true;
-    await this.initSandboxManager();
-    return this.sandboxManager !== null;
+  private async ensureSandboxManager(provider?: string): Promise<boolean> {
+    if (provider && this.sandboxManagers.has(provider)) return true;
+    if (!provider && this.sandboxManagers.size > 0) return true;
+    await this.initSandboxManagers();
+    if (provider) return this.sandboxManagers.has(provider);
+    return this.sandboxManagers.size > 0;
   }
 
   async reconcileSandboxStatus(projectId: string): Promise<Project> {
     const project = await this.findById(projectId);
     if (!project.sandboxId) return project;
-    if (!(await this.ensureSandboxManager())) return project;
+    const manager = this.getManagerForProject(project);
+    if (!manager) return project;
 
     try {
-      const actualState = await this.sandboxManager!.getSandboxState(project.sandboxId);
+      const actualState = await manager.getSandboxState(project.sandboxId);
       const stateToStatus: Record<string, string> = {
         started: 'running', stopped: 'stopped', starting: 'starting',
         stopping: 'stopped', error: 'error', archived: 'stopped',
@@ -77,13 +92,18 @@ class ProjectsService {
     const project = await this.findById(projectId);
     if (project.status !== 'stopped' && project.status !== 'error') return;
 
-    if (!(await this.ensureSandboxManager())) return;
+    const manager = this.getManagerForProject(project);
+    if (!manager) {
+      if (!(await this.ensureSandboxManager(project.provider))) return;
+    }
+    const mgr = this.getManagerForProject(project);
+    if (!mgr) return;
 
     if (project.sandboxId) {
       try {
         await db.update(projects).set({ status: 'starting' }).where(eq(projects.id, projectId));
         projectsWsBroadcast('project_updated', await this.findById(projectId));
-        await this.sandboxManager!.reconnectSandbox(project.sandboxId, project.name);
+        await mgr.reconnectSandbox(project.sandboxId, project.name);
         await db.update(projects).set({ status: 'running', statusError: null }).where(eq(projects.id, projectId));
         projectsWsBroadcast('project_updated', await this.findById(projectId));
       } catch (err) {
@@ -94,7 +114,7 @@ class ProjectsService {
     } else {
       await db.update(projects).set({ status: 'creating' }).where(eq(projects.id, projectId));
       projectsWsBroadcast('project_updated', await this.findById(projectId));
-      await this.provisionSandbox(projectId, project.sandboxSnapshot, project.name, project.gitRepo, project.agentType);
+      await this.provisionSandbox(projectId, project.sandboxSnapshot, project.provider as ProviderType, project.name, project.gitRepo, project.agentType);
     }
   }
 
@@ -122,11 +142,13 @@ class ProjectsService {
       description?: string;
       agentType?: string;
       sandboxSnapshot?: string;
+      provider?: string;
       gitRepo?: string;
       agentConfig?: Record<string, unknown>;
     },
   ): Promise<Project> {
     const id = crypto.randomUUID();
+    const provider = data.provider || process.env['SANDBOX_PROVIDER'] || 'daytona';
     await db.insert(projects).values({
       id,
       userId,
@@ -134,6 +156,7 @@ class ProjectsService {
       description: data.description || '',
       agentType: data.agentType || 'build',
       sandboxSnapshot: data.sandboxSnapshot || process.env['DAYTONA_SNAPSHOT'] || '',
+      provider,
       gitRepo: data.gitRepo || null,
       agentConfig: data.agentConfig || null,
       status: 'creating',
@@ -141,7 +164,7 @@ class ProjectsService {
     const saved = await this.findById(id);
     projectsWsBroadcast('project_created', saved);
 
-    this.provisionSandbox(saved.id, saved.sandboxSnapshot, saved.name, saved.gitRepo, saved.agentType).catch((err) => {
+    this.provisionSandbox(saved.id, saved.sandboxSnapshot, saved.provider as ProviderType, saved.name, saved.gitRepo, saved.agentType).catch((err) => {
       console.error(`[projects] Failed to provision sandbox for project ${saved.id}:`, err);
     });
 
@@ -165,8 +188,9 @@ class ProjectsService {
       familySandboxIds = family.filter((m) => m.sandboxId && m.id !== id).map((m) => m.sandboxId!);
     } catch { /* not part of a fork family */ }
 
-    if (sandboxId && this.sandboxManager) {
-      const deleted = await this.deleteOrStopSandbox(sandboxId);
+    const manager = this.getManagerForProject(project);
+    if (sandboxId && manager) {
+      const deleted = await this.deleteOrStopSandbox(sandboxId, manager);
       if (deleted) {
         await db.delete(projects).where(eq(projects.id, id));
       } else {
@@ -178,28 +202,26 @@ class ProjectsService {
 
     projectsWsBroadcast('project_deleted', { id });
 
-    if (sandboxId && this.sandboxManager && familySandboxIds.length > 0) {
-      this.cleanupOrphanedFamilySandboxes(familySandboxIds).catch(() => {});
+    if (sandboxId && manager && familySandboxIds.length > 0) {
+      this.cleanupOrphanedFamilySandboxes(familySandboxIds, manager).catch(() => {});
     }
   }
 
-  private async deleteOrStopSandbox(sandboxId: string): Promise<boolean> {
-    if (!this.sandboxManager) return false;
+  private async deleteOrStopSandbox(sandboxId: string, manager: SandboxManager): Promise<boolean> {
     try {
-      await this.sandboxManager.deleteSandbox(sandboxId);
+      await manager.deleteSandbox(sandboxId);
       return true;
     } catch {
-      try { await this.sandboxManager.stopSandbox(sandboxId); } catch { /* ignore */ }
+      try { await manager.stopSandbox(sandboxId); } catch { /* ignore */ }
       return false;
     }
   }
 
-  private async cleanupOrphanedFamilySandboxes(sandboxIds: string[]): Promise<void> {
-    if (!this.sandboxManager) return;
+  private async cleanupOrphanedFamilySandboxes(sandboxIds: string[], manager: SandboxManager): Promise<void> {
     for (const sbId of sandboxIds) {
       const liveCount = await db.select({ count: sql<number>`count(*)` }).from(projects).where(and(eq(projects.sandboxId, sbId), isNull(projects.deletedAt)));
       if ((liveCount[0]?.count ?? 0) > 0) continue;
-      const deleted = await this.deleteOrStopSandbox(sbId);
+      const deleted = await this.deleteOrStopSandbox(sbId, manager);
       if (deleted) {
         const ghost = await db.query.projects.findFirst({
           where: and(eq(projects.sandboxId, sbId), isNotNull(projects.deletedAt)),
@@ -223,6 +245,7 @@ class ProjectsService {
       description: source.description,
       agentType: source.agentType,
       sandboxSnapshot: source.sandboxSnapshot,
+      provider: source.provider,
       gitRepo: source.gitRepo,
       agentConfig: source.agentConfig,
       forkedFromId: rootId,
@@ -236,7 +259,7 @@ class ProjectsService {
       ? (await this.findById(source.forkedFromId)).name
       : source.name;
 
-    this.provisionFork(saved.id, source.sandboxId, branchName, rootName).catch((err) => {
+    this.provisionFork(saved.id, saved.provider as ProviderType, source.sandboxId, branchName, rootName).catch((err) => {
       console.error(`[projects] Failed to provision fork for project ${saved.id}:`, err);
     });
 
@@ -255,21 +278,35 @@ class ProjectsService {
     }) as Promise<Project[]>;
   }
 
-  getSandboxManager(): SandboxManager | null {
-    return this.sandboxManager;
+  /**
+   * Get the sandbox manager for a specific provider, or the first available one.
+   * Callers with access to the project should use {@link getManagerForProject} instead.
+   */
+  getSandboxManager(provider?: string): SandboxManager | null {
+    if (provider) return this.sandboxManagers.get(provider) ?? null;
+    // Backward-compat: return any available manager (prefer daytona)
+    return this.sandboxManagers.get('daytona')
+      ?? this.sandboxManagers.values().next().value
+      ?? null;
+  }
+
+  /** Resolve the correct sandbox manager for a project using its provider field. */
+  private getManagerForProject(project: { provider: string }): SandboxManager | null {
+    return this.sandboxManagers.get(project.provider) ?? this.getSandboxManager();
   }
 
   private async provisionSandbox(
-    projectId: string, snapshot: string, projectName?: string,
-    gitRepo?: string | null, agentType?: string,
+    projectId: string, snapshot: string, provider: ProviderType,
+    projectName?: string, gitRepo?: string | null, agentType?: string,
   ): Promise<void> {
-    if (!(await this.ensureSandboxManager())) {
+    if (!(await this.ensureSandboxManager(provider))) {
       await db.update(projects).set({ status: 'stopped' }).where(eq(projects.id, projectId));
       projectsWsBroadcast('project_updated', await this.findById(projectId));
       return;
     }
+    const manager = this.sandboxManagers.get(provider)!;
     try {
-      const sandboxId = await this.sandboxManager!.createSandbox(snapshot, projectName, gitRepo || undefined, agentType);
+      const sandboxId = await manager.createSandbox(snapshot, projectName, gitRepo || undefined, agentType);
       await db.update(projects).set({ sandboxId, status: 'running', statusError: null }).where(eq(projects.id, projectId));
       projectsWsBroadcast('project_updated', await this.findById(projectId));
     } catch (err) {
@@ -281,15 +318,17 @@ class ProjectsService {
   }
 
   private async provisionFork(
-    projectId: string, sourceSandboxId: string, branchName: string, projectName?: string,
+    projectId: string, provider: ProviderType, sourceSandboxId: string,
+    branchName: string, projectName?: string,
   ): Promise<void> {
-    if (!(await this.ensureSandboxManager())) {
+    if (!(await this.ensureSandboxManager(provider))) {
       await db.update(projects).set({ status: 'stopped' }).where(eq(projects.id, projectId));
       projectsWsBroadcast('project_updated', await this.findById(projectId));
       return;
     }
+    const manager = this.sandboxManagers.get(provider)!;
     try {
-      const sandboxId = await this.sandboxManager!.forkSandbox(sourceSandboxId, branchName, projectName);
+      const sandboxId = await manager.forkSandbox(sourceSandboxId, branchName, projectName);
       await db.update(projects).set({ sandboxId, status: 'running', statusError: null }).where(eq(projects.id, projectId));
       projectsWsBroadcast('project_updated', await this.findById(projectId));
     } catch (err) {

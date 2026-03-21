@@ -123,6 +123,8 @@ export class SandboxManager extends EventEmitter {
         config.githubToken || process.env["GITHUB_TOKEN"] || "",
       snapshot:
         config.snapshot || process.env["DAYTONA_SNAPSHOT"] || "daytona-apex-3",
+      image:
+        config.image || process.env["SANDBOX_IMAGE"] || "docker.io/daytonaio/apex-default:0.1.0",
       timeoutMs: config.timeoutMs || 600000,
       provider:
         (config.provider as SandboxProviderType) ||
@@ -132,7 +134,9 @@ export class SandboxManager extends EventEmitter {
   }
 
   async initialize(): Promise<void> {
-    this.provider = createSandboxProvider(this.config.provider);
+    this.provider = createSandboxProvider(this.config.provider, {
+      image: this.config.image,
+    });
     await this.provider.initialize();
   }
 
@@ -152,6 +156,7 @@ export class SandboxManager extends EventEmitter {
 
     const sandbox = await this.provider.create({
       snapshot: snapshot || this.config.snapshot,
+      image: this.config.image,
       autoStopInterval: 0,
     });
 

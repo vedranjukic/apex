@@ -12,6 +12,7 @@ interface ProjectsState {
     name: string;
     description?: string;
     agentType?: string;
+    provider?: string;
     gitRepo?: string;
   }) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;

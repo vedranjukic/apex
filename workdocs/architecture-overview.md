@@ -3,7 +3,7 @@
 ## Stack
 - **API**: NestJS + TypeORM + SQLite (`apps/api`) on port 6000
 - **Dashboard**: React + Zustand + Tailwind (`apps/dashboard`) on port 4200 (Vite)
-- **Orchestrator lib**: `libs/orchestrator` – manages Daytona sandboxes + WebSocket bridge to agent CLIs
+- **Orchestrator lib**: `libs/orchestrator` – provider-agnostic sandbox management (Daytona cloud or Docker local) + WebSocket bridge to agent CLIs
 - **Sandbox bridge**: Node.js script uploaded into each Daytona sandbox. Uses an adapter pattern to support three agent backends:
   - **Claude Code**: long-lived `claude --output-format stream-json --input-format stream-json` process with bidirectional stdin/stdout pipes
   - **OpenCode**: per-prompt `opencode run --format json` processes with `--session` for context continuity
@@ -11,15 +11,15 @@
   All adapters normalize output into the same event format (`system`/`assistant`/`result` with content blocks) so the gateway and dashboard stay agent-agnostic. Terminal PTY sessions are shared across all agent types.
 
 ## Data Model
-- **Project** → has a Daytona sandbox (provisioned async on creation). Optional `gitRepo` URL for cloning a repository. Stores `agentType` as the project-level default agent (claude_code, open_code, codex).
+- **Project** → has a sandbox (provisioned async on creation). Each project stores a `provider` field (`daytona` or `docker`) that selects the sandbox backend. Optional `gitRepo` URL for cloning a repository. Stores `agentType` as the project-level default agent (claude_code, open_code, codex).
 - **Thread** (DB table: `tasks`) → belongs to a project, has messages. Title auto-generated from first prompt. Stores `claudeSessionId` to maintain a persistent Claude Code session across follow-up prompts. Optional `agentType` overrides the project default, allowing different threads within one project to use different agents.
 - **Message** → belongs to a thread. Roles: `user`, `assistant`, `system`. Content is JSON array of blocks (text, tool_use, tool_result).
 
 ## Key Flows
 
 ### Project Creation
-1. `POST /api/projects` → creates project with `status: creating`. Accepts optional `gitRepo` URL.
-2. `ProjectsService.provisionSandbox()` runs async → creates Daytona sandbox via `SandboxManager`, installs bridge + MCP terminal server, connects via WSS preview URL → sets `status: running` + stores `sandboxId`
+1. `POST /api/projects` → creates project with `status: creating`. Accepts optional `gitRepo` URL and `provider` (default `daytona`).
+2. `ProjectsService.provisionSandbox()` runs async → routes to the correct `SandboxManager` based on the project's `provider` field, creates sandbox, installs bridge + MCP terminal server, connects via preview URL → sets `status: running` + stores `sandboxId`
 3. During sandbox provisioning: if `gitRepo` is set, clones the repo into the project directory (`git clone <url> .`); otherwise runs `git init` so every project starts version-controlled
 4. Dashboard polls project status while `creating`, shows sandbox status indicator (green/yellow/red) in top bar
 

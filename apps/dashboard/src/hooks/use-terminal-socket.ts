@@ -115,7 +115,13 @@ export function useTerminalSocket(
       setTerminals(infos, true);
       for (const t of terminals) {
         reg.clearBuffer(t.id);
-        if (t.scrollback) reg.writeOutput(t.id, t.scrollback);
+        if (t.scrollback) {
+          const xterm = reg.get(t.id);
+          if (xterm) {
+            xterm.reset();
+          }
+          reg.writeOutput(t.id, t.scrollback);
+        }
       }
     };
 

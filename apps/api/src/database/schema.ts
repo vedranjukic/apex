@@ -23,6 +23,7 @@ export const projects = sqliteTable('projects', {
   description: text('description').notNull().default(''),
   sandboxId: text('sandbox_id'),
   sandboxSnapshot: text('sandbox_snapshot').notNull().default(''),
+  provider: text('provider').notNull().default('daytona'),
   status: text('status').notNull().default('creating'),
   statusError: text('status_error'),
   agentType: text('agent_type').notNull().default('build'),

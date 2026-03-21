@@ -13,6 +13,11 @@ export enum AgentType {
   Sisyphus = 'sisyphus',
 }
 
+export enum SandboxProvider {
+  Daytona = 'daytona',
+  Docker = 'docker',
+}
+
 // ── Task ─────────────────────────────────────────────
 export enum TaskStatus {
   Running = 'running',
