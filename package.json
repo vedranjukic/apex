@@ -10,10 +10,9 @@
     "serve": "npx nx run-many --target=serve --projects=@apex/api,@apex/dashboard --parallel=2",
     "serve:api": "npx nx serve @apex/api",
     "serve:dashboard": "npx nx serve @apex/dashboard",
+    "desktop:dev": "npx nx build @apex/api && npx nx build @apex/dashboard && cd apps/desktop && yarn start",
     "desktop:build": "npx nx build @apex/api && npx nx build @apex/dashboard && node scripts/build-desktop.js",
-    "desktop:dev": "npx nx build @apex/api && npx nx build @apex/dashboard && npx tsc --project apps/desktop/tsconfig.json && electron apps/desktop/dist/main.js",
-    "desktop:package": "npm run desktop:build && electron-builder --mac && node scripts/restore-workspace-links.js",
-    "desktop:restore-links": "node scripts/restore-workspace-links.js",
+    "desktop:package": "yarn run desktop:build && cd apps/desktop && npx electrobun build --env stable",
     "test:agent-retry": "cd apps/api && APEX_TEST_AGENT_TIMEOUT_MS=100 npx vitest run",
     "test:bridge-adapters": "cd libs/orchestrator && npx vitest run",
     "test:agent-retry-e2e": "APEX_E2E_TEST=1 npx nx e2e @apex/api-e2e --testPathPattern=agent-retry",
@@ -44,11 +43,11 @@
     "react-router-dom": "^7.13.0",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.4.1",
+    "tar": "^7.5.12",
     "ws": "^8.19.0",
     "zustand": "^5.0.11"
   },
   "devDependencies": {
-    "@electron/rebuild": "^4.0.3",
     "@nx/devkit": "22.5.1",
     "@nx/js": "22.5.1",
     "@nx/node": "22.5.1",
@@ -73,8 +72,7 @@
     "better-sqlite3": "^12.6.2",
     "bun": "^1.3.11",
     "drizzle-kit": "^0.31.10",
-    "electron": "^40.6.1",
-    "electron-builder": "^26.8.1",
+    "electrobun": "latest",
     "jest": "^30.0.2",
     "jiti": "2.4.2",
     "jsdom": "~22.1.0",
@@ -89,47 +87,10 @@
     "apps/*",
     "libs/*"
   ],
+  "resolutions": {
+    "vite": "^7.0.0"
+  },
   "build": {
-    "appId": "com.apex.desktop",
-    "productName": "Apex",
-    "directories": {
-      "output": "dist-electron",
-      "buildResources": "assets/logo"
-    },
-    "files": [
-      "package.json",
-      "apps/api/dist",
-      "apps/dashboard/dist",
-      "apps/desktop/dist",
-      "libs/orchestrator/dist",
-      "libs/orchestrator/package.json",
-      "libs/shared/dist",
-      "libs/shared/package.json",
-      "node_modules/**",
-      "!node_modules/node-pty",
-      "!node_modules/@nx",
-      "!node_modules/@swc",
-      "!node_modules/typescript",
-      "!node_modules/@playwright",
-      "!node_modules/vite",
-      "!node_modules/@vitejs",
-      "!node_modules/tailwindcss"
-    ],
-    "asar": false,
-    "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64"
-          ]
-        }
-      ],
-      "category": "public.app-category.developer-tools",
-      "icon": "assets/logo/icon.png"
-    },
-    "extraMetadata": {
-      "main": "apps/desktop/dist/main.js"
-    }
+    "note": "Desktop packaging is handled by Electrobun CLI. See apps/desktop/electrobun.config.ts"
   }
 }

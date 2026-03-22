@@ -325,4 +325,7 @@ export interface OrchestratorConfig {
   timeoutMs?: number;
   /** Sandbox provider backend. Defaults to `"daytona"`. */
   provider?: 'daytona' | 'docker' | 'apple-container';
+  /** Base URL of the LLM proxy (e.g. `http://localhost:6000`).
+   *  When set, containers receive proxy URLs instead of raw API keys. */
+  proxyBaseUrl?: string;
 }

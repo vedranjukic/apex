@@ -156,6 +156,15 @@ async function executeAgainstSandbox(
   const project = await projectsService.findById(thread.projectId);
   const effectiveAgentType = thread.agentType ?? project.agentType;
 
+  if (!process.env.ANTHROPIC_API_KEY) {
+    emitTo(client, 'agent_error', {
+      threadId,
+      error: 'ANTHROPIC_API_KEY is not configured. Go to Settings to add your API key.',
+    });
+    await updateThreadStatusAndNotify(threadId, 'error');
+    return;
+  }
+
   if (!project.sandboxId) {
     emitTo(client, 'agent_error', { threadId, error: 'Project sandbox not ready' });
     return;

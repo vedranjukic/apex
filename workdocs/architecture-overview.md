@@ -116,6 +116,44 @@ When the user sends a prompt in **Plan** mode, the response renders in a special
 6. After Build, the button grays out and shows "Built" (detected by checking for `BUILD_PROMPT_PREFIX` in user messages)
 7. After page refresh, plans reconstruct from message content: `AgentGroup` scans text blocks for headings, and the build-prompt message proves plan-mode history
 
+## LLM API Key Proxy
+
+API keys for LLM providers (Anthropic, OpenAI) are **never sent into sandbox containers**. Instead, the Elysia API runs a streaming reverse proxy that injects real keys server-side.
+
+### How It Works
+
+```
+Container (OpenCode) → http://<host-ip>:6000/llm-proxy/anthropic/v1/messages
+                                    ↓
+                        Elysia LLM Proxy (llm-proxy.routes.ts)
+                                    ↓
+                        Reads real key from SettingsService
+                                    ↓
+                        https://api.anthropic.com/v1/messages (with real x-api-key header)
+```
+
+Containers receive:
+- `ANTHROPIC_API_KEY=sk-proxy-placeholder` / `OPENAI_API_KEY=sk-proxy-placeholder` — dummy values so SDKs initialize without error
+- `ANTHROPIC_BASE_URL=http://<host-ip>:<port>/llm-proxy/anthropic/v1` — redirects all Anthropic API calls through the proxy
+- `OPENAI_BASE_URL=http://<host-ip>:<port>/llm-proxy/openai/v1` — redirects all OpenAI API calls through the proxy
+
+The OpenCode config (`opencode.json`) uses `{env:ANTHROPIC_BASE_URL}` / `{env:OPENAI_BASE_URL}` in `provider.*.options.baseURL` to pick up these URLs.
+
+### Provider-Aware Routing
+
+The proxy URL resolution in `sandbox-manager.ts` adapts to the sandbox provider:
+
+- **Local providers** (Docker, Apple Container): `localhost` in the proxy URL is replaced with the host machine's LAN IP (via `os.networkInterfaces()`), since containers can't reach the host via `localhost`. The API server must listen on `0.0.0.0`.
+- **Daytona** (cloud): The proxy only works when `API_BASE_URL` is set to a publicly reachable URL. If the API is running locally (no public URL), falls back to sending real keys directly into the container (same as pre-proxy behavior).
+
+### Key Files
+
+| File | Role |
+|---|---|
+| `apps/api/src/modules/llm-proxy/llm-proxy.routes.ts` | Elysia streaming reverse proxy — matches `/llm-proxy/(anthropic\|openai)/*`, injects real API keys from `settingsService` |
+| `libs/orchestrator/src/lib/sandbox-manager.ts` | `resolveProxyBaseUrl()` — adapts proxy URL per provider; `restartBridge()` / `installBridge()` — writes `.env` with proxy URLs + dummy keys, configures `opencode.json` with provider base URLs |
+| `apps/api/src/modules/settings/settings.service.ts` | Stores and retrieves API keys (SQLite DB + env var fallback) — keys never leave this service |
+
 ## Preview Proxy (Local Providers)
 
 Docker and Apple Container sandboxes have IPs reachable only from the API server host (Docker bridge network or macOS virtual network). The **preview proxy** makes sandbox ports accessible to the browser without port mapping.

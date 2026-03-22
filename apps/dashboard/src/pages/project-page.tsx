@@ -161,11 +161,9 @@ export function ProjectPage() {
 
   if (loading) {
     return (
-      <AppShell>
-        <div className="flex-1 flex items-center justify-center">
-          <Loader2 className="w-6 h-6 animate-spin text-white/60" />
-        </div>
-      </AppShell>
+      <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.85)' }}>
+        <Loader2 style={{ width: 32, height: 32, color: '#60a5fa', animation: 'spin 1s linear infinite' }} />
+      </div>
     );
   }
 

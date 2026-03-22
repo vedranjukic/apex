@@ -87,19 +87,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     });
   },
 
-  bindProject: (projectId) => {
-    if (get().projectId === projectId) return;
-    // New project — wipe everything
-    set({
-      projectId,
-      terminals: [],
-      activeTerminalId: null,
-      panelOpen: false,
-      panelHeight: DEFAULT_PANEL_HEIGHT,
-      terminalsLoaded: false,
-    });
-  },
-
   addTerminal: (info, options) => {
     const existing = get().terminals.find((t) => t.id === info.id);
     if (existing) return;

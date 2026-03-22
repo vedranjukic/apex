@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     chromium \
     iputils-ping \
     bind9-dnsutils \
+    inotify-tools \
     # Java development
     default-jdk \
     maven \
@@ -100,6 +101,14 @@ RUN bash -c "source /usr/local/share/nvm/nvm.sh && nvm install 25 && nvm use 25 
 
 RUN npm install -g ts-node@10.9.2 typescript@5.9.3 typescript-language-server@5.1.3 bun@1.3.6 @anthropic-ai/claude-code@2.1.19 openclaw@2026.2.1 opencode-ai@1.1.35 oh-my-openagent
 
+# Pre-install bridge npm dependencies (ws + node-pty) so sandbox creation
+# skips the expensive npm install + native compilation step at runtime.
+RUN mkdir -p /home/daytona/bridge \
+    && cd /home/daytona/bridge \
+    && npm init -y \
+    && npm install ws node-pty \
+    && chown -R daytona:daytona /home/daytona/bridge
+
 # Install Daytona daemon (arch-specific)
 COPY assets/daytona-daemon-${TARGETARCH} /usr/local/bin/daytona-daemon
 RUN chmod +x /usr/local/bin/daytona-daemon
@@ -124,6 +133,9 @@ RUN touch ~/.zshrc
 RUN mkdir -p ~/.config/opencode \
     && echo '{"plugin":["oh-my-openagent"]}' > ~/.config/opencode/opencode.json \
     && echo '{}' > ~/.config/opencode/oh-my-openagent.json
+
+# Pre-warm OpenCode's one-time DB migration so first sandbox start is instant
+RUN cd /tmp && /home/daytona/.opencode/bin/opencode session list 2>/dev/null; true
 
 # Start the Daytona daemon in the background, then keep the container alive
 ENTRYPOINT [ "/bin/sh", "-c", "/usr/local/bin/daytona-daemon & sleep infinity" ]

@@ -2,8 +2,8 @@
  * Open a project — focuses an existing window/tab if one is already
  * showing that project, otherwise opens a new one.
  *
- * In Electron: uses `focusOrOpenWindow` IPC which checks all
- * BrowserWindows by URL in the main process.
+ * In desktop (Electrobun): uses `focusOrOpenWindow` RPC which checks
+ * all BrowserWindows by URL in the main process.
  * In browsers: uses `window.open(url, name)` which reuses tabs
  * with the same window name.
  */

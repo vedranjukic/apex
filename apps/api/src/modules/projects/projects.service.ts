@@ -188,7 +188,17 @@ class ProjectsService {
   }
 
   async remove(id: string): Promise<void> {
-    const project = await this.findById(id);
+    const project = await db.query.projects.findFirst({
+      where: eq(projects.id, id),
+    });
+    if (!project) return;
+
+    if (project.deletedAt) {
+      await db.delete(projects).where(eq(projects.id, id));
+      projectsWsBroadcast('project_deleted', { id });
+      return;
+    }
+
     const sandboxId = project.sandboxId;
 
     let familySandboxIds: string[] = [];

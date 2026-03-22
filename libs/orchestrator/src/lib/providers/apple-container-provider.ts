@@ -439,8 +439,8 @@ export class AppleContainerProvider implements SandboxProvider {
 
   private async waitForContainer(
     containerId: string,
-    maxAttempts = 10,
-    intervalMs = 1000,
+    maxAttempts = 15,
+    intervalMs = 500,
   ): Promise<void> {
     for (let i = 0; i < maxAttempts; i++) {
       try {

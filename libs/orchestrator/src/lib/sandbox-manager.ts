@@ -8,6 +8,7 @@
 
 import WebSocket from "ws";
 import crypto from "crypto";
+import os from "os";
 import {
   createSandboxProvider,
   type SandboxProvider,
@@ -40,6 +41,55 @@ const BRIDGE_PORT = 8080;
 const VSCODE_PORT = 9090;
 const BRIDGE_DIR = "/home/daytona/bridge";
 const HOME_DIR = "/home/daytona";
+
+/**
+ * Resolve the LLM proxy base URL that containers will use to reach the host API.
+ *
+ * - For local providers (docker, apple-container): replace localhost/127.0.0.1
+ *   with the host's LAN IP so the container can reach it.
+ * - For Daytona (cloud): only works when a public `API_BASE_URL` is set.
+ *   If the URL still points at localhost, returns `null` to signal that the
+ *   proxy is unreachable and the caller should fall back to direct keys.
+ */
+function resolveProxyBaseUrl(
+  raw: string,
+  provider: string,
+): string | null {
+  try {
+    const u = new URL(raw);
+    const isLocal = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+
+    if (provider === "daytona") {
+      // Cloud sandbox can't reach our localhost — proxy only works with a
+      // public API_BASE_URL. If none is set, return null to skip proxying.
+      return isLocal ? null : raw;
+    }
+
+    // Local providers: swap localhost for the host's LAN IP
+    if (isLocal) {
+      const hostIp = getHostLanIp();
+      if (hostIp) {
+        u.hostname = hostIp;
+        return u.toString().replace(/\/$/, "");
+      }
+    }
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+/** Find the first non-internal IPv4 address on a LAN interface. */
+function getHostLanIp(): string | null {
+  const ifaces = os.networkInterfaces();
+  for (const addrs of Object.values(ifaces)) {
+    if (!addrs) continue;
+    for (const addr of addrs) {
+      if (!addr.internal && addr.family === "IPv4") return addr.address;
+    }
+  }
+  return null;
+}
 
 /** Convert a project name into a filesystem-safe slug. */
 function slugify(name: string): string {
@@ -131,6 +181,10 @@ export class SandboxManager extends EventEmitter {
         (config.provider as SandboxProviderType) ||
         (process.env["SANDBOX_PROVIDER"] as SandboxProviderType) ||
         "daytona",
+      proxyBaseUrl:
+        config.proxyBaseUrl ||
+        process.env["API_BASE_URL"] ||
+        `http://localhost:${process.env["PORT"] || "3000"}`,
     };
   }
 
@@ -1634,20 +1688,33 @@ export class SandboxManager extends EventEmitter {
       `${BRIDGE_DIR}/bridge.js`,
     );
 
-    // Write .env so OpenCode picks up provider keys
+    // Write .env — use proxy URLs when the proxy is reachable from the
+    // container, otherwise fall back to direct keys (e.g. Daytona cloud).
+    const proxyBase = resolveProxyBaseUrl(this.config.proxyBaseUrl, this.config.provider);
+    const useProxy = !!proxyBase;
     const dotEnvLines: string[] = [];
     if (this.config.anthropicApiKey) {
-      dotEnvLines.push(`ANTHROPIC_API_KEY=${this.config.anthropicApiKey}`);
+      if (useProxy) {
+        dotEnvLines.push(`ANTHROPIC_API_KEY=sk-proxy-placeholder`);
+        dotEnvLines.push(`ANTHROPIC_BASE_URL=${proxyBase}/llm-proxy/anthropic/v1`);
+      } else {
+        dotEnvLines.push(`ANTHROPIC_API_KEY=${this.config.anthropicApiKey}`);
+      }
     }
     if (this.config.openaiApiKey) {
-      dotEnvLines.push(`OPENAI_API_KEY=${this.config.openaiApiKey}`);
+      if (useProxy) {
+        dotEnvLines.push(`OPENAI_API_KEY=sk-proxy-placeholder`);
+        dotEnvLines.push(`OPENAI_BASE_URL=${proxyBase}/llm-proxy/openai/v1`);
+      } else {
+        dotEnvLines.push(`OPENAI_API_KEY=${this.config.openaiApiKey}`);
+      }
     }
     if (dotEnvLines.length > 0 && projectDir) {
       await sandbox.fs.uploadFile(
         Buffer.from(dotEnvLines.join("\n") + "\n"),
         `${projectDir}/.env`,
       );
-      console.log(`[bridge:${sid}] wrote .env with ${dotEnvLines.length} keys`);
+      console.log(`[bridge:${sid}] wrote .env (proxy=${useProxy ? proxyBase : "off — direct keys"})`);
     }
 
     // Write opencode.json if missing
@@ -1658,6 +1725,12 @@ export class SandboxManager extends EventEmitter {
       const openCodeConfig: Record<string, unknown> = {
         $schema: "https://opencode.ai/config.json",
         default_agent: "build",
+        ...(useProxy ? {
+          provider: {
+            anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
+            openai: { options: { baseURL: "{env:OPENAI_BASE_URL}" } },
+          },
+        } : {}),
         agent: {
           build: {
             description: "Full development agent with all tools enabled",
@@ -1701,15 +1774,24 @@ export class SandboxManager extends EventEmitter {
     const daytonaApiKeyR = process.env["DAYTONA_API_KEY"] || "";
     const daytonaApiUrlR =
       process.env["DAYTONA_API_URL"] || "https://app.daytona.io/api";
-    const proxyBaseUrl = process.env["API_BASE_URL"] || `http://localhost:${process.env["PORT"] || "3000"}`;
     const projectIdForBridge = this.projectIds.get(sandbox.id) || "";
+    const apexProxyForBridge = proxyBase || this.config.proxyBaseUrl;
     const envParts = [
-      `ANTHROPIC_API_KEY="${this.config.anthropicApiKey}"`,
-      `OPENAI_API_KEY="${this.config.openaiApiKey}"`,
+      ...(useProxy
+        ? [
+            `ANTHROPIC_API_KEY="sk-proxy-placeholder"`,
+            `ANTHROPIC_BASE_URL="${proxyBase}/llm-proxy/anthropic/v1"`,
+            `OPENAI_API_KEY="sk-proxy-placeholder"`,
+            `OPENAI_BASE_URL="${proxyBase}/llm-proxy/openai/v1"`,
+          ]
+        : [
+            `ANTHROPIC_API_KEY="${this.config.anthropicApiKey}"`,
+            `OPENAI_API_KEY="${this.config.openaiApiKey}"`,
+          ]),
       `DAYTONA_API_KEY="${daytonaApiKeyR}"`,
       `DAYTONA_API_URL="${daytonaApiUrlR}"`,
       `DAYTONA_SANDBOX_ID="${sandbox.id}"`,
-      `APEX_PROXY_BASE_URL="${proxyBaseUrl}"`,
+      `APEX_PROXY_BASE_URL="${apexProxyForBridge}"`,
       `APEX_PROJECT_ID="${projectIdForBridge}"`,
       `HOME="/home/daytona"`,
       `PATH="/home/daytona/.opencode/bin:$PATH"`,
@@ -1735,56 +1817,28 @@ export class SandboxManager extends EventEmitter {
     this.emit("status", session.sandboxId, "starting_bridge");
 
     const { sandbox, projectDir } = session;
-    // OpenCode is the single runtime — agentType param kept for backward compat
+    const sid = sandbox.id.slice(0, 8);
+    const t0 = Date.now();
+    const log = (msg: string) =>
+      console.log(`[install:${sid}] ${msg} (+${Date.now() - t0}ms)`);
 
-    await sandbox.fs.createFolder(BRIDGE_DIR, "755");
-
+    // ── Phase 0: Create directories (parallel) ──────
+    const mkdirPromises: Promise<void>[] = [
+      sandbox.fs.createFolder(BRIDGE_DIR, "755"),
+    ];
     if (projectDir && projectDir !== HOME_DIR) {
-      await sandbox.fs.createFolder(projectDir, "755");
+      mkdirPromises.push(sandbox.fs.createFolder(projectDir, "755"));
     }
+    await Promise.all(mkdirPromises);
+    log("dirs created");
 
-    if (gitRepo) {
-      this.emit("status", session.sandboxId, "cloning_repo");
-      if (this.config.githubToken) {
-        await sandbox.git.clone(
-          gitRepo,
-          projectDir,
-          undefined,
-          undefined,
-          "x-access-token",
-          this.config.githubToken,
-        );
-      } else {
-        await sandbox.process.executeCommand(
-          `git clone ${gitRepo} .`,
-          projectDir,
-        );
-      }
-    } else {
-      await sandbox.process.executeCommand("git init", projectDir);
-    }
-
-    if (this.config.githubToken) {
-      await sandbox.process.executeCommand(
-        `git config --global credential.helper store` +
-          ` && echo "https://x-access-token:${this.config.githubToken}@github.com" > ~/.git-credentials`,
-        projectDir,
-      );
-    }
+    // ── Prepare all file contents upfront (no I/O) ──
+    const proxyBaseUrlForEnv = resolveProxyBaseUrl(this.config.proxyBaseUrl, this.config.provider);
+    const useProxyI = !!proxyBaseUrlForEnv;
 
     const bridgeCode = getBridgeScript(BRIDGE_PORT, projectDir);
-    await sandbox.fs.uploadFile(
-      Buffer.from(bridgeCode),
-      `${BRIDGE_DIR}/bridge.js`,
-    );
-
     const mcpCode = getMcpTerminalScript(BRIDGE_PORT);
-    await sandbox.fs.uploadFile(
-      Buffer.from(mcpCode),
-      `${BRIDGE_DIR}/mcp-terminal-server.js`,
-    );
 
-    // Per-agent MCP and instructions setup
     const sandboxInstructions = [
       "# Sandbox Environment",
       "",
@@ -1822,33 +1876,33 @@ export class SandboxManager extends EventEmitter {
       "",
     ].join("\n");
 
-    // Pre-warm: trigger the one-time DB migration before the bridge starts `opencode serve`.
-    await sandbox.process.executeCommand(
-      `cd ${projectDir} && HOME=/home/daytona /home/daytona/.opencode/bin/opencode session list 2>&1; echo "opencode pre-warm done"`,
-    );
-
-    // Write a .env in the project dir so OpenCode picks up provider keys.
-    // OpenCode loads .env from the project root on startup.
     const dotEnvLines: string[] = [];
     if (this.config.anthropicApiKey) {
-      dotEnvLines.push(`ANTHROPIC_API_KEY=${this.config.anthropicApiKey}`);
+      if (useProxyI) {
+        dotEnvLines.push(`ANTHROPIC_API_KEY=sk-proxy-placeholder`);
+        dotEnvLines.push(`ANTHROPIC_BASE_URL=${proxyBaseUrlForEnv}/llm-proxy/anthropic/v1`);
+      } else {
+        dotEnvLines.push(`ANTHROPIC_API_KEY=${this.config.anthropicApiKey}`);
+      }
     }
     if (this.config.openaiApiKey) {
-      dotEnvLines.push(`OPENAI_API_KEY=${this.config.openaiApiKey}`);
-    }
-    if (dotEnvLines.length > 0) {
-      await sandbox.fs.uploadFile(
-        Buffer.from(dotEnvLines.join("\n") + "\n"),
-        `${projectDir}/.env`,
-      );
+      if (useProxyI) {
+        dotEnvLines.push(`OPENAI_API_KEY=sk-proxy-placeholder`);
+        dotEnvLines.push(`OPENAI_BASE_URL=${proxyBaseUrlForEnv}/llm-proxy/openai/v1`);
+      } else {
+        dotEnvLines.push(`OPENAI_API_KEY=${this.config.openaiApiKey}`);
+      }
     }
 
-    // Build the OpenCode config with agents and MCP.
-    // Provider credentials come from the .env file above — OpenCode auto-detects
-    // Anthropic / OpenAI when their env vars are present.
     const openCodeConfig: Record<string, unknown> = {
       $schema: "https://opencode.ai/config.json",
       default_agent: "build",
+      ...(useProxyI ? {
+        provider: {
+          anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
+          openai: { options: { baseURL: "{env:OPENAI_BASE_URL}" } },
+        },
+      } : {}),
       agent: {
         build: {
           description: "Full development agent with all tools enabled",
@@ -1880,15 +1934,6 @@ export class SandboxManager extends EventEmitter {
       },
     };
 
-    await sandbox.fs.uploadFile(
-      Buffer.from(JSON.stringify(openCodeConfig)),
-      `${projectDir}/opencode.json`,
-    );
-
-    // Upload Sisyphus agent prompt
-    await sandbox.process.executeCommand(
-      `mkdir -p ${projectDir}/.opencode/agents`,
-    );
     const sisyphusPrompt = [
       "You are Sisyphus, an orchestration agent for complex multi-step tasks.",
       "",
@@ -1906,33 +1951,86 @@ export class SandboxManager extends EventEmitter {
       "When subtasks are independent, dispatch them in parallel by making",
       "multiple task tool calls in the same response.",
     ].join("\n");
-    await sandbox.fs.uploadFile(
-      Buffer.from(sisyphusPrompt),
-      `${projectDir}/.opencode/agents/sisyphus-prompt.txt`,
-    );
 
-    // Upload sandbox instructions (AGENTS.md)
-    await sandbox.fs.uploadFile(
-      Buffer.from(sandboxInstructions),
-      `${projectDir}/AGENTS.md`,
-    );
+    // ── Phase 1: All independent I/O in parallel ────
+    // Group A: git init/clone
+    const gitTask = (async () => {
+      if (gitRepo) {
+        this.emit("status", session.sandboxId, "cloning_repo");
+        if (this.config.githubToken) {
+          await sandbox.git.clone(
+            gitRepo, projectDir, undefined, undefined,
+            "x-access-token", this.config.githubToken,
+          );
+        } else {
+          await sandbox.process.executeCommand(`git clone ${gitRepo} .`, projectDir);
+        }
+      } else {
+        await sandbox.process.executeCommand("git init", projectDir);
+      }
+      if (this.config.githubToken) {
+        await sandbox.process.executeCommand(
+          `git config --global credential.helper store` +
+            ` && echo "https://x-access-token:${this.config.githubToken}@github.com" > ~/.git-credentials`,
+          projectDir,
+        );
+      }
+      log("git done");
+    })();
 
-    await sandbox.process.executeCommand("npm init -y", BRIDGE_DIR);
-    const npmResult = await sandbox.process.executeCommand(
-      "npm install ws node-pty 2>&1",
-      BRIDGE_DIR,
-    );
-    const npmOutput = (npmResult.result ?? "").trim();
-    if (npmOutput.includes("ERR!") || npmOutput.includes("error")) {
-      console.error(
-        `[sandbox:${sandbox.id}] npm install issues: ${npmOutput.slice(-500)}`,
+    // Group B: upload bridge scripts to BRIDGE_DIR
+    const uploadScriptsTask = Promise.all([
+      sandbox.fs.uploadFile(Buffer.from(bridgeCode), `${BRIDGE_DIR}/bridge.js`),
+      sandbox.fs.uploadFile(Buffer.from(mcpCode), `${BRIDGE_DIR}/mcp-terminal-server.js`),
+    ]).then(() => log("scripts uploaded"));
+
+    // Group C: npm install (skip if already installed)
+    const npmTask = (async () => {
+      const check = await sandbox.process.executeCommand(
+        `test -d ${BRIDGE_DIR}/node_modules/ws && test -d ${BRIDGE_DIR}/node_modules/node-pty && echo "installed" || echo "missing"`,
       );
-    }
+      if ((check.result ?? "").includes("installed")) {
+        log("npm install skipped (already installed)");
+        return;
+      }
+      await sandbox.process.executeCommand("npm init -y", BRIDGE_DIR);
+      const npmResult = await sandbox.process.executeCommand(
+        "npm install ws node-pty 2>&1", BRIDGE_DIR,
+      );
+      const npmOutput = (npmResult.result ?? "").trim();
+      if (npmOutput.includes("ERR!") || npmOutput.includes("error")) {
+        console.error(`[sandbox:${sid}] npm install issues: ${npmOutput.slice(-500)}`);
+      }
+      log("npm install done");
+    })();
 
-    await sandbox.process.executeCommand(
+    // Group D: apt-get inotify-tools (skip if present)
+    const inotifyTask = sandbox.process.executeCommand(
       "which inotifywait >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq inotify-tools) 2>/dev/null || true",
-    );
+    ).then(() => log("inotify done"));
 
+    // Group E: upload all project-dir config files in parallel
+    const configUploadsTask = Promise.all([
+      dotEnvLines.length > 0
+        ? sandbox.fs.uploadFile(Buffer.from(dotEnvLines.join("\n") + "\n"), `${projectDir}/.env`)
+        : Promise.resolve(),
+      sandbox.fs.uploadFile(Buffer.from(JSON.stringify(openCodeConfig)), `${projectDir}/opencode.json`),
+      sandbox.fs.uploadFile(Buffer.from(sandboxInstructions), `${projectDir}/AGENTS.md`),
+      sandbox.process.executeCommand(`mkdir -p ${projectDir}/.opencode/agents`).then(() =>
+        sandbox.fs.uploadFile(Buffer.from(sisyphusPrompt), `${projectDir}/.opencode/agents/sisyphus-prompt.txt`),
+      ),
+    ]).then(() => log("config files uploaded"));
+
+    await Promise.all([gitTask, uploadScriptsTask, npmTask, inotifyTask, configUploadsTask]);
+    log("phase 1 complete");
+
+    // ── Phase 2: Pre-warm opencode (needs opencode.json from Phase 1) ──
+    await sandbox.process.executeCommand(
+      `cd ${projectDir} && HOME=/home/daytona /home/daytona/.opencode/bin/opencode session list 2>&1; echo "opencode pre-warm done"`,
+    );
+    log("opencode pre-warm done");
+
+    // ── Phase 3: Start bridge + code-server, connect ──
     const bridgeSessionId = `bridge-${session.id}`;
     session.bridgeSessionId = bridgeSessionId;
     await sandbox.process.createSession(bridgeSessionId);
@@ -1940,16 +2038,25 @@ export class SandboxManager extends EventEmitter {
     const daytonaApiKey = process.env["DAYTONA_API_KEY"] || "";
     const daytonaApiUrl =
       process.env["DAYTONA_API_URL"] || "https://app.daytona.io/api";
-    const proxyBaseUrlI = process.env["API_BASE_URL"] || `http://localhost:${process.env["PORT"] || "3000"}`;
     const projectIdI = this.projectIds.get(sandbox.id) || "";
+    const apexProxyForBridgeI = proxyBaseUrlForEnv || this.config.proxyBaseUrl;
 
     const envParts = [
-      `ANTHROPIC_API_KEY="${this.config.anthropicApiKey}"`,
-      `OPENAI_API_KEY="${this.config.openaiApiKey}"`,
+      ...(useProxyI
+        ? [
+            `ANTHROPIC_API_KEY="sk-proxy-placeholder"`,
+            `ANTHROPIC_BASE_URL="${proxyBaseUrlForEnv}/llm-proxy/anthropic/v1"`,
+            `OPENAI_API_KEY="sk-proxy-placeholder"`,
+            `OPENAI_BASE_URL="${proxyBaseUrlForEnv}/llm-proxy/openai/v1"`,
+          ]
+        : [
+            `ANTHROPIC_API_KEY="${this.config.anthropicApiKey}"`,
+            `OPENAI_API_KEY="${this.config.openaiApiKey}"`,
+          ]),
       `DAYTONA_API_KEY="${daytonaApiKey}"`,
       `DAYTONA_API_URL="${daytonaApiUrl}"`,
       `DAYTONA_SANDBOX_ID="${sandbox.id}"`,
-      `APEX_PROXY_BASE_URL="${proxyBaseUrlI}"`,
+      `APEX_PROXY_BASE_URL="${apexProxyForBridgeI}"`,
       `APEX_PROJECT_ID="${projectIdI}"`,
       `HOME="/home/daytona"`,
       `PATH="/home/daytona/.opencode/bin:$PATH"`,
@@ -1972,12 +2079,14 @@ export class SandboxManager extends EventEmitter {
     }
 
     await this.waitForBridge(sandbox, session.sandboxId);
+    log("bridge ready");
 
     const installPreviewInfo = await sandbox.getPreviewLink(BRIDGE_PORT);
     session.previewUrl = installPreviewInfo.url;
     session.previewToken = installPreviewInfo.token ?? null;
 
     await this.connectWithRetry(session);
+    log("connected — install complete");
   }
 
   private async connectToBridge(session: InternalSession): Promise<void> {

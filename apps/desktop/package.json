@@ -5,5 +5,13 @@
   "private": true,
   "description": "Apex Desktop — Claude Code in Daytona sandboxes",
   "author": "Apex",
-  "main": "dist/main.js"
+  "scripts": {
+    "start": "npx electrobun build && npx electrobun dev",
+    "build:dev": "npx electrobun build",
+    "build:canary": "npx electrobun build --env canary",
+    "build:stable": "npx electrobun build --env stable"
+  },
+  "dependencies": {
+    "electrobun": "latest"
+  }
 }

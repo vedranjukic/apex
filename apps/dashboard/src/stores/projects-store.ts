@@ -44,7 +44,12 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   deleteProject: async (id) => {
-    await projectsApi.delete(id);
+    try {
+      await projectsApi.delete(id);
+    } catch {
+      // Remove from local state even if the backend call fails
+      // (e.g. project already deleted from DB)
+    }
     set({ projects: get().projects.filter((p) => p.id !== id) });
   },
 

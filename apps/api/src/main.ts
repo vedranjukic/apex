@@ -1,8 +1,7 @@
 import { Elysia } from 'elysia';
 import { cors } from '@elysiajs/cors';
-import { staticPlugin } from '@elysiajs/static';
 import { join } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 
 import { usersRoutes } from './modules/users/users.routes';
 import { projectsRoutes } from './modules/projects/projects.routes';
@@ -12,6 +11,7 @@ import { configRoutes } from './modules/config/config.routes';
 import { agentWs } from './modules/agent/agent.ws';
 import { projectsWs } from './modules/projects/projects.ws';
 import { previewRoutes } from './modules/preview/preview.routes';
+import { llmProxyRoutes } from './modules/llm-proxy/llm-proxy.routes';
 
 import { usersService } from './modules/users/users.service';
 import { settingsService } from './modules/settings/settings.service';
@@ -34,16 +34,31 @@ async function bootstrap() {
     .use(settingsRoutes)
     .use(configRoutes)
     .use(previewRoutes)
+    .use(llmProxyRoutes)
     .use(agentWs)
     .use(projectsWs);
 
   if (existsSync(dashboardDir)) {
-    app.use(staticPlugin({
-      assets: dashboardDir,
-      prefix: '/',
-      noCache: true,
-      alwaysStatic: false,
-    }));
+    const indexHtml = readFileSync(join(dashboardDir, 'index.html'), 'utf-8');
+
+    app.get('/assets/*', ({ params }) => {
+      const filePath = join(dashboardDir, 'assets', (params as any)['*']);
+      if (existsSync(filePath)) return Bun.file(filePath);
+      return new Response('Not found', { status: 404 });
+    });
+
+    app.get('/favicon.ico', () => {
+      const p = join(dashboardDir, 'favicon.ico');
+      if (existsSync(p)) return Bun.file(p);
+      return new Response('', { status: 404 });
+    });
+
+    // SPA fallback — serve index.html as raw text to avoid Bun's HTML bundler
+    app.get('/*', () => {
+      return new Response(indexHtml, {
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      });
+    });
   }
 
   const port = process.env.PORT || 3000;
