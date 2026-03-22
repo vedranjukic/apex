@@ -33,7 +33,7 @@ export function ProjectPage() {
   const fileActions = useFileTreeSocket(projectId, socket);
   const { search: searchFiles } = useSearchSocket(projectId, socket);
   const gitActions = useGitSocket(projectId, socket);
-  const { requestPreviewUrl } = usePortsSocket(projectId, socket);
+  const { requestPreviewUrl, forwardPort } = usePortsSocket(projectId, socket);
   const addMessage = useThreadsStore((s) => s.addMessage);
   const createThread = useThreadsStore((s) => s.createThread);
   const fetchThreads = useThreadsStore((s) => s.fetchThreads);
@@ -190,6 +190,8 @@ export function ProjectPage() {
           registerXterm={terminal.registerXterm}
           unregisterXterm={terminal.unregisterXterm}
           requestPreviewUrl={requestPreviewUrl}
+          forwardPort={forwardPort}
+          provider={project.provider}
         />
       }
       statusBar={

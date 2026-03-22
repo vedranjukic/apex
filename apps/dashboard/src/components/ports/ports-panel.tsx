@@ -1,22 +1,28 @@
 import { useState, useRef, useCallback, type KeyboardEvent } from 'react';
-import { Loader2, Plus, ExternalLink, Copy, Check, X } from 'lucide-react';
+import { Loader2, Plus, ExternalLink, Copy, Check, X, ArrowRightLeft } from 'lucide-react';
 import { usePortsStore, type MergedPort } from '../../stores/ports-store';
 import { cn } from '../../lib/cn';
 
+const isElectron = !!(window as any).apex?.isElectron;
+
 interface PortsPanelProps {
   requestPreviewUrl: (port: number) => Promise<{ url: string; token?: string }>;
+  forwardPort: (port: number) => Promise<{ localPort: number; url: string }>;
+  provider: string;
 }
 
-export function PortsPanel({ requestPreviewUrl }: PortsPanelProps) {
+export function PortsPanel({ requestPreviewUrl, forwardPort, provider }: PortsPanelProps) {
   const allPorts = usePortsStore((s) => s.allPorts);
   const addUserPort = usePortsStore((s) => s.addUserPort);
   const closePort = usePortsStore((s) => s.closePort);
+  const setPreviewUrl = usePortsStore((s) => s.setPreviewUrl);
   const merged = allPorts();
 
   const [loadingPort, setLoadingPort] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
   const [portInput, setPortInput] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  const showForward = isElectron && provider === 'docker';
 
   const handleOpenPreview = useCallback(
     async (port: number) => {
@@ -31,6 +37,22 @@ export function PortsPanel({ requestPreviewUrl }: PortsPanelProps) {
       }
     },
     [requestPreviewUrl],
+  );
+
+  const handleForward = useCallback(
+    async (port: number) => {
+      setLoadingPort(port);
+      try {
+        const { url } = await forwardPort(port);
+        setPreviewUrl(port, url);
+        window.open(url, '_blank', 'noopener');
+      } catch (err) {
+        console.error('Failed to forward port:', err);
+      } finally {
+        setLoadingPort(null);
+      }
+    },
+    [forwardPort, setPreviewUrl],
   );
 
   const handleAddPort = useCallback(() => {
@@ -77,6 +99,7 @@ export function PortsPanel({ requestPreviewUrl }: PortsPanelProps) {
               port={p}
               loading={loadingPort === p.port}
               onOpenPreview={handleOpenPreview}
+              onForward={showForward ? handleForward : undefined}
               onClose={closePort}
             />
           ))}
@@ -121,11 +144,13 @@ function PortRow({
   port,
   loading,
   onOpenPreview,
+  onForward,
   onClose,
 }: {
   port: MergedPort;
   loading: boolean;
   onOpenPreview: (port: number) => void;
+  onForward?: (port: number) => void;
   onClose: (port: number) => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -202,6 +227,16 @@ function PortRow({
             </>
           ) : (
             <span className="text-text-muted/50">resolving...</span>
+          )}
+          {onForward && (
+            <button
+              onClick={() => onForward(port.port)}
+              disabled={loading}
+              className="shrink-0 text-text-muted hover:text-primary transition-colors disabled:opacity-50"
+              title="Forward port to localhost"
+            >
+              {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <ArrowRightLeft className="w-3 h-3" />}
+            </button>
           )}
           <button
             onClick={() => onClose(port.port)}

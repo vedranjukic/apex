@@ -11,6 +11,7 @@ import { settingsRoutes } from './modules/settings/settings.routes';
 import { configRoutes } from './modules/config/config.routes';
 import { agentWs } from './modules/agent/agent.ws';
 import { projectsWs } from './modules/projects/projects.ws';
+import { previewRoutes } from './modules/preview/preview.routes';
 
 import { usersService } from './modules/users/users.service';
 import { settingsService } from './modules/settings/settings.service';
@@ -32,6 +33,7 @@ async function bootstrap() {
     .use(threadsRoutes)
     .use(settingsRoutes)
     .use(configRoutes)
+    .use(previewRoutes)
     .use(agentWs)
     .use(projectsWs);
 

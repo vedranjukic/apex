@@ -4,6 +4,7 @@ import { projectsWsBroadcast } from '../projects/projects.ws';
 import { threadsService } from '../tasks/tasks.service';
 import { BridgeMessage, LayoutData, FileEntry, SearchResult } from '@apex/orchestrator';
 import { execFile } from 'child_process';
+import { forwardPort, unforwardPort, listForwards } from '../preview/port-forwarder';
 
 const SANDBOX_HOME = '/home/daytona';
 
@@ -166,6 +167,7 @@ async function executeAgainstSandbox(
   }
 
   manager.registerProjectName(project.sandboxId, project.name);
+  manager.registerProjectId(project.sandboxId, project.id);
   subscribeTo(project.sandboxId, client.id);
 
   await updateThreadStatusAndNotify(threadId, 'running');
@@ -485,7 +487,10 @@ async function handleMessage(client: WsClient, message: unknown) {
       case 'port_preview_url': {
         const resolved = await tryResolveProject(payload.projectId);
         if (!resolved) { emitTo(client, 'port_preview_url_result', { port: payload.port, error: 'Sandbox not ready' }); break; }
-        const { url, token } = await resolved.manager.getPortPreviewUrl(resolved.sandboxId, payload.port);
+        let { url, token } = await resolved.manager.getPortPreviewUrl(resolved.sandboxId, payload.port);
+        if (resolved.project.provider === 'docker') {
+          url = `/preview/${resolved.project.id}/${payload.port}`;
+        }
         emitTo(client, 'port_preview_url_result', { port: payload.port, url, token });
         break;
       }
@@ -497,6 +502,35 @@ async function handleMessage(client: WsClient, message: unknown) {
         let cached = manager.getLastPorts(project.sandboxId) ?? lastPortsBySandbox.get(project.sandboxId);
         if (!cached) { try { cached = await manager.scanPorts(project.sandboxId); } catch { /* ignore */ } }
         if (cached) emitTo(client, 'ports_update', { ports: cached.ports });
+        break;
+      }
+      case 'forward_port': {
+        const project = await projectsService.findById(payload.projectId);
+        if (!project.sandboxId) { emitTo(client, 'forward_port_result', { port: payload.port, error: 'Sandbox not ready' }); break; }
+        if (project.provider !== 'docker') { emitTo(client, 'forward_port_result', { port: payload.port, error: 'Port forwarding is only for Docker sandboxes' }); break; }
+        const mgr = projectsService.getSandboxManager(project.provider);
+        if (!mgr) { emitTo(client, 'forward_port_result', { port: payload.port, error: 'Manager not available' }); break; }
+        try {
+          const { url } = await mgr.getPortPreviewUrl(project.sandboxId, payload.port);
+          const parsed = new URL(url);
+          const localPort = await forwardPort(project.sandboxId, parsed.hostname, payload.port);
+          emitTo(client, 'forward_port_result', { port: payload.port, localPort, url: `http://localhost:${localPort}` });
+        } catch (err) {
+          emitTo(client, 'forward_port_result', { port: payload.port, error: String(err) });
+        }
+        break;
+      }
+      case 'unforward_port': {
+        const project = await projectsService.findById(payload.projectId);
+        if (!project.sandboxId) break;
+        unforwardPort(project.sandboxId, payload.port);
+        emitTo(client, 'unforward_port_result', { port: payload.port, ok: true });
+        break;
+      }
+      case 'list_forwards': {
+        const project = await projectsService.findById(payload.projectId);
+        if (!project.sandboxId) { emitTo(client, 'list_forwards_result', { forwards: [] }); break; }
+        emitTo(client, 'list_forwards_result', { forwards: listForwards(project.sandboxId) });
         break;
       }
       case 'project_info': {

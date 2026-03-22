@@ -15,6 +15,10 @@ export default defineConfig(() => ({
     host: '0.0.0.0',
     proxy: {
       '/api': 'http://localhost:6000',
+      '/preview': {
+        target: 'http://localhost:6000',
+        ws: true,
+      },
       '/ws': {
         target: 'http://localhost:6000',
         ws: true,

@@ -67,5 +67,28 @@ export function usePortsSocket(
     [projectId, socketRef, setPreviewUrl],
   );
 
-  return { requestPreviewUrl };
+  const forwardPort = useCallback(
+    (port: number): Promise<{ localPort: number; url: string }> => {
+      return new Promise((resolve, reject) => {
+        const ws = socketRef.current;
+        if (!ws || !projectId) { reject(new Error('Socket not connected')); return; }
+        const handler = (data: any) => {
+          const d = data.payload;
+          if (d.port !== port) return;
+          ws.off('forward_port_result', handler);
+          if (d.error) reject(new Error(d.error));
+          else {
+            setPreviewUrl(port, d.url);
+            resolve({ localPort: d.localPort, url: d.url });
+          }
+        };
+        ws.on('forward_port_result', handler);
+        ws.send('forward_port', { projectId, port });
+        setTimeout(() => { ws.off('forward_port_result', handler); reject(new Error('Port forward timed out')); }, 15_000);
+      });
+    },
+    [projectId, socketRef, setPreviewUrl],
+  );
+
+  return { requestPreviewUrl, forwardPort };
 }

@@ -26,6 +26,8 @@ const MAX_SCROLLBACK = 5000;
 const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY || "";
 const DAYTONA_API_URL = (process.env.DAYTONA_API_URL || "https://app.daytona.io/api").replace(/\\/$/, "");
 const SANDBOX_ID = process.env.DAYTONA_SANDBOX_ID || "";
+const APEX_PROXY_BASE_URL = (process.env.APEX_PROXY_BASE_URL || "").replace(/\\/$/, "");
+const APEX_PROJECT_ID = process.env.APEX_PROJECT_ID || "";
 const https = require("https");
 const urlMod = require("url");
 
@@ -533,7 +535,11 @@ const server = http.createServer((req, res) => {
       try {
         const { port } = JSON.parse(body);
         if (!port) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "port is required" })); return; }
-        if (!DAYTONA_API_KEY || !SANDBOX_ID) { res.writeHead(500, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Daytona credentials not configured" })); return; }
+        if (APEX_PROXY_BASE_URL && APEX_PROJECT_ID) {
+          const proxyUrl = APEX_PROXY_BASE_URL + "/preview/" + APEX_PROJECT_ID + "/" + port;
+          res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ url: proxyUrl })); return;
+        }
+        if (!DAYTONA_API_KEY || !SANDBOX_ID) { res.writeHead(500, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Preview URL not available — no proxy or Daytona credentials configured" })); return; }
         const apiUrl = DAYTONA_API_URL + "/sandbox/" + SANDBOX_ID + "/ports/" + port + "/preview-url";
         const parsed = urlMod.parse(apiUrl);
         const reqOpts = { hostname: parsed.hostname, port: parsed.port || 443, path: parsed.path, method: "GET", headers: { "Authorization": "Bearer " + DAYTONA_API_KEY } };

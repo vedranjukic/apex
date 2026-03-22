@@ -111,6 +111,7 @@ export class SandboxManager extends EventEmitter {
   private startedAt = new Map<string, number>();
   private reconnectPromises = new Map<string, Promise<void>>();
   private projectNames = new Map<string, string>();
+  private projectIds = new Map<string, string>();
 
   constructor(config: Partial<OrchestratorConfig> = {}) {
     super();
@@ -145,12 +146,18 @@ export class SandboxManager extends EventEmitter {
     if (projectName) this.projectNames.set(sandboxId, projectName);
   }
 
+  /** Store a sandboxId → projectId mapping so the bridge gets the correct preview proxy URLs. */
+  registerProjectId(sandboxId: string, projectId: string): void {
+    if (projectId) this.projectIds.set(sandboxId, projectId);
+  }
+
   /** Create a sandbox, install bridge, return the sandboxId. */
   async createSandbox(
     snapshot?: string,
     projectName?: string,
     gitRepo?: string,
     agentType?: string,
+    projectId?: string,
   ): Promise<string> {
     if (!this.provider) throw new Error("SandboxManager not initialized");
 
@@ -161,6 +168,7 @@ export class SandboxManager extends EventEmitter {
     });
 
     if (projectName) this.projectNames.set(sandbox.id, projectName);
+    if (projectId) this.projectIds.set(sandbox.id, projectId);
 
     const projectSlug = projectName ? slugify(projectName) : null;
     const projectDir = projectSlug ? `${HOME_DIR}/${projectSlug}` : HOME_DIR;
@@ -473,6 +481,7 @@ export class SandboxManager extends EventEmitter {
     this.sandboxCache.delete(sandboxId);
     this.startedAt.delete(sandboxId);
     this.projectNames.delete(sandboxId);
+    this.projectIds.delete(sandboxId);
     const session = this.sessions.get(sandboxId);
     if (session) {
       session.ws?.close();
@@ -493,6 +502,7 @@ export class SandboxManager extends EventEmitter {
     this.sandboxCache.delete(sandboxId);
     this.startedAt.delete(sandboxId);
     this.projectNames.delete(sandboxId);
+    this.projectIds.delete(sandboxId);
     const session = this.sessions.get(sandboxId);
     if (session) {
       session.ws?.close();
@@ -1516,12 +1526,16 @@ export class SandboxManager extends EventEmitter {
     const daytonaApiKeyR = process.env["DAYTONA_API_KEY"] || "";
     const daytonaApiUrlR =
       process.env["DAYTONA_API_URL"] || "https://app.daytona.io/api";
+    const proxyBaseUrl = process.env["API_BASE_URL"] || `http://localhost:${process.env["PORT"] || "3000"}`;
+    const projectIdForBridge = this.projectIds.get(sandbox.id) || "";
     const envParts = [
       `ANTHROPIC_API_KEY="${this.config.anthropicApiKey}"`,
       `OPENAI_API_KEY="${this.config.openaiApiKey}"`,
       `DAYTONA_API_KEY="${daytonaApiKeyR}"`,
       `DAYTONA_API_URL="${daytonaApiUrlR}"`,
       `DAYTONA_SANDBOX_ID="${sandbox.id}"`,
+      `APEX_PROXY_BASE_URL="${proxyBaseUrl}"`,
+      `APEX_PROJECT_ID="${projectIdForBridge}"`,
       `HOME="/home/daytona"`,
       `PATH="/home/daytona/.opencode/bin:$PATH"`,
     ];
@@ -1751,6 +1765,8 @@ export class SandboxManager extends EventEmitter {
     const daytonaApiKey = process.env["DAYTONA_API_KEY"] || "";
     const daytonaApiUrl =
       process.env["DAYTONA_API_URL"] || "https://app.daytona.io/api";
+    const proxyBaseUrlI = process.env["API_BASE_URL"] || `http://localhost:${process.env["PORT"] || "3000"}`;
+    const projectIdI = this.projectIds.get(sandbox.id) || "";
 
     const envParts = [
       `ANTHROPIC_API_KEY="${this.config.anthropicApiKey}"`,
@@ -1758,6 +1774,8 @@ export class SandboxManager extends EventEmitter {
       `DAYTONA_API_KEY="${daytonaApiKey}"`,
       `DAYTONA_API_URL="${daytonaApiUrl}"`,
       `DAYTONA_SANDBOX_ID="${sandbox.id}"`,
+      `APEX_PROXY_BASE_URL="${proxyBaseUrlI}"`,
+      `APEX_PROJECT_ID="${projectIdI}"`,
       `HOME="/home/daytona"`,
       `PATH="/home/daytona/.opencode/bin:$PATH"`,
     ];

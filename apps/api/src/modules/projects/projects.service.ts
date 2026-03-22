@@ -306,7 +306,7 @@ class ProjectsService {
     }
     const manager = this.sandboxManagers.get(provider)!;
     try {
-      const sandboxId = await manager.createSandbox(snapshot, projectName, gitRepo || undefined, agentType);
+      const sandboxId = await manager.createSandbox(snapshot, projectName, gitRepo || undefined, agentType, projectId);
       await db.update(projects).set({ sandboxId, status: 'running', statusError: null }).where(eq(projects.id, projectId));
       projectsWsBroadcast('project_updated', await this.findById(projectId));
     } catch (err) {

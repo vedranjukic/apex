@@ -21,6 +21,8 @@ interface TerminalPanelProps {
   registerXterm: (terminalId: string, xterm: Terminal) => void;
   unregisterXterm: (terminalId: string) => void;
   requestPreviewUrl: (port: number) => Promise<{ url: string; token?: string }>;
+  forwardPort: (port: number) => Promise<{ localPort: number; url: string }>;
+  provider: string;
 }
 
 const MIN_PANEL_HEIGHT = 120;
@@ -34,6 +36,8 @@ export function TerminalPanel({
   registerXterm,
   unregisterXterm,
   requestPreviewUrl,
+  forwardPort,
+  provider,
 }: TerminalPanelProps) {
   const terminals = useTerminalStore((s) => s.terminals);
   const terminalsLoaded = useTerminalStore((s) => s.terminalsLoaded);
@@ -143,7 +147,7 @@ export function TerminalPanel({
       {/* Viewport */}
       <div className="flex-1 overflow-hidden bg-terminal-bg">
         {showPorts ? (
-          <PortsPanel requestPreviewUrl={requestPreviewUrl} />
+          <PortsPanel requestPreviewUrl={requestPreviewUrl} forwardPort={forwardPort} provider={provider} />
         ) : terminals.length === 0 ? (
           <div className="flex items-center justify-center h-full text-text-muted text-sm">
             <button
