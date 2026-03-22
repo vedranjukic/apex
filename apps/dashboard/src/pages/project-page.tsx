@@ -20,6 +20,7 @@ import { useThreadsStore } from '../stores/tasks-store';
 import { useProjectCommands } from '../hooks/use-project-commands';
 import { useEditorStore, type CodeSelection } from '../stores/editor-store';
 import { useAgentSettingsStore, type AgentTypeId } from '../stores/agent-settings-store';
+import { useTerminalStore } from '../stores/terminal-store';
 import { CodeViewer } from '../components/editor/code-viewer';
 
 export function ProjectPage() {
@@ -38,6 +39,7 @@ export function ProjectPage() {
   const createThread = useThreadsStore((s) => s.createThread);
   const fetchThreads = useThreadsStore((s) => s.fetchThreads);
   const resetEditor = useEditorStore((s) => s.reset);
+  const resetTerminals = useTerminalStore((s) => s.reset);
   const pollRef = useRef<ReturnType<typeof setInterval>>();
   const [provisionMsg, setProvisionMsg] = useState<string | null>(null);
 
