@@ -1,4 +1,5 @@
 import { eq, or, isNull, isNotNull, and, asc, desc, sql } from 'drizzle-orm';
+import { execFile as execFileCb } from 'child_process';
 import { db } from '../../database/db';
 import { projects, tasks } from '../../database/schema';
 import { SandboxManager } from '@apex/orchestrator';
@@ -9,22 +10,90 @@ import { secretsService } from '../secrets/secrets.service';
 
 export type Project = typeof projects.$inferSelect & { threads?: (typeof tasks.$inferSelect)[] };
 
-type ProviderType = 'daytona' | 'docker' | 'apple-container';
+type ProviderType = 'daytona' | 'docker' | 'apple-container' | 'local';
+
+export interface ProviderStatus {
+  type: ProviderType;
+  available: boolean;
+  reason?: string;
+}
+
+/** Quick shell-out check — resolves true if the command exits 0. */
+function canExec(cmd: string, args: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFileCb(cmd, args, { timeout: 5000 }, (err) => resolve(!err));
+  });
+}
 
 class ProjectsService {
   private sandboxManagers = new Map<string, SandboxManager>();
+  private providerStatuses: ProviderStatus[] = [];
 
   async init() {
     await this.initSandboxManagers();
   }
 
+  /** Run lightweight dependency checks for every provider (once at startup). */
+  private async checkProviderDependencies(): Promise<ProviderStatus[]> {
+    const statuses: ProviderStatus[] = [];
+
+    const ENV_FLAGS: Record<ProviderType, string> = {
+      daytona: 'DISABLE_PROVIDER_DAYTONA',
+      docker: 'DISABLE_PROVIDER_DOCKER',
+      'apple-container': 'DISABLE_PROVIDER_APPLE_CONTAINER',
+      local: 'DISABLE_PROVIDER_LOCAL',
+    };
+
+    for (const type of ['daytona', 'docker', 'apple-container', 'local'] as ProviderType[]) {
+      if (process.env[ENV_FLAGS[type]] === 'true') {
+        statuses.push({ type, available: false, reason: `Disabled via ${ENV_FLAGS[type]}` });
+        continue;
+      }
+
+      switch (type) {
+        case 'daytona': {
+          const hasKey = !!(process.env.DAYTONA_API_KEY);
+          statuses.push(hasKey
+            ? { type, available: true }
+            : { type, available: false, reason: 'DAYTONA_API_KEY not configured' });
+          break;
+        }
+        case 'docker': {
+          const dockerOk = await canExec('docker', ['info']);
+          statuses.push(dockerOk
+            ? { type, available: true }
+            : { type, available: false, reason: 'Docker is not installed or the daemon is not running' });
+          break;
+        }
+        case 'apple-container': {
+          const containerOk = await canExec('container', ['system', 'status']);
+          statuses.push(containerOk
+            ? { type, available: true }
+            : { type, available: false, reason: 'Apple Container CLI not found or service not running' });
+          break;
+        }
+        case 'local': {
+          statuses.push({ type, available: true });
+          break;
+        }
+      }
+    }
+    return statuses;
+  }
+
   private async initSandboxManagers() {
     this.sandboxManagers.clear();
+
+    this.providerStatuses = await this.checkProviderDependencies();
+    for (const s of this.providerStatuses) {
+      if (!s.available) {
+        console.log(`[projects] ${s.type} provider unavailable: ${s.reason}`);
+      }
+    }
 
     let caCert = '';
     try { caCert = getCACertPem(); } catch { /* CA not yet initialized */ }
 
-    // Build placeholder env vars for all secrets (name → "sk-proxy-placeholder")
     const secretPlaceholders: Record<string, string> = {};
     try {
       const domains = await secretsService.getSecretDomains();
@@ -47,44 +116,35 @@ class ProjectsService {
       secretPlaceholders,
     };
 
-    const hasDaytonaKey = !!process.env.DAYTONA_API_KEY;
-    const hasAnthropicKey = !!process.env.ANTHROPIC_API_KEY;
-
-    if (hasDaytonaKey || hasAnthropicKey) {
+    for (const status of this.providerStatuses) {
+      if (!status.available) continue;
       try {
-        const mgr = new SandboxManager({ ...sharedConfig, provider: 'daytona' });
+        const mgr = new SandboxManager({ ...sharedConfig, provider: status.type });
         await mgr.initialize();
-        this.sandboxManagers.set('daytona', mgr);
-        console.log('[projects] SandboxManager initialized (provider=daytona)');
+        this.sandboxManagers.set(status.type, mgr);
+        console.log(`[projects] SandboxManager initialized (provider=${status.type})`);
       } catch (err) {
-        console.error('[projects] SandboxManager init failed (daytona):', err);
+        const reason = (err as Error).message;
+        status.available = false;
+        status.reason = reason;
+        console.log(`[projects] ${status.type} SandboxManager failed to initialize: ${reason}`);
       }
-    } else {
-      console.log('[projects] Daytona SandboxManager skipped – no API keys configured');
-    }
-
-    try {
-      const mgr = new SandboxManager({ ...sharedConfig, provider: 'docker' });
-      await mgr.initialize();
-      this.sandboxManagers.set('docker', mgr);
-      console.log('[projects] SandboxManager initialized (provider=docker)');
-    } catch (err) {
-      console.log('[projects] Docker SandboxManager skipped – Docker not available:', (err as Error).message);
-    }
-
-    try {
-      const mgr = new SandboxManager({ ...sharedConfig, provider: 'apple-container' });
-      await mgr.initialize();
-      this.sandboxManagers.set('apple-container', mgr);
-      console.log('[projects] SandboxManager initialized (provider=apple-container)');
-    } catch (err) {
-      console.log('[projects] Apple Container SandboxManager skipped – not available:', (err as Error).message);
     }
   }
 
   async reinitSandboxManager() {
     console.log('[projects] Re-initializing SandboxManagers...');
     await this.initSandboxManagers();
+  }
+
+  /** Return provider types that are currently initialized. */
+  getEnabledProviders(): string[] {
+    return [...this.sandboxManagers.keys()];
+  }
+
+  /** Return full status (available/unavailable + reason) for all providers. */
+  getProviderStatuses(): ProviderStatus[] {
+    return this.providerStatuses;
   }
 
   private async ensureSandboxManager(provider?: string): Promise<boolean> {
@@ -135,7 +195,7 @@ class ProjectsService {
       try {
         await db.update(projects).set({ status: 'starting' }).where(eq(projects.id, projectId));
         projectsWsBroadcast('project_updated', await this.findById(projectId));
-        await mgr.reconnectSandbox(project.sandboxId, project.name);
+        await mgr.reconnectSandbox(project.sandboxId, project.name, project.localDir || undefined);
         await db.update(projects).set({ status: 'running', statusError: null }).where(eq(projects.id, projectId));
         projectsWsBroadcast('project_updated', await this.findById(projectId));
       } catch (err) {
@@ -146,7 +206,7 @@ class ProjectsService {
     } else {
       await db.update(projects).set({ status: 'creating' }).where(eq(projects.id, projectId));
       projectsWsBroadcast('project_updated', await this.findById(projectId));
-      await this.provisionSandbox(projectId, project.sandboxSnapshot, project.provider as ProviderType, project.name, project.gitRepo, project.agentType);
+      await this.provisionSandbox(projectId, project.sandboxSnapshot, project.provider as ProviderType, project.name, project.gitRepo, project.agentType, project.localDir || undefined);
     }
   }
 
@@ -176,6 +236,7 @@ class ProjectsService {
       sandboxSnapshot?: string;
       provider?: string;
       gitRepo?: string;
+      localDir?: string;
       agentConfig?: Record<string, unknown>;
     },
   ): Promise<Project> {
@@ -190,13 +251,14 @@ class ProjectsService {
       sandboxSnapshot: data.sandboxSnapshot || process.env['DAYTONA_SNAPSHOT'] || '',
       provider,
       gitRepo: data.gitRepo || null,
+      localDir: data.localDir || null,
       agentConfig: data.agentConfig || null,
       status: 'creating',
     });
     const saved = await this.findById(id);
     projectsWsBroadcast('project_created', saved);
 
-    this.provisionSandbox(saved.id, saved.sandboxSnapshot, saved.provider as ProviderType, saved.name, saved.gitRepo, saved.agentType).catch((err) => {
+    this.provisionSandbox(saved.id, saved.sandboxSnapshot, saved.provider as ProviderType, saved.name, saved.gitRepo, saved.agentType, saved.localDir || undefined).catch((err) => {
       console.error(`[projects] Failed to provision sandbox for project ${saved.id}:`, err);
     });
 
@@ -340,6 +402,7 @@ class ProjectsService {
   private async provisionSandbox(
     projectId: string, snapshot: string, provider: ProviderType,
     projectName?: string, gitRepo?: string | null, agentType?: string,
+    localDir?: string,
   ): Promise<void> {
     if (!(await this.ensureSandboxManager(provider))) {
       await db.update(projects).set({ status: 'stopped' }).where(eq(projects.id, projectId));
@@ -353,7 +416,7 @@ class ProjectsService {
     };
     try {
       const sandboxId = await manager.createSandbox(
-        snapshot, projectName, gitRepo || undefined, agentType, projectId, onStatusChange,
+        snapshot, projectName, gitRepo || undefined, agentType, projectId, onStatusChange, localDir,
       );
       await db.update(projects).set({ sandboxId, status: 'running', statusError: null }).where(eq(projects.id, projectId));
       projectsWsBroadcast('project_updated', await this.findById(projectId));

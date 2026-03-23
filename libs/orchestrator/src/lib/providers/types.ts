@@ -9,7 +9,7 @@
 
 // ── Provider types ───────────────────────────────────
 
-export type SandboxProviderType = 'daytona' | 'docker' | 'apple-container';
+export type SandboxProviderType = 'daytona' | 'docker' | 'apple-container' | 'local';
 
 export type SandboxState =
   | 'started'
@@ -35,6 +35,8 @@ export interface CreateSandboxParams {
   labels?: Record<string, string>;
   /** Human-readable sandbox name. */
   name?: string;
+  /** User-specified working directory (Local provider). */
+  localDir?: string;
   /** Called by the provider to signal status changes (e.g. 'pulling_image'). */
   onStatusChange?: (status: string) => void;
 }
@@ -139,6 +141,8 @@ export interface SandboxProviderConfig {
   dockerHost?: string;
   /** Container image to use (Docker / Apple Container providers). */
   image?: string;
+  /** Base directory for local sandboxes (Local provider). Defaults to `~/.apex/sandboxes`. */
+  localBaseDir?: string;
 }
 
 /**

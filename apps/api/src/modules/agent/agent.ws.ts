@@ -8,7 +8,8 @@ import { forwardPort, unforwardPort, listForwards } from '../preview/port-forwar
 
 const SANDBOX_HOME = '/home/daytona';
 
-function resolveProjectDir(projectName: string | null | undefined): string {
+function resolveProjectDir(projectName: string | null | undefined, localDir?: string | null): string {
+  if (localDir) return localDir;
   if (!projectName) return SANDBOX_HOME;
   const slug = projectName
     .toLowerCase()
@@ -362,7 +363,11 @@ async function handleMessage(client: WsClient, message: unknown) {
   try {
     switch (type) {
       case 'subscribe_project': {
-        let project = await projectsService.findById(payload.projectId);
+        let project: Awaited<ReturnType<typeof projectsService.findById>>;
+        try { project = await projectsService.findById(payload.projectId); } catch {
+          emitTo(client, 'subscribe_error', { projectId: payload.projectId, error: 'Project not found' });
+          break;
+        }
         if (project.sandboxId) {
           subscribeTo(project.sandboxId, client.id);
           attachTerminalListeners(project.sandboxId, project.provider);
@@ -372,7 +377,7 @@ async function handleMessage(client: WsClient, message: unknown) {
             const manager = projectsService.getSandboxManager(project.provider);
             if (manager) {
               resolveDirName(project).then((dirName) => {
-                manager.reconnectSandbox(project.sandboxId!, dirName).catch(() => {});
+                manager.reconnectSandbox(project.sandboxId!, dirName, project.localDir || undefined).catch(() => {});
               });
             }
             projectsService.reconcileSandboxStatus(payload.projectId).catch(() => {});
@@ -456,7 +461,7 @@ async function handleMessage(client: WsClient, message: unknown) {
         subscribeTo(resolved.sandboxId, client.id);
         attachTerminalListeners(resolved.sandboxId, resolved.project.provider);
         const dirName = await resolveDirName(resolved.project);
-        const cwd = resolveProjectDir(dirName);
+        const cwd = resolveProjectDir(dirName, resolved.project.localDir);
         await Promise.race([
           resolved.manager.createTerminal(resolved.sandboxId, payload.terminalId, payload.cols, payload.rows, cwd, payload.name),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Terminal creation timed out')), 15_000)),
@@ -544,9 +549,13 @@ async function handleMessage(client: WsClient, message: unknown) {
       }
       case 'project_info': {
         const resolved = await tryResolveProject(payload.projectId);
-        const project = await projectsService.findById(payload.projectId);
+        let project: Awaited<ReturnType<typeof projectsService.findById>>;
+        try { project = await projectsService.findById(payload.projectId); } catch {
+          emitTo(client, 'project_info', { gitBranch: null, projectDir: null, error: 'Project not found' });
+          break;
+        }
         const dirName = await resolveDirName(project);
-        const projectDir = project.sandboxId ? resolveProjectDir(dirName) : null;
+        const projectDir = project.sandboxId ? resolveProjectDir(dirName, project.localDir) : null;
         if (projectDir) emitTo(client, 'project_info', { gitBranch: null, projectDir });
         let gitBranch: string | null = null;
         if (resolved) { try { gitBranch = await resolved.manager.getGitBranch(resolved.sandboxId); } catch { /* ignore */ } }

@@ -11,6 +11,7 @@ export { createSandboxProvider } from './lib/providers/index.js';
 export { DaytonaSandboxProvider } from './lib/providers/daytona-provider.js';
 export { DockerSandboxProvider } from './lib/providers/docker-provider.js';
 export { AppleContainerProvider } from './lib/providers/apple-container-provider.js';
+export { LocalSandboxProvider } from './lib/providers/local-provider.js';
 export type {
   SandboxProviderType,
   SandboxState,

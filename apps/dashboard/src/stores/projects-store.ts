@@ -14,6 +14,7 @@ interface ProjectsState {
     agentType?: string;
     provider?: string;
     gitRepo?: string;
+    localDir?: string;
   }) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
   fetchForks: (projectId: string) => Promise<void>;

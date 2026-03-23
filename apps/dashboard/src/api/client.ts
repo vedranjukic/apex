@@ -41,7 +41,7 @@ export interface Project {
 export const projectsApi = {
   list: () => request<Project[]>('/projects'),
   get: (id: string) => request<Project>(`/projects/${id}`),
-  create: (data: { name: string; description?: string; agentType?: string; provider?: string; gitRepo?: string }) =>
+  create: (data: { name: string; description?: string; agentType?: string; provider?: string; gitRepo?: string; localDir?: string }) =>
     request<Project>('/projects', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -116,8 +116,15 @@ export interface ContentBlock {
 }
 
 // ── Config ────────────────────────────────────────────
+export interface ProviderStatus {
+  type: string;
+  available: boolean;
+  reason?: string;
+}
+
 export const configApi = {
   keybindings: () => request<Record<string, string>>('/config/keybindings'),
+  providers: () => request<{ providers: ProviderStatus[] }>('/config/providers'),
 };
 
 // ── Settings ─────────────────────────────────────────

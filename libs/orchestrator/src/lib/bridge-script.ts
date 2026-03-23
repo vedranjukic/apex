@@ -42,6 +42,20 @@ const terminals = new Map();
 const pendingAskUser = new Map();
 const sessionEmittedParts = new Map();
 
+// ── Shell detection ──────────────────────────────────
+const fs = require("fs");
+function detectShell() {
+  if (process.env.SHELL) {
+    try { fs.accessSync(process.env.SHELL, fs.constants.X_OK); return process.env.SHELL; } catch {}
+  }
+  const candidates = ["/bin/zsh", "/usr/bin/zsh", "/bin/bash", "/usr/bin/bash", "/bin/sh", "/usr/bin/sh"];
+  for (const c of candidates) {
+    try { fs.accessSync(c, fs.constants.X_OK); return c; } catch {}
+  }
+  return "/bin/sh";
+}
+const DEFAULT_SHELL = detectShell();
+
 // ── Logging ──────────────────────────────────────────
 function log(emoji, msg) {
   console.log(new Date().toISOString() + " " + emoji + " " + msg);
@@ -113,7 +127,7 @@ function startOpenCodeServe() {
   let ocBin = "opencode";
   try { ocBin = execSync("which opencode 2>/dev/null || echo opencode").toString().trim(); } catch {};
   const dotEnvVars = loadDotEnv(PROJECT_DIR);
-  const serveEnv = { ...process.env, ...dotEnvVars, HOME: "/home/daytona", NODE_TLS_REJECT_UNAUTHORIZED: "0" };
+  const serveEnv = { ...process.env, ...dotEnvVars, HOME: process.env.HOME || "/home/daytona", NODE_TLS_REJECT_UNAUTHORIZED: "0" };
   ocServeProc = spawn(ocBin, ["serve", "--port", String(OC_PORT), "--hostname", "127.0.0.1"], {
     cwd: PROJECT_DIR,
     env: serveEnv,
@@ -395,11 +409,13 @@ async function handleStopAgent(msg) {
 // ── Terminal management ──────────────────────────────
 function createTerminalPty(terminalId, name, cols, rows, cwd, command) {
   if (terminals.has(terminalId)) return { error: "Terminal already exists: " + terminalId };
-  const shell = command || (process.env.SHELL || "bash");
+  let effectiveCwd = cwd || PROJECT_DIR;
+  try { fs.accessSync(effectiveCwd); } catch { effectiveCwd = PROJECT_DIR; }
+  const bin = command ? DEFAULT_SHELL : DEFAULT_SHELL;
   const args = command ? ["-c", command] : [];
-  const ptyProcess = pty.spawn(command ? "bash" : shell, args, {
-    name: "xterm-256color", cols: cols || 80, rows: rows || 24, cwd: cwd || PROJECT_DIR,
-    env: { ...process.env, TERM: "xterm-256color" },
+  const ptyProcess = pty.spawn(bin, args, {
+    name: "xterm-256color", cols: cols || 80, rows: rows || 24, cwd: effectiveCwd,
+    env: { ...process.env, TERM: "xterm-256color", SHELL: DEFAULT_SHELL },
   });
   const entry = { pty: ptyProcess, scrollback: [], name: name || "Terminal " + (terminals.size + 1), cols: cols || 80, rows: rows || 24 };
   terminals.set(terminalId, entry);

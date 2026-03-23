@@ -1,6 +1,7 @@
 import { Elysia } from 'elysia';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
+import { projectsService } from '../projects/projects.service';
 
 export const configRoutes = new Elysia({ prefix: '/api/config' })
   .get('/keybindings', async () => {
@@ -11,4 +12,7 @@ export const configRoutes = new Elysia({ prefix: '/api/config' })
     } catch {
       return {};
     }
+  })
+  .get('/providers', () => {
+    return { providers: projectsService.getProviderStatuses() };
   });

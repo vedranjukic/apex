@@ -31,6 +31,7 @@ export const projects = sqliteTable('projects', {
   agentConfig: text('agent_config', { mode: 'json' }).$type<Record<string, unknown> | null>(),
   forkedFromId: text('forked_from_id'),
   branchName: text('branch_name'),
+  localDir: text('local_dir'),
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()).$onUpdateFn(() => new Date().toISOString()),
   deletedAt: text('deleted_at'),

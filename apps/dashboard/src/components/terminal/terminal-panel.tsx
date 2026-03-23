@@ -112,16 +112,16 @@ export function TerminalPanel({
     [panelHeight],
   );
 
-  if (!panelOpen) {
-    return null;
-  }
-
   const showPorts = activeBottomTab === 'ports';
 
   return (
     <div
       className="flex flex-col border-t border-border"
-      style={{ height: panelHeight, minHeight: MIN_PANEL_HEIGHT }}
+      style={{
+        height: panelOpen ? panelHeight : 0,
+        minHeight: panelOpen ? MIN_PANEL_HEIGHT : 0,
+        display: panelOpen ? 'flex' : 'none',
+      }}
     >
       {/* Drag handle */}
       <div
@@ -146,9 +146,10 @@ export function TerminalPanel({
 
       {/* Viewport */}
       <div className="flex-1 overflow-hidden bg-terminal-bg">
-        {showPorts ? (
+        {showPorts && (
           <PortsPanel requestPreviewUrl={requestPreviewUrl} forwardPort={forwardPort} provider={provider} />
-        ) : terminals.length === 0 ? (
+        )}
+        {terminals.length === 0 && !showPorts ? (
           <div className="flex items-center justify-center h-full text-text-muted text-sm">
             <button
               onClick={handleCreateTerminal}

@@ -17,11 +17,13 @@ export type {
 export { DaytonaSandboxProvider } from "./daytona-provider.js";
 export { DockerSandboxProvider } from "./docker-provider.js";
 export { AppleContainerProvider } from "./apple-container-provider.js";
+export { LocalSandboxProvider } from "./local-provider.js";
 
 import type { SandboxProvider, SandboxProviderConfig, SandboxProviderType } from "./types.js";
 import { DaytonaSandboxProvider } from "./daytona-provider.js";
 import { DockerSandboxProvider } from "./docker-provider.js";
 import { AppleContainerProvider } from "./apple-container-provider.js";
+import { LocalSandboxProvider } from "./local-provider.js";
 
 /**
  * Factory — create a provider instance by type string.
@@ -38,6 +40,8 @@ export function createSandboxProvider(
       return new DockerSandboxProvider(config);
     case "apple-container":
       return new AppleContainerProvider(config);
+    case "local":
+      return new LocalSandboxProvider(config);
     default:
       throw new Error(`Unknown sandbox provider type: ${type}`);
   }

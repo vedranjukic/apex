@@ -38,6 +38,7 @@ sqlite.exec(`
     agent_config TEXT,
     forked_from_id TEXT,
     branch_name TEXT,
+    local_dir TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     deleted_at TEXT
@@ -85,5 +86,6 @@ sqlite.exec(`
 
 // Migrations for columns added after initial schema
 try { sqlite.exec(`ALTER TABLE projects ADD COLUMN provider TEXT NOT NULL DEFAULT 'daytona'`); } catch { /* column already exists */ }
+try { sqlite.exec(`ALTER TABLE projects ADD COLUMN local_dir TEXT`); } catch { /* column already exists */ }
 
 export const db = drizzle(sqlite, { schema });

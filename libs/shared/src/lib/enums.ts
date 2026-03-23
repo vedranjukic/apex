@@ -18,6 +18,7 @@ export enum SandboxProvider {
   Daytona = 'daytona',
   Docker = 'docker',
   AppleContainer = 'apple-container',
+  Local = 'local',
 }
 
 // ── Task ─────────────────────────────────────────────

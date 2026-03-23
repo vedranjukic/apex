@@ -13,6 +13,7 @@ import { projectsWs } from './modules/projects/projects.ws';
 import { previewRoutes } from './modules/preview/preview.routes';
 import { llmProxyRoutes } from './modules/llm-proxy/llm-proxy.routes';
 import { secretsRoutes } from './modules/secrets/secrets.routes';
+import { fsRoutes } from './modules/fs/fs.routes';
 
 import { usersService } from './modules/users/users.service';
 import { settingsService } from './modules/settings/settings.service';
@@ -41,6 +42,7 @@ async function bootstrap() {
     .use(previewRoutes)
     .use(llmProxyRoutes)
     .use(secretsRoutes)
+    .use(fsRoutes)
     .use(agentWs)
     .use(projectsWs);
 

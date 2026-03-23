@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { useThemeStore } from '../../stores/theme-store';
+import { useTerminalStore } from '../../stores/terminal-store';
 import { themes } from '../../lib/themes';
 
 interface TerminalTabProps {
@@ -27,6 +28,7 @@ export function TerminalTab({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const themeId = useThemeStore((s) => s.themeId);
+  const panelOpen = useTerminalStore((s) => s.panelOpen);
 
   // Create xterm instance on mount
   useEffect(() => {
@@ -87,10 +89,13 @@ export function TerminalTab({
   }, [terminalId, onResize]);
 
   useEffect(() => {
-    if (isActive) {
-      requestAnimationFrame(handleFit);
+    if (isActive && panelOpen) {
+      requestAnimationFrame(() => {
+        handleFit();
+        xtermRef.current?.refresh(0, xtermRef.current.rows - 1);
+      });
     }
-  }, [isActive, handleFit]);
+  }, [isActive, panelOpen, handleFit]);
 
   // Update terminal theme when app theme changes
   useEffect(() => {

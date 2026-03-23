@@ -45,7 +45,8 @@ const HOME_DIR = "/home/daytona";
 /**
  * Resolve the LLM proxy base URL that containers will use to reach the host API.
  *
- * - For local providers (docker, apple-container): replace localhost/127.0.0.1
+ * - For the local provider: localhost URLs work as-is (process runs on host).
+ * - For container providers (docker, apple-container): replace localhost/127.0.0.1
  *   with the host's LAN IP so the container can reach it.
  * - For Daytona (cloud): only works when a public `API_BASE_URL` is set.
  *   If the URL still points at localhost, returns `null` to signal that the
@@ -60,12 +61,15 @@ function resolveProxyBaseUrl(
     const isLocal = u.hostname === "localhost" || u.hostname === "127.0.0.1";
 
     if (provider === "daytona") {
-      // Cloud sandbox can't reach our localhost — proxy only works with a
-      // public API_BASE_URL. If none is set, return null to skip proxying.
       return isLocal ? null : raw;
     }
 
-    // Local providers: swap localhost for the host's LAN IP
+    // Local provider runs on the host — localhost works directly
+    if (provider === "local") {
+      return raw;
+    }
+
+    // Container providers: swap localhost for the host's LAN IP
     if (isLocal) {
       const hostIp = getHostLanIp();
       if (hostIp) {
@@ -95,6 +99,10 @@ function resolveSecretsProxyUrl(
 
     if (provider === "daytona") {
       return isLocal ? null : u.toString().replace(/\/$/, "");
+    }
+
+    if (provider === "local") {
+      return u.toString().replace(/\/$/, "");
     }
 
     if (isLocal) {
@@ -169,6 +177,7 @@ type InternalSession = SandboxSession & {
   sandbox: SandboxInstance;
   ws: WebSocket | null;
   projectDir: string;
+  bridgeDir: string;
 };
 
 /** Ports filtered from auto-detection (infrastructure / well-known services) */
@@ -195,6 +204,7 @@ export class SandboxManager extends EventEmitter {
   private reconnectPromises = new Map<string, Promise<void>>();
   private projectNames = new Map<string, string>();
   private projectIds = new Map<string, string>();
+  private localDirs = new Map<string, string>();
 
   constructor(config: Partial<OrchestratorConfig> = {}) {
     super();
@@ -243,6 +253,56 @@ export class SandboxManager extends EventEmitter {
     if (projectId) this.projectIds.set(sandboxId, projectId);
   }
 
+  /**
+   * Build env vars to inject into the container/sandbox at creation time.
+   * Used for Docker, Apple Container, and Daytona providers.
+   * Local provider ignores env vars (user manages their own environment).
+   */
+  private buildContainerEnvVars(): Record<string, string> {
+    const proxyBase = resolveProxyBaseUrl(this.config.proxyBaseUrl, this.config.provider);
+    const useProxy = !!proxyBase;
+    const envVars: Record<string, string> = {};
+
+    if (this.config.anthropicApiKey) {
+      if (useProxy) {
+        envVars["ANTHROPIC_API_KEY"] = "sk-proxy-placeholder";
+        envVars["ANTHROPIC_BASE_URL"] = `${proxyBase}/llm-proxy/anthropic/v1`;
+      } else {
+        envVars["ANTHROPIC_API_KEY"] = this.config.anthropicApiKey;
+      }
+    }
+    if (this.config.openaiApiKey) {
+      if (useProxy) {
+        envVars["OPENAI_API_KEY"] = "sk-proxy-placeholder";
+        envVars["OPENAI_BASE_URL"] = `${proxyBase}/llm-proxy/openai/v1`;
+      } else {
+        envVars["OPENAI_API_KEY"] = this.config.openaiApiKey;
+      }
+    }
+
+    const secretsProxyUrl = resolveSecretsProxyUrl(
+      this.config.proxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
+    );
+    if (secretsProxyUrl) {
+      envVars["HTTPS_PROXY"] = secretsProxyUrl;
+      envVars["HTTP_PROXY"] = secretsProxyUrl;
+      envVars["https_proxy"] = secretsProxyUrl;
+      envVars["http_proxy"] = secretsProxyUrl;
+      envVars["NO_PROXY"] = "localhost,127.0.0.1,0.0.0.0";
+      envVars["no_proxy"] = "localhost,127.0.0.1,0.0.0.0";
+      envVars["NODE_EXTRA_CA_CERTS"] = CA_CERT_PATH;
+      envVars["SSL_CERT_FILE"] = "/etc/ssl/certs/ca-certificates.crt";
+      envVars["REQUESTS_CA_BUNDLE"] = "/etc/ssl/certs/ca-certificates.crt";
+      envVars["CURL_CA_BUNDLE"] = "/etc/ssl/certs/ca-certificates.crt";
+    }
+
+    for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
+      envVars[name] = placeholder;
+    }
+
+    return envVars;
+  }
+
   /** Create a sandbox, install bridge, return the sandboxId. */
   async createSandbox(
     snapshot?: string,
@@ -251,21 +311,40 @@ export class SandboxManager extends EventEmitter {
     agentType?: string,
     projectId?: string,
     onStatusChange?: (status: string) => void,
+    localDir?: string,
   ): Promise<string> {
     if (!this.provider) throw new Error("SandboxManager not initialized");
+
+    const envVars = this.config.provider !== "local"
+      ? this.buildContainerEnvVars()
+      : undefined;
 
     const sandbox = await this.provider.create({
       snapshot: snapshot || this.config.snapshot,
       image: this.config.image,
       autoStopInterval: 0,
+      envVars,
       onStatusChange,
+      localDir,
     });
 
     if (projectName) this.projectNames.set(sandbox.id, projectName);
     if (projectId) this.projectIds.set(sandbox.id, projectId);
 
-    const projectSlug = projectName ? slugify(projectName) : null;
-    const projectDir = projectSlug ? `${HOME_DIR}/${projectSlug}` : HOME_DIR;
+    const isLocal = this.config.provider === "local";
+    let projectDir: string;
+    let bridgeDir: string;
+
+    if (isLocal && localDir) {
+      projectDir = localDir;
+      bridgeDir = `${localDir}/.apex`;
+    } else {
+      const projectSlug = projectName ? slugify(projectName) : null;
+      projectDir = projectSlug ? `${HOME_DIR}/${projectSlug}` : HOME_DIR;
+      bridgeDir = BRIDGE_DIR;
+    }
+
+    if (localDir) this.localDirs.set(sandbox.id, localDir);
 
     const sessionId = crypto.randomUUID();
     const session: InternalSession = {
@@ -280,6 +359,7 @@ export class SandboxManager extends EventEmitter {
       startTime: Date.now(),
       sandbox,
       projectDir,
+      bridgeDir,
     };
     this.sessions.set(sandbox.id, session);
 
@@ -293,13 +373,20 @@ export class SandboxManager extends EventEmitter {
    * Deduplicates concurrent calls — if a reconnect is already in progress
    * for this sandbox, callers wait for the same promise.
    */
+  /** Store a sandboxId → localDir mapping for local provider reconnections. */
+  registerLocalDir(sandboxId: string, localDir: string): void {
+    if (localDir) this.localDirs.set(sandboxId, localDir);
+  }
+
   async reconnectSandbox(
     sandboxId: string,
     projectName?: string,
+    localDir?: string,
   ): Promise<void> {
     if (!this.provider) throw new Error("SandboxManager not initialized");
 
     if (projectName) this.projectNames.set(sandboxId, projectName);
+    if (localDir) this.localDirs.set(sandboxId, localDir);
 
     const existing = this.sessions.get(sandboxId);
     if (existing?.ws?.readyState === WebSocket.OPEN) return;
@@ -310,7 +397,7 @@ export class SandboxManager extends EventEmitter {
       return;
     }
 
-    const promise = this.doReconnect(sandboxId, projectName);
+    const promise = this.doReconnect(sandboxId, projectName, localDir);
     this.reconnectPromises.set(sandboxId, promise);
     try {
       await promise;
@@ -322,6 +409,7 @@ export class SandboxManager extends EventEmitter {
   private async doReconnect(
     sandboxId: string,
     projectName?: string,
+    localDir?: string,
   ): Promise<void> {
     const t0 = Date.now();
     const log = (msg: string) =>
@@ -337,9 +425,21 @@ export class SandboxManager extends EventEmitter {
       const sandbox = await this.getCachedSandbox(sandboxId);
       log("got sandbox object");
 
+      const isLocal = this.config.provider === "local";
+      const resolvedLocalDir = localDir || this.localDirs.get(sandboxId);
       const resolvedName = projectName || this.projectNames.get(sandboxId);
-      const projectSlug = resolvedName ? slugify(resolvedName) : null;
-      const projectDir = projectSlug ? `${HOME_DIR}/${projectSlug}` : HOME_DIR;
+
+      let projectDir: string;
+      let bridgeDir: string;
+
+      if (isLocal && resolvedLocalDir) {
+        projectDir = resolvedLocalDir;
+        bridgeDir = `${resolvedLocalDir}/.apex`;
+      } else {
+        const projectSlug = resolvedName ? slugify(resolvedName) : null;
+        projectDir = projectSlug ? `${HOME_DIR}/${projectSlug}` : HOME_DIR;
+        bridgeDir = BRIDGE_DIR;
+      }
 
       const existing = this.sessions.get(sandboxId);
       const session: InternalSession = existing ?? {
@@ -354,9 +454,11 @@ export class SandboxManager extends EventEmitter {
         startTime: Date.now(),
         sandbox,
         projectDir,
+        bridgeDir,
       };
-      if (existing && resolvedName) {
-        existing.projectDir = projectDir;
+      if (existing) {
+        if (resolvedName || resolvedLocalDir) existing.projectDir = projectDir;
+        existing.bridgeDir = bridgeDir;
       }
       if (!existing) {
         this.sessions.set(sandbox.id, session);
@@ -371,7 +473,7 @@ export class SandboxManager extends EventEmitter {
         sandbox.fs
           .uploadFile(
             Buffer.from(getBridgeScript(BRIDGE_PORT, session.projectDir, undefined)),
-            `${BRIDGE_DIR}/bridge.js`,
+            `${session.bridgeDir}/bridge.cjs`,
           )
           .catch(() => {
             /* best-effort */
@@ -525,6 +627,8 @@ export class SandboxManager extends EventEmitter {
   getProjectDir(sandboxId: string, projectName?: string): string {
     const session = this.sessions.get(sandboxId);
     if (session?.projectDir) return session.projectDir;
+    const localDir = this.localDirs.get(sandboxId);
+    if (localDir) return localDir;
     if (projectName) {
       const slug = slugify(projectName);
       return `${HOME_DIR}/${slug}`;
@@ -1344,21 +1448,26 @@ export class SandboxManager extends EventEmitter {
 
   // ── Layout persistence methods ────────────────────
 
-  private static readonly LAYOUT_FILE = "/home/daytona/.apex-layout.json";
+  private getLayoutFile(sandboxId: string): string {
+    const localDir = this.localDirs.get(sandboxId);
+    if (localDir) return `${localDir}/.apex/.apex-layout.json`;
+    return "/home/daytona/.apex-layout.json";
+  }
 
   /** Save layout state to the sandbox filesystem (via Daytona SDK, no bridge needed) */
   async saveLayout(sandboxId: string, data: LayoutData): Promise<void> {
     const sandbox = await this.ensureSandbox(sandboxId);
     const json = JSON.stringify(data, null, 2);
-    await sandbox.fs.uploadFile(Buffer.from(json), SandboxManager.LAYOUT_FILE);
+    await sandbox.fs.uploadFile(Buffer.from(json), this.getLayoutFile(sandboxId));
   }
 
   /** Load layout state from the sandbox filesystem (via Daytona SDK, no bridge needed) */
   async loadLayout(sandboxId: string): Promise<LayoutData | null> {
     try {
       const sandbox = await this.ensureSandbox(sandboxId);
+      const layoutFile = this.getLayoutFile(sandboxId);
       const result = await sandbox.process.executeCommand(
-        `cat ${SandboxManager.LAYOUT_FILE} 2>/dev/null || echo ""`,
+        `cat ${layoutFile} 2>/dev/null || echo ""`,
       );
       const raw = (result.result ?? "").trim();
       if (!raw) return null;
@@ -1379,7 +1488,9 @@ export class SandboxManager extends EventEmitter {
     sandboxId: string,
     maxAttempts = 20,
     intervalMs = 500,
+    bridgeDirOverride?: string,
   ): Promise<void> {
+    const bDir = bridgeDirOverride || BRIDGE_DIR;
     for (let i = 0; i < maxAttempts; i++) {
       try {
         const check = await sandbox.process.executeCommand(
@@ -1395,11 +1506,10 @@ export class SandboxManager extends EventEmitter {
       }
     }
 
-    // Bridge never started — grab diagnostics
     let diag = "";
     try {
       const diagResult = await sandbox.process.executeCommand(
-        `echo "=== process ===" && ps aux | grep bridge | grep -v grep 2>&1; echo "=== port ===" && ss -tlnp 2>/dev/null | grep ${BRIDGE_PORT} || true; echo "=== log ===" && tail -50 ${BRIDGE_DIR}/bridge.log 2>/dev/null || echo "no log"`,
+        `echo "=== process ===" && ps aux | grep bridge | grep -v grep 2>&1; echo "=== port ===" && ss -tlnp 2>/dev/null | grep ${BRIDGE_PORT} || true; echo "=== log ===" && tail -50 ${bDir}/bridge.log 2>/dev/null || echo "no log"`,
       );
       diag = (diagResult.result ?? "").trim();
     } catch {
@@ -1538,54 +1648,34 @@ export class SandboxManager extends EventEmitter {
 
   /** Restart the bridge process inside the sandbox and refresh preview URL */
   private async restartBridge(session: InternalSession): Promise<void> {
-    const { sandbox, projectDir } = session;
+    const { sandbox, projectDir, bridgeDir } = session;
     const sid = session.sandboxId.slice(0, 8);
 
     await sandbox.process.executeCommand(
-      'pkill -f "node bridge.js" 2>/dev/null; pkill -f "opencode serve" 2>/dev/null; sleep 0.3',
+      'pkill -f "node bridge.cjs" 2>/dev/null; pkill -f "node bridge.js" 2>/dev/null; pkill -f "opencode serve" 2>/dev/null; sleep 0.3',
     );
+    if (this.config.provider === "local") {
+      await sandbox.process.executeCommand(
+        `lsof -ti:${BRIDGE_PORT} | xargs kill -9 2>/dev/null || true`,
+      );
+    }
 
     const bridgeCode = getBridgeScript(BRIDGE_PORT, projectDir);
     console.log(
-      `[bridge:${sid}] uploading bridge.js (${bridgeCode.length} bytes, has startOpenCodeServe: ${bridgeCode.includes("startOpenCodeServe")})`,
+      `[bridge:${sid}] uploading bridge.cjs (${bridgeCode.length} bytes, has startOpenCodeServe: ${bridgeCode.includes("startOpenCodeServe")})`,
     );
     await sandbox.fs.uploadFile(
       Buffer.from(bridgeCode),
-      `${BRIDGE_DIR}/bridge.js`,
+      `${bridgeDir}/bridge.cjs`,
     );
 
-    // Write .env — use proxy URLs when the proxy is reachable from the
-    // container, otherwise fall back to direct keys (e.g. Daytona cloud).
     const proxyBase = resolveProxyBaseUrl(this.config.proxyBaseUrl, this.config.provider);
     const useProxy = !!proxyBase;
-    const dotEnvLines: string[] = [];
-    if (this.config.anthropicApiKey) {
-      if (useProxy) {
-        dotEnvLines.push(`ANTHROPIC_API_KEY=sk-proxy-placeholder`);
-        dotEnvLines.push(`ANTHROPIC_BASE_URL=${proxyBase}/llm-proxy/anthropic/v1`);
-      } else {
-        dotEnvLines.push(`ANTHROPIC_API_KEY=${this.config.anthropicApiKey}`);
-      }
-    }
-    if (this.config.openaiApiKey) {
-      if (useProxy) {
-        dotEnvLines.push(`OPENAI_API_KEY=sk-proxy-placeholder`);
-        dotEnvLines.push(`OPENAI_BASE_URL=${proxyBase}/llm-proxy/openai/v1`);
-      } else {
-        dotEnvLines.push(`OPENAI_API_KEY=${this.config.openaiApiKey}`);
-      }
-    }
-    if (dotEnvLines.length > 0 && projectDir) {
-      await sandbox.fs.uploadFile(
-        Buffer.from(dotEnvLines.join("\n") + "\n"),
-        `${projectDir}/.env`,
-      );
-      console.log(`[bridge:${sid}] wrote .env (proxy=${useProxy ? proxyBase : "off — direct keys"})`);
-    }
+    const homeDir = this.config.provider === "local" ? os.homedir() : HOME_DIR;
 
-    // Write opencode.json if missing
+    // Write opencode.json if missing (home dir — never overwrite)
     const checkOcConfig = await sandbox.process.executeCommand(
-      `test -f ${projectDir}/opencode.json && echo exists || echo missing`,
+      `test -f '${homeDir}/opencode.json' && echo exists || echo missing`,
     );
     if ((checkOcConfig.result ?? "").includes("missing")) {
       const openCodeConfig: Record<string, unknown> = {
@@ -1622,23 +1712,23 @@ export class SandboxManager extends EventEmitter {
         mcp: {
           "terminal-server": {
             type: "local",
-            command: ["node", `${BRIDGE_DIR}/mcp-terminal-server.js`],
+            command: ["node", `${bridgeDir}/mcp-terminal-server.cjs`],
             timeout: 300000,
           },
         },
       };
       await sandbox.fs.uploadFile(
         Buffer.from(JSON.stringify(openCodeConfig)),
-        `${projectDir}/opencode.json`,
+        `${homeDir}/opencode.json`,
       );
       console.log(`[bridge:${sid}] wrote opencode.json`);
     }
 
-    // Ensure CA cert is installed (may be missing on older sandboxes)
+    // Ensure CA cert is installed (containers only — local provider uses host certs)
     const secretsProxyUrlR = resolveSecretsProxyUrl(
       this.config.proxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
-    if (this.config.secretsProxyCaCert && secretsProxyUrlR) {
+    if (this.config.secretsProxyCaCert && secretsProxyUrlR && this.config.provider !== "local") {
       try {
         await sandbox.fs.uploadFile(
           Buffer.from(this.config.secretsProxyCaCert),
@@ -1678,8 +1768,9 @@ export class SandboxManager extends EventEmitter {
       `DAYTONA_SANDBOX_ID="${sandbox.id}"`,
       `APEX_PROXY_BASE_URL="${apexProxyForBridge}"`,
       `APEX_PROJECT_ID="${projectIdForBridge}"`,
-      `HOME="/home/daytona"`,
-      `PATH="/home/daytona/.opencode/bin:$PATH"`,
+      ...(this.config.provider === "local"
+        ? []
+        : [`HOME="/home/daytona"`, `PATH="/home/daytona/.opencode/bin:$PATH"`]),
       ...(secretsProxyUrlR
         ? [
             `HTTPS_PROXY="${secretsProxyUrlR}"`,
@@ -1695,35 +1786,30 @@ export class SandboxManager extends EventEmitter {
           ]
         : []),
     ];
-    if (secretsProxyUrlR) {
-      dotEnvLines.push(`HTTPS_PROXY=${secretsProxyUrlR}`);
-      dotEnvLines.push(`HTTP_PROXY=${secretsProxyUrlR}`);
-      dotEnvLines.push(`https_proxy=${secretsProxyUrlR}`);
-      dotEnvLines.push(`http_proxy=${secretsProxyUrlR}`);
-      dotEnvLines.push(`NO_PROXY=localhost,127.0.0.1,0.0.0.0`);
-      dotEnvLines.push(`no_proxy=localhost,127.0.0.1,0.0.0.0`);
-      dotEnvLines.push(`NODE_EXTRA_CA_CERTS=${CA_CERT_PATH}`);
-      dotEnvLines.push(`SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt`);
-      dotEnvLines.push(`REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt`);
-      dotEnvLines.push(`CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt`);
-    }
-    // Write placeholder env vars for user-defined secrets so SDKs can initialize
     for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
-      dotEnvLines.push(`${name}=${placeholder}`);
       envParts.push(`${name}="${placeholder}"`);
     }
-    if (dotEnvLines.length > 0 && projectDir) {
-      await sandbox.fs.uploadFile(
-        Buffer.from(dotEnvLines.join("\n") + "\n"),
-        `${projectDir}/.env`,
+    if (this.config.provider === "local") {
+      const checkModules = await sandbox.process.executeCommand(
+        `test -d '${bridgeDir}/node_modules/ws' && echo exists || echo missing`,
       );
+      if ((checkModules.result ?? "").includes("missing")) {
+        const bridgePkg = JSON.stringify({
+          name: "apex-bridge",
+          private: true,
+          dependencies: { ws: "^8.0.0", "node-pty": "0.10.1" },
+        });
+        await sandbox.fs.uploadFile(Buffer.from(bridgePkg), `${bridgeDir}/package.json`);
+        await sandbox.process.executeCommand(`cd '${bridgeDir}' && npm install --no-audit --no-fund 2>&1`);
+      }
     }
+
     await sandbox.process.executeSessionCommand(bridgeSessionId, {
-      command: `cd ${BRIDGE_DIR} && ${envParts.join(" ")} node bridge.js > ${BRIDGE_DIR}/bridge.log 2>&1`,
+      command: `cd ${bridgeDir} && ${envParts.join(" ")} node bridge.cjs > ${bridgeDir}/bridge.log 2>&1`,
       async: true,
     });
 
-    await this.waitForBridge(sandbox, session.sandboxId);
+    await this.waitForBridge(sandbox, session.sandboxId, undefined, undefined, bridgeDir);
 
     const previewInfo = await sandbox.getPreviewLink(BRIDGE_PORT);
     session.previewUrl = previewInfo.url;
@@ -1741,7 +1827,15 @@ export class SandboxManager extends EventEmitter {
   ): Promise<void> {
     if (files.length === 0) return;
 
-    // Build a single shell script: create parent dirs + decode each file
+    if (this.config.provider === "local") {
+      // Local provider: use native fs.uploadFile (fast, no shell arg limits)
+      for (const f of files) {
+        await sandbox.fs.uploadFile(Buffer.from(f.content), f.path);
+      }
+      return;
+    }
+
+    // Container providers: batch into a single shell exec to reduce round-trips
     const parts: string[] = [];
     const dirs = new Set<string>();
     for (const f of files) {
@@ -1766,7 +1860,7 @@ export class SandboxManager extends EventEmitter {
     session.status = "starting_bridge";
     this.emit("status", session.sandboxId, "starting_bridge");
 
-    const { sandbox, projectDir } = session;
+    const { sandbox, projectDir, bridgeDir } = session;
     const sid = sandbox.id.slice(0, 8);
     const t0 = Date.now();
     const log = (msg: string) =>
@@ -1779,6 +1873,9 @@ export class SandboxManager extends EventEmitter {
     const bridgeCode = getBridgeScript(BRIDGE_PORT, projectDir);
     const mcpCode = getMcpTerminalScript(BRIDGE_PORT);
 
+    const isLocalProvider = this.config.provider === "local";
+    const homeDir = isLocalProvider ? os.homedir() : HOME_DIR;
+
     const sandboxInstructions = [
       "# Sandbox Environment",
       "",
@@ -1787,21 +1884,34 @@ export class SandboxManager extends EventEmitter {
       "directly in this directory — do NOT create a new subfolder for the app.",
       "When asked to build or create an app, initialize it here in the current directory.",
       "",
-      "You are running inside a Daytona cloud sandbox. The user CANNOT access localhost URLs.",
-      "localhost/127.0.0.1 links will NOT work for the user.",
-      "",
-      "## IMPORTANT: Preview URLs",
-      "",
-      "Whenever you start any HTTP server, dev server, web app, or API on any port,",
-      "you MUST use the `get_preview_url` MCP tool to get a publicly accessible URL.",
-      "",
-      "This tool is available in your MCP tools list as `mcp__terminal-server__get_preview_url`.",
-      "It is NOT a CLI command — use it through your normal tool-calling interface.",
-      "",
-      "Call it with the port number, e.g.: get_preview_url({ port: 3000 })",
-      "",
-      "NEVER share localhost or 127.0.0.1 URLs with the user. ALWAYS call get_preview_url",
-      "and share the returned public URL instead.",
+      ...(isLocalProvider
+        ? [
+            "You are running directly on the host machine (local sandbox provider).",
+            "localhost/127.0.0.1 URLs are accessible to the user.",
+            "",
+            "## Preview URLs",
+            "",
+            "When you start any HTTP server, dev server, web app, or API on any port,",
+            "you can share localhost URLs directly with the user (e.g. http://localhost:3000).",
+            "You may also use the `get_preview_url` MCP tool which returns localhost URLs.",
+          ]
+        : [
+            "You are running inside a Daytona cloud sandbox. The user CANNOT access localhost URLs.",
+            "localhost/127.0.0.1 links will NOT work for the user.",
+            "",
+            "## IMPORTANT: Preview URLs",
+            "",
+            "Whenever you start any HTTP server, dev server, web app, or API on any port,",
+            "you MUST use the `get_preview_url` MCP tool to get a publicly accessible URL.",
+            "",
+            "This tool is available in your MCP tools list as `mcp__terminal-server__get_preview_url`.",
+            "It is NOT a CLI command — use it through your normal tool-calling interface.",
+            "",
+            "Call it with the port number, e.g.: get_preview_url({ port: 3000 })",
+            "",
+            "NEVER share localhost or 127.0.0.1 URLs with the user. ALWAYS call get_preview_url",
+            "and share the returned public URL instead.",
+          ]),
       "",
       "## Asking the User Questions",
       "",
@@ -1815,24 +1925,6 @@ export class SandboxManager extends EventEmitter {
       "ALWAYS use the `ask_user` tool so the system knows you are waiting for input.",
       "",
     ].join("\n");
-
-    const dotEnvLines: string[] = [];
-    if (this.config.anthropicApiKey) {
-      if (useProxyI) {
-        dotEnvLines.push(`ANTHROPIC_API_KEY=sk-proxy-placeholder`);
-        dotEnvLines.push(`ANTHROPIC_BASE_URL=${proxyBaseUrlForEnv}/llm-proxy/anthropic/v1`);
-      } else {
-        dotEnvLines.push(`ANTHROPIC_API_KEY=${this.config.anthropicApiKey}`);
-      }
-    }
-    if (this.config.openaiApiKey) {
-      if (useProxyI) {
-        dotEnvLines.push(`OPENAI_API_KEY=sk-proxy-placeholder`);
-        dotEnvLines.push(`OPENAI_BASE_URL=${proxyBaseUrlForEnv}/llm-proxy/openai/v1`);
-      } else {
-        dotEnvLines.push(`OPENAI_API_KEY=${this.config.openaiApiKey}`);
-      }
-    }
 
     const openCodeConfig: Record<string, unknown> = {
       $schema: "https://opencode.ai/config.json",
@@ -1868,7 +1960,7 @@ export class SandboxManager extends EventEmitter {
       mcp: {
         "terminal-server": {
           type: "local",
-          command: ["node", `${BRIDGE_DIR}/mcp-terminal-server.js`],
+          command: ["node", `${bridgeDir}/mcp-terminal-server.cjs`],
           timeout: 300000,
         },
       },
@@ -1896,36 +1988,26 @@ export class SandboxManager extends EventEmitter {
       this.config.proxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
 
-    // Add proxy env vars to .env for user app processes
-    if (secretsProxyUrl) {
-      dotEnvLines.push(`HTTPS_PROXY=${secretsProxyUrl}`);
-      dotEnvLines.push(`HTTP_PROXY=${secretsProxyUrl}`);
-      dotEnvLines.push(`https_proxy=${secretsProxyUrl}`);
-      dotEnvLines.push(`http_proxy=${secretsProxyUrl}`);
-      dotEnvLines.push(`NO_PROXY=localhost,127.0.0.1,0.0.0.0`);
-      dotEnvLines.push(`no_proxy=localhost,127.0.0.1,0.0.0.0`);
-      dotEnvLines.push(`NODE_EXTRA_CA_CERTS=${CA_CERT_PATH}`);
-      dotEnvLines.push(`SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt`);
-      dotEnvLines.push(`REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt`);
-      dotEnvLines.push(`CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt`);
-    }
-    for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
-      dotEnvLines.push(`${name}=${placeholder}`);
-    }
-
     // ── Exec 1: Write ALL files in a single call ────
-    // Batches ~7 individual uploadFile calls (each a container exec) into one.
-    const allFiles: { path: string; content: string }[] = [
-      { path: `${BRIDGE_DIR}/bridge.js`, content: bridgeCode },
-      { path: `${BRIDGE_DIR}/mcp-terminal-server.js`, content: mcpCode },
-      { path: `${projectDir}/opencode.json`, content: JSON.stringify(openCodeConfig) },
-      { path: `${projectDir}/AGENTS.md`, content: sandboxInstructions },
-      { path: `${projectDir}/.opencode/agents/sisyphus-prompt.txt`, content: sisyphusPrompt },
+    // Config files go to the home directory and are never overwritten.
+    const configFiles: { path: string; content: string }[] = [
+      { path: `${homeDir}/opencode.json`, content: JSON.stringify(openCodeConfig) },
+      { path: `${homeDir}/AGENTS.md`, content: sandboxInstructions },
+      { path: `${homeDir}/.opencode/agents/sisyphus-prompt.txt`, content: sisyphusPrompt },
     ];
-    if (dotEnvLines.length > 0) {
-      allFiles.push({ path: `${projectDir}/.env`, content: dotEnvLines.join("\n") + "\n" });
-    }
-    if (this.config.secretsProxyCaCert && secretsProxyUrl) {
+    const existCheck = await sandbox.process.executeCommand(
+      configFiles.map(f => `test -f '${f.path}' && echo '${f.path}'`).join("; ") + " || true",
+    );
+    const existingPaths = new Set(
+      (existCheck.result ?? "").split("\n").map(l => l.trim()).filter(Boolean),
+    );
+
+    const allFiles: { path: string; content: string }[] = [
+      { path: `${bridgeDir}/bridge.cjs`, content: bridgeCode },
+      { path: `${bridgeDir}/mcp-terminal-server.cjs`, content: mcpCode },
+      ...configFiles.filter(f => !existingPaths.has(f.path)),
+    ];
+    if (this.config.secretsProxyCaCert && secretsProxyUrl && !isLocalProvider) {
       allFiles.push({ path: CA_CERT_PATH, content: this.config.secretsProxyCaCert });
     }
 
@@ -1944,18 +2026,18 @@ export class SandboxManager extends EventEmitter {
           await sandbox.process.executeCommand(`git clone ${gitRepo} .`, projectDir);
         }
       } else {
-        await sandbox.process.executeCommand(
-          `mkdir -p '${projectDir}' && git init '${projectDir}'`
-          + (this.config.githubToken
-            ? ` && git config --global credential.helper store && echo "https://x-access-token:${this.config.githubToken}@github.com" > ~/.git-credentials`
-            : ""),
-        );
+        const gitInitCmd = `mkdir -p '${projectDir}' && git init '${projectDir}'`;
+        // For container providers, also set up git credential helper
+        const credentialCmd = (this.config.githubToken && this.config.provider !== "local")
+          ? ` && git config --global credential.helper store && echo "https://x-access-token:${this.config.githubToken}@github.com" > ~/.git-credentials`
+          : "";
+        await sandbox.process.executeCommand(gitInitCmd + credentialCmd);
       }
       log("git done");
     })();
 
-    // ── Exec 3: Update CA certs if needed (parallel) ──
-    const caCertTask = (this.config.secretsProxyCaCert && secretsProxyUrl)
+    // ── Exec 3: Update CA certs if needed (parallel, containers only) ──
+    const caCertTask = (this.config.secretsProxyCaCert && secretsProxyUrl && this.config.provider !== "local")
       ? writeFilesTask.then(() =>
           sandbox.process.executeCommand("sudo update-ca-certificates 2>/dev/null || true"),
         ).then(() => log("CA cert updated"))
@@ -1992,8 +2074,9 @@ export class SandboxManager extends EventEmitter {
       `DAYTONA_SANDBOX_ID="${sandbox.id}"`,
       `APEX_PROXY_BASE_URL="${apexProxyForBridgeI}"`,
       `APEX_PROJECT_ID="${projectIdI}"`,
-      `HOME="/home/daytona"`,
-      `PATH="/home/daytona/.opencode/bin:$PATH"`,
+      ...(this.config.provider === "local"
+        ? []
+        : [`HOME="/home/daytona"`, `PATH="/home/daytona/.opencode/bin:$PATH"`]),
       ...(secretsProxyUrl
         ? [
             `HTTPS_PROXY="${secretsProxyUrl}"`,
@@ -2013,13 +2096,36 @@ export class SandboxManager extends EventEmitter {
       envParts.push(`${name}="${placeholder}"`);
     }
 
+    // For local provider, install bridge dependencies (ws, node-pty) if missing
+    if (this.config.provider === "local") {
+      // Kill any old bridge holding port 8080 (local sandboxes share the host network)
+      await sandbox.process.executeCommand(
+        `lsof -ti:${BRIDGE_PORT} | xargs kill -9 2>/dev/null || true`,
+      );
+
+      const checkModules = await sandbox.process.executeCommand(
+        `test -d '${bridgeDir}/node_modules/ws' && echo exists || echo missing`,
+      );
+      if ((checkModules.result ?? "").includes("missing")) {
+        log("installing bridge deps (ws, node-pty)…");
+        const bridgePkg = JSON.stringify({
+          name: "apex-bridge",
+          private: true,
+          dependencies: { ws: "^8.0.0", "node-pty": "0.10.1" },
+        });
+        await sandbox.fs.uploadFile(Buffer.from(bridgePkg), `${bridgeDir}/package.json`);
+        await sandbox.process.executeCommand(`cd '${bridgeDir}' && npm install --no-audit --no-fund 2>&1`);
+        log("bridge deps installed");
+      }
+    }
+
     await sandbox.process.executeSessionCommand(bridgeSessionId, {
-      command: `cd ${BRIDGE_DIR} && ${envParts.join(" ")} node bridge.js > ${BRIDGE_DIR}/bridge.log 2>&1`,
+      command: `cd ${bridgeDir} && ${envParts.join(" ")} node bridge.cjs > ${bridgeDir}/bridge.log 2>&1`,
       async: true,
     });
 
     // ── Exec 5+: waitForBridge (fast polling) + connect ─
-    await this.waitForBridge(sandbox, session.sandboxId);
+    await this.waitForBridge(sandbox, session.sandboxId, undefined, undefined, bridgeDir);
     log("bridge ready");
 
     const installPreviewInfo = await sandbox.getPreviewLink(BRIDGE_PORT);
