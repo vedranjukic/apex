@@ -104,6 +104,12 @@ export interface Message {
   createdAt: string;
 }
 
+export interface ImageSource {
+  type: 'base64';
+  media_type: string;
+  data: string;
+}
+
 export interface ContentBlock {
   type: string;
   text?: string;
@@ -113,6 +119,7 @@ export interface ContentBlock {
   input?: Record<string, unknown>;
   tool_use_id?: string;
   content?: string;
+  source?: ImageSource;
 }
 
 // ── Config ────────────────────────────────────────────

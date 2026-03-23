@@ -217,7 +217,7 @@ function handleSSEEvent(evType, data) {
 }
 
 // ── Bridge core ──────────────────────────────────────
-async function sendPrompt(threadId, prompt, agent, model, sessionId) {
+async function sendPrompt(threadId, prompt, agent, model, sessionId, images) {
   const ocAgent = agent || "build";
   const ocModel = model || "";
   log("\\u{1F916}", "Sending prompt thread=" + threadId + " agent=" + ocAgent + " model=" + (ocModel || "default"));
@@ -246,8 +246,17 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId) {
     modelObj = { providerID: ocModel.substring(0, si), modelID: ocModel.substring(si + 1) };
   }
 
+  const parts = [];
+  if (Array.isArray(images) && images.length > 0) {
+    for (var imgIdx = 0; imgIdx < images.length; imgIdx++) {
+      var img = images[imgIdx];
+      parts.push({ type: "file", mime: img.media_type, url: "data:" + img.media_type + ";base64," + img.data, filename: "image-" + (imgIdx + 1) + "." + (img.media_type.split("/")[1] || "png") });
+    }
+  }
+  parts.push({ type: "text", text: prompt });
+
   await ocFetch("POST", "/session/" + ocSessionId + "/prompt_async", {
-    parts: [{ type: "text", text: prompt }],
+    parts: parts,
     agent: ocAgent,
     model: modelObj,
   });
@@ -377,7 +386,7 @@ async function handleStartAgent(msg) {
     activeThreads.delete(threadId);
   }
   try {
-    await sendPrompt(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId);
+    await sendPrompt(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId, msg.images);
   } catch (e) { emitAgentError(threadId, e.message || String(e)); }
 }
 

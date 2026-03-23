@@ -55,7 +55,7 @@ Additional docs live in `workdocs/`. Read these only when working on the relevan
 - `workdocs/command-registry.md` -- command system, keybindings, how to add commands
 - `workdocs/go-cli-cross-mode.md` -- Go CLI ↔ Node.js bridge protocol, types sync, build commands
 - `workdocs/dashboard-frontend.md` -- frontend component structure and patterns
-- `workdocs/prompt-file-references.md` -- prompt input, @ file references, code snippet references, FilePicker, tag system
+- `workdocs/prompt-file-references.md` -- prompt input, @ file references, code snippet references, image attachments, FilePicker, tag system
 - `workdocs/claude-sandbox-installation.md` -- sandbox provisioning and bridge setup
 - `workdocs/sandbox-providers.md` -- sandbox provider interface, Daytona/Docker implementations, per-project selection, how to add providers
 - `workdocs/multi-agent-bridge.md` -- multi-agent adapter pattern (Claude Code, OpenCode, Codex), protocols, testing

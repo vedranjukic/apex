@@ -75,7 +75,7 @@ export function HomePage() {
   }, []);
 
   const handleSendPrompt = useCallback(
-    (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => {
+    (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string, images?: { id: string; dataUrl: string; source: { type: 'base64'; media_type: string; data: string } }[]) => {
       let fullPrompt = prompt;
       if (files && files.length > 0) {
         fullPrompt = `Referenced files:\n${files.map((f) => `- ${f}`).join('\n')}\n\n${fullPrompt}`;
@@ -89,15 +89,26 @@ export function HomePage() {
       const metadata: Record<string, unknown> = {};
       if (files && files.length > 0) metadata.referencedFiles = files;
       if (snippets && snippets.length > 0) metadata.codeSnippets = snippets;
+
+      const contentBlocks: { type: string; text?: string; source?: { type: 'base64'; media_type: string; data: string } }[] = [];
+      if (images && images.length > 0) {
+        for (const img of images) {
+          contentBlocks.push({ type: 'image', source: img.source });
+        }
+      }
+      contentBlocks.push({ type: 'text', text: prompt });
+
       addMessage({
         id: crypto.randomUUID(),
         taskId: threadId,
         role: 'user',
-        content: [{ type: 'text', text: prompt }],
+        content: contentBlocks,
         metadata: Object.keys(metadata).length > 0 ? metadata : null,
         createdAt: new Date().toISOString(),
       });
-      sendPrompt(threadId, fullPrompt, mode, model);
+
+      const imagePayloads = images?.map((img) => img.source);
+      sendPrompt(threadId, fullPrompt, mode, model, agentType, imagePayloads);
     },
     [sendPrompt, addMessage],
   );

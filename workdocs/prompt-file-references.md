@@ -1,9 +1,10 @@
-# Prompt Input, File References & Code Snippets
+# Prompt Input, File References, Code Snippets & Image Attachments
 
-The thread prompt uses a `contentEditable` div instead of a plain `<textarea>` so that inline reference tags can be mixed with text. Two reference types are supported:
+The thread prompt uses a `contentEditable` div instead of a plain `<textarea>` so that inline reference tags can be mixed with text. Three input types are supported:
 
 1. **File/folder references** -- triggered by typing `@`, selecting from a file picker popup
 2. **Code snippet references** -- created by copying text in the code editor and pasting into the prompt
+3. **Image attachments** -- added via the toolbar image button or by pasting/dropping images from the clipboard
 
 ## Key Files
 
@@ -27,9 +28,10 @@ ProjectPage
       └─ AgentThread  (receives requestListing prop)
           ├─ WelcomePrompt  (uses PromptInput)
           └─ PromptInput
+              ├─ Image preview strip  (thumbnails with remove buttons)
               ├─ contentEditable div  (text + inline file/snippet tags)
               ├─ FilePicker popup     (shown on @ trigger)
-              └─ Toolbar + Send button
+              └─ Toolbar (agent dropdown + model dropdown + image button + send button)
 ```
 
 ## File References
@@ -163,17 +165,88 @@ The `application/x-codeany-snippet` MIME type carries the `CodeSelection` JSON a
 
 The `editorStore.codeSelection` field serves as a fallback for browsers that strip custom MIME types.
 
+## Image Attachments
+
+### Concept
+
+Users can attach images (PNG, JPEG, GIF, WebP) to any prompt. Images are converted to base64 data URLs client-side, shown as thumbnail previews above the text input, and sent as `image` content blocks alongside the text. The agent receives images as `file` parts via the OpenCode API, enabling multimodal prompts (e.g. "what do you see in this screenshot?").
+
+### Data flow
+
+```
+1. User clicks the image button (ImagePlus icon) in the toolbar
+   OR pastes an image from the clipboard (Ctrl+V)
+2. addImageFiles() reads each File via FileReader.readAsDataURL()
+3. Creates ImageAttachment { id, dataUrl, source: { type: 'base64', media_type, data } }
+4. Image thumbnails appear in a preview strip above the text input
+5. User can remove images via the X button on each thumbnail
+
+6. On submit, images are passed through onSend → handleSendPrompt:
+   a. Optimistic local message includes image content blocks + text block
+   b. Image sources (base64 payloads) are forwarded via WebSocket
+
+7. WebSocket send_prompt { threadId, prompt, ..., images }
+8. Backend stores image + text content blocks in the DB message
+9. Bridge receives images, converts to OpenCode FilePartInput format:
+   { type: "file", mime: "image/png", url: "data:image/png;base64,..." }
+10. OpenCode processes the multimodal prompt
+```
+
+### ImageAttachment type
+
+```typescript
+interface ImageSource {
+  type: 'base64';
+  media_type: string;  // e.g. "image/png", "image/jpeg"
+  data: string;        // base64-encoded image data
+}
+
+interface ImageAttachment {
+  id: string;          // crypto.randomUUID()
+  dataUrl: string;     // data:image/png;base64,... (for preview rendering)
+  source: ImageSource; // payload sent to backend
+}
+```
+
+Defined and exported from `prompt-input.tsx`. `ImageSource` is defined in `api/client.ts` and `libs/shared/src/lib/interfaces.ts`.
+
+### Accepted formats
+
+| Format | MIME Type | Max Size |
+|--------|-----------|----------|
+| PNG | `image/png` | 20 MB |
+| JPEG | `image/jpeg` | 20 MB |
+| GIF | `image/gif` | 20 MB |
+| WebP | `image/webp` | 20 MB |
+
+### Image rendering in messages
+
+`ContentBlockView` in `message-bubble.tsx` renders `type: 'image'` blocks as `<img>` elements using a data URL constructed from `block.source.media_type` and `block.source.data`. Images display with `max-w-xs max-h-64` constraints.
+
+### OpenCode bridge format
+
+OpenCode does not have a native `image` part type. Images are sent as `FilePartInput`:
+
+```json
+{ "type": "file", "mime": "image/png", "url": "data:image/png;base64,...", "filename": "image-1.png" }
+```
+
+The bridge script (`bridge-script.ts`) converts the `{ media_type, data }` payload from the WebSocket into this format before calling `prompt_async`.
+
+---
+
 ## PromptInput Component
 
 ### Props
 
 ```typescript
 interface Props {
-  onSend: (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => void;
+  onSend: (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string, images?: ImageAttachment[]) => void;
   disabled?: boolean;
   placeholder?: string;
   autoFocus?: boolean;
   requestListing?: (path: string) => void;
+  hideAgentDropdown?: boolean;
 }
 ```
 
@@ -192,9 +265,9 @@ interface PromptInputHandle {
 - **Placeholder**: CSS rule `.prompt-editor:empty::before { content: attr(data-placeholder) }`.
 - **Enter**: Submits the prompt.
 - **Shift+Enter**: Inserts a newline.
-- **Paste**: Checks for snippet MIME type first; otherwise strips HTML and inserts plain text.
+- **Paste**: Checks for image files first (adds as image attachments); then checks for snippet MIME type; otherwise strips HTML and inserts plain text.
 - **Backspace**: At the boundary of any tag (file or snippet), removes the entire tag.
-- **Empty detection**: `isEditorEmpty()` used to disable the send button.
+- **Empty detection**: Send button is enabled when there is text content OR image attachments.
 
 ### Tag removal
 
@@ -215,21 +288,25 @@ Both file and snippet tags can be removed by:
 - Snippet tag spans contribute `[snippet: path:line:char-line:char]` to text, parsed `CodeSelection` to `snippets[]`.
 - `<br>` elements become `\n`.
 
-## How References Are Sent to the Backend
+## How References and Images Are Sent to the Backend
 
-When the user submits a prompt with references:
+When the user submits a prompt with references and/or images:
 
-1. `PromptInput.onSend(text, files, mode, model, snippets)` is called.
-2. `AgentThread` forwards to `onSendPrompt(threadId, text, files, mode, model, snippets)`.
+1. `PromptInput.onSend(text, files, mode, model, snippets, agentType, images)` is called.
+2. `AgentThread` forwards to `onSendPrompt(threadId, text, files, mode, model, snippets, agentType, images)`.
 3. `ProjectPage.handleSendPrompt()`:
-   - Creates a local message with original text for display.
+   - Creates a local message with original text for display. If images are attached, the local message includes `{ type: 'image', source }` content blocks before the text block.
    - Stores `metadata.referencedFiles` and `metadata.codeSnippets`.
    - Constructs `fullPrompt` by prepending reference blocks:
      - `"Referenced files:\n- /path\n\n"` for file references
      - `"Referenced code selections:\n- /path lines L:C-L:C\n\n"` for snippets
-   - Sends `fullPrompt` over WebSocket via `sendPrompt(threadId, fullPrompt)`.
+   - Sends `fullPrompt` and `images` (array of `ImageSource`) over WebSocket via `sendPrompt(threadId, fullPrompt, mode, model, agentType, images)`.
 
-The backend receives a single string prompt with coordinate-based references. The WebSocket protocol is unchanged.
+4. Backend `send_prompt` handler (`agent.ws.ts`):
+   - Stores user message with image content blocks + text block in the DB.
+   - Forwards images alongside the prompt to `executeAgainstSandbox()`.
+   - `SandboxManager.sendPrompt()` passes images to the bridge via `start_claude` WebSocket message.
+   - Bridge converts images to OpenCode `FilePartInput` format and includes them in the `prompt_async` call.
 
 ## How to Modify
 

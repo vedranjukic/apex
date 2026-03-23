@@ -152,6 +152,7 @@ function attachTerminalListeners(sandboxId: string, provider?: string) {
 
 async function executeAgainstSandbox(
   client: WsClient, threadId: string, prompt: string, mode?: string, model?: string,
+  images?: { type: 'base64'; media_type: string; data: string }[],
 ) {
   const thread = await threadsService.findById(threadId);
   const project = await projectsService.findById(thread.projectId);
@@ -339,7 +340,7 @@ async function executeAgainstSandbox(
   manager.on('message', messageHandler);
 
   try {
-    await manager.sendPrompt(project.sandboxId, prompt, threadId, thread.claudeSessionId, mode, model, effectiveAgentType as string);
+    await manager.sendPrompt(project.sandboxId, prompt, threadId, thread.claudeSessionId, mode, model, effectiveAgentType as string, undefined, images);
     emitTo(client, 'prompt_accepted', { threadId });
   } catch (err) {
     cleanupHandler();
@@ -398,12 +399,21 @@ async function handleMessage(client: WsClient, message: unknown) {
         break;
       }
       case 'send_prompt': {
-        const { threadId, prompt, mode, model, agentType } = payload;
+        const { threadId, prompt, mode, model, agentType, images } = payload;
         if (mode) await threadsService.updateMode(threadId, mode);
         if (agentType) await threadsService.updateAgentType(threadId, agentType);
         if (model !== undefined) await threadsService.updateModel(threadId, model);
-        await threadsService.addMessage(threadId, { role: 'user', content: [{ type: 'text', text: prompt }] });
-        await executeAgainstSandbox(client, threadId, prompt, mode, model);
+
+        const contentBlocks: any[] = [];
+        if (Array.isArray(images) && images.length > 0) {
+          for (const img of images) {
+            contentBlocks.push({ type: 'image', source: img });
+          }
+        }
+        contentBlocks.push({ type: 'text', text: prompt });
+        await threadsService.addMessage(threadId, { role: 'user', content: contentBlocks });
+
+        await executeAgainstSandbox(client, threadId, prompt, mode, model, images);
         break;
       }
       case 'execute_thread': {

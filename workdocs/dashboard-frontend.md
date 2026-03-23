@@ -178,10 +178,10 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 | **AgentThread**        | Orchestrates the thread view. Three states: **(1)** No active thread & not composing → `WelcomePrompt` (centered hero with sparkle icon, textarea, suggestion chips). **(2)** Composing new → minimal prompt UI. **(3)** Active thread → header + scrollable message list + `PromptInput` + optional `ThreadStatsBar`. Header includes a **Stats** toggle button (appears when result data exists) that shows/hides the stats bar below the prompt. Input is disabled while thread status is `running`. Provides `ThreadActionsContext` with `sendPrompt`, `sendSilentPrompt`, `sendUserAnswer`. |
 | **MessageBubble**    | Message grouping logic (`groupMessages`) + rendering. Groups flat messages into: **user** (single message), **agent** (consecutive assistant messages merged, with thinking-time indicator), **result** (inline text: cost · tokens · duration), **system** (errors/info). `AgentGroup` detects plan-mode threads and renders `PlanBlock` instead of raw text. `UserBubble` hides build-prompt messages. |
 | **ThreadStatsBar**   | Toggleable bottom bar (below prompt input) showing aggregated stats across all runs in the thread: total cost, input/output token breakdown, context window usage % (with color-coded progress bar), total duration, turns, connected MCP servers, and model name. Uses `threadSessionInfo` from `useThreadsStore` for MCP and model data, and `getContextWindow()` from `lib/model-context.ts` for context window sizes. |
-| **ContentBlockView** | Renders individual content blocks: `text` → `MarkdownBlock` card if the text has headings and is ≥200 chars, otherwise preformatted text with URL linking. `tool_use` → `ToolUseBlock` card. `tool_result` → bordered card with scrollable output. |
+| **ContentBlockView** | Renders individual content blocks: `text` → `MarkdownBlock` card if the text has headings and is ≥200 chars, otherwise preformatted text with URL linking. `tool_use` → `ToolUseBlock` card. `tool_result` → bordered card with scrollable output. `image` → inline `<img>` rendered from base64 data URL (via `block.source`). |
 | **PlanBlock**        | Collapsible inline card for plan-mode responses. Header with filename (slug + timestamp, e.g. `todo-app-plan_20260224T0700.md`), spinner/READY badge. Body renders markdown via `react-markdown` + `remark-gfm`. Footer has collapse toggle + **Build** button (sends plan to agent in `agent` mode via `sendSilentPrompt`). Build button states: active → building (spinner) → built (grayed checkmark). |
 | **MarkdownBlock**    | Collapsible inline card for structured text (task summaries, overviews). Same markdown rendering as PlanBlock but no Build button. Used automatically for text blocks with headings. |
-| **PromptInput**      | Reusable form: auto-sizing textarea + purple send button. Toolbar includes `AgentDropdown` (per-thread agent selector), `ModeDropdown` (agent/plan/ask), and `ModelDropdown` (agent-aware model list). Submit on Enter (Shift+Enter for newline). Supports `disabled` and `autoFocus` props. |
+| **PromptInput**      | Reusable form: contentEditable div with inline file/snippet tags + toolbar. Toolbar includes `AgentDropdown` (per-thread agent selector), `ModelDropdown` (agent-aware model list), image attach button (`ImagePlus` icon), and purple send button. Supports image attachments via file picker or clipboard paste (PNG/JPEG/GIF/WebP, max 20 MB). Image previews shown as thumbnails above the text input with hover-to-remove buttons. Submit on Enter (Shift+Enter for newline). Exports `ImageAttachment` type. |
 
 ### 4.3 Project Components (`components/projects/`)
 
@@ -363,7 +363,7 @@ All hooks share **one Socket.io connection** created by `useAgentSocket` (namesp
 
 ### 6.1 `useAgentSocket`
 
-- **Emits**: `subscribe_project`, `send_prompt` (with optional `agentType`), `execute_thread` (with optional `agentType`)
+- **Emits**: `subscribe_project`, `send_prompt` (with optional `agentType` and `images`), `execute_thread` (with optional `agentType`)
 - **Listens**: `subscribed`, `prompt_accepted`, `agent_message` (assistant turns & result summaries), `agent_status`, `agent_error`
 - Pushes received messages into `useThreadsStore` and updates thread statuses.
 - Handles `system`/`init` messages: captures MCP servers, tools, model, permission mode, and agent version into `useThreadsStore.setThreadSessionInfo()`.
@@ -422,7 +422,8 @@ Thin `fetch` wrapper over `/api`. All requests send `Content-Type: application/j
 - **`Project`** — `id, userId, name, description, sandboxId, sandboxSnapshot, status, agentType, gitRepo, agentConfig, createdAt, updatedAt`
 - **`Thread`** — `id, projectId, title, status, agentType, createdAt, updatedAt, messages?`
 - **`Message`** — `id, taskId, role, content: ContentBlock[], metadata, createdAt`
-- **`ContentBlock`** — `type` (`text` | `tool_use` | `tool_result`), plus type-specific fields (`text`, `name`, `input`, `content`, `tool_use_id`)
+- **`ContentBlock`** — `type` (`text` | `tool_use` | `tool_result` | `image`), plus type-specific fields (`text`, `name`, `input`, `content`, `tool_use_id`, `source?: ImageSource`)
+- **`ImageSource`** — `{ type: 'base64', media_type: string, data: string }` — base64-encoded image payload for `image` content blocks
 
 ---
 

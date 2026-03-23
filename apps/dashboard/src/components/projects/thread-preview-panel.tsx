@@ -3,13 +3,14 @@ import { X, Maximize2, Minimize2 } from 'lucide-react';
 import { AgentThread } from '../agent/agent-thread';
 import { useThreadsStore } from '../../stores/tasks-store';
 import type { CodeSelection } from '../../stores/editor-store';
+import type { ImageAttachment } from '../agent/prompt-input';
 
 interface Props {
   projectId: string;
   threadId: string | null;
   projectName: string;
   onClose: () => void;
-  onSendPrompt: (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[]) => void;
+  onSendPrompt: (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string, images?: ImageAttachment[]) => void;
   onSendSilentPrompt: (threadId: string, prompt: string, mode?: string, model?: string, agentType?: string) => void;
   onExecuteThread: (threadId: string, mode?: string, model?: string) => void;
   onSendUserAnswer: (threadId: string, toolUseId: string, answer: string) => void;

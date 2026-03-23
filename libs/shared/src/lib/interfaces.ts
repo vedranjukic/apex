@@ -54,6 +54,12 @@ export interface ITask {
 }
 
 // ── Message ──────────────────────────────────────────
+export interface IImageSource {
+  type: 'base64';
+  media_type: string;
+  data: string;
+}
+
 export interface IContentBlock {
   type: 'text' | 'tool_use' | 'tool_result' | 'image';
   text?: string;
@@ -62,6 +68,7 @@ export interface IContentBlock {
   input?: Record<string, unknown>;
   toolUseId?: string;
   content?: string;
+  source?: IImageSource;
 }
 
 export interface IMessageMetadata {

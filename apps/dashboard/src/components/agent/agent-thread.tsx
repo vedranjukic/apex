@@ -2,7 +2,7 @@ import { useEffect, useRef, useMemo, useCallback, useState } from 'react';
 import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo, RotateCcw, MessageCircleQuestion, CirclePause, Send, Brain, BarChart3 } from 'lucide-react';
 import { useThreadsStore } from '../../stores/tasks-store';
 import { groupMessages, MessageGroupView, PlanShownProvider, ReasoningToggleProvider, useReasoningToggle } from './message-bubble';
-import { PromptInput, type PromptInputHandle } from './prompt-input';
+import { PromptInput, type PromptInputHandle, type ImageAttachment } from './prompt-input';
 import { ThreadActionsContext } from './thread-actions-context';
 import { ThreadStatsBar } from './thread-stats-bar';
 import { useAgentSettingsStore, AGENT_TYPES, DEFAULT_MODEL_BY_TYPE, type AgentTypeId } from '../../stores/agent-settings-store';
@@ -12,7 +12,7 @@ import type { CodeSelection } from '../../stores/editor-store';
 interface Props {
   projectId: string;
   projectAgentType?: string;
-  onSendPrompt: (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string) => void;
+  onSendPrompt: (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string, images?: ImageAttachment[]) => void;
   onSendSilentPrompt: (threadId: string, prompt: string, mode?: string, model?: string, agentType?: string) => void;
   onExecuteThread: (threadId: string, mode?: string, model?: string, agentType?: string) => void;
   onSendUserAnswer?: (threadId: string, toolUseId: string, answer: string) => void;
@@ -184,8 +184,8 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
     }, SCROLL_SAVE_DEBOUNCE_MS);
   }, [activeThreadId, setThreadScrollOffset]);
 
-  const handleNewThreadPrompt = useCallback(
-    async (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string) => {
+    const handleNewThreadPrompt = useCallback(
+    async (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string, images?: ImageAttachment[]) => {
       let fullPrompt = prompt;
       if (files && files.length > 0) {
         fullPrompt = `Referenced files:\n${files.map((f) => `- ${f}`).join('\n')}\n\n${fullPrompt}`;
@@ -196,6 +196,7 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
         );
         fullPrompt = `Referenced code selections:\n${snippetRefs.join('\n')}\n\n${fullPrompt}`;
       }
+      // TODO: forward images for new thread creation once backend supports it
       const thread = await createThread(projectId, { prompt: fullPrompt, agentType });
       onExecuteThread(thread.id, mode, model, agentType);
     },
@@ -336,7 +337,7 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
         {/* Input */}
         <PromptInput
           ref={promptRef}
-          onSend={(prompt, files, mode, model, snippets, agentType) => onSendPrompt(activeThreadId!, prompt, files, mode, model, snippets, agentType)}
+          onSend={(prompt, files, mode, model, snippets, agentType, images) => onSendPrompt(activeThreadId!, prompt, files, mode, model, snippets, agentType, images)}
           disabled={isRunning}
           requestListing={requestListing}
         />
@@ -398,7 +399,7 @@ function WelcomePrompt({
   requestListing,
 }: {
   hasThreads: boolean;
-  onSend: (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string) => void;
+  onSend: (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string, images?: ImageAttachment[]) => void;
   requestListing?: (path: string) => void;
 }) {
   const suggestions = [

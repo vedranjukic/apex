@@ -838,6 +838,17 @@ function ContentBlockView({ block, siblings, isLiveThinking }: { block: ContentB
     return <ToolUseBlock block={block} resultContent={resultBlock?.content} />;
   }
 
+  if (block.type === 'image' && block.source) {
+    const src = `data:${block.source.media_type};base64,${block.source.data}`;
+    return (
+      <img
+        src={src}
+        alt="Attached image"
+        className="max-w-xs max-h-64 rounded-lg border border-border object-contain"
+      />
+    );
+  }
+
   if (block.type === 'tool_result') {
     return null;
   }

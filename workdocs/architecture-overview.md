@@ -13,7 +13,7 @@
 ## Data Model
 - **Project** → has a sandbox (provisioned async on creation). Each project stores a `provider` field (`daytona`, `docker`, or `apple-container`) that selects the sandbox backend. Optional `gitRepo` URL for cloning a repository. Stores `agentType` as the project-level default agent (claude_code, open_code, codex).
 - **Thread** (DB table: `tasks`) → belongs to a project, has messages. Title auto-generated from first prompt. Stores `claudeSessionId` to maintain a persistent Claude Code session across follow-up prompts. Optional `agentType` overrides the project default, allowing different threads within one project to use different agents.
-- **Message** → belongs to a thread. Roles: `user`, `assistant`, `system`. Content is JSON array of blocks (text, tool_use, tool_result).
+- **Message** → belongs to a thread. Roles: `user`, `assistant`, `system`. Content is JSON array of blocks (text, tool_use, tool_result, image). Image blocks carry a `source` field with base64-encoded data.
 
 ## Key Flows
 
@@ -36,8 +36,8 @@ Each thread maintains a long-lived Claude Code process. The first prompt spawns 
 8. Multiple threads can have concurrent Claude processes in the same sandbox (bridge tracks processes per threadId in a Map)
 
 ### Follow-up Prompts
-1. User sends another message → dashboard emits `send_prompt { threadId, prompt }`
-2. Gateway stores user message in DB, sends `start_claude` to bridge → bridge detects an existing process for that threadId and pipes the prompt to stdin as `{"type":"user","message":{"role":"user","content":"..."}}`
+1. User sends another message → dashboard emits `send_prompt { threadId, prompt, images? }`
+2. Gateway stores user message in DB (with image content blocks if present), sends `start_claude` to bridge with optional `images` array → bridge converts images to OpenCode `FilePartInput` format (`{ type: "file", mime, url: "data:..." }`) and includes them in the `prompt_async` parts alongside the text
 
 ### AskUserQuestion (waiting_for_input)
 Claude's native `AskUserQuestion` tool is **disallowed** in all modes (both TS and Go bridges). Instead, all agents use the MCP `ask_user` tool (`mcp__terminal-server__ask_user`) which routes through the bridge's `/internal/ask-user` endpoint:
@@ -91,7 +91,7 @@ Example: user asks *"start the dev server so I can watch it"* → Claude calls `
 - Server: NestJS `@WebSocketGateway` at namespace `/ws/agent`, path `/ws/socket.io`
 - Client: `socket.io-client` connects with same path
 - Vite proxy: `/ws` → `http://localhost:6000` with `ws: true`
-- Thread events: `subscribe_project`, `execute_thread`, `send_prompt`, `user_answer` (client→server); `agent_message`, `agent_status`, `agent_error` (server→client). `send_prompt` and `execute_thread` accept optional `agentType` to override the project default per-thread. `agent_status` values: `running`, `waiting_for_input`, `retrying`, `completed`, `error`. `agent_message` carries `system`/`init` (MCP servers, tools, model), `assistant` (content blocks + usage), and `result` (cost, tokens, duration, turns) subtypes.
+- Thread events: `subscribe_project`, `execute_thread`, `send_prompt`, `user_answer` (client→server); `agent_message`, `agent_status`, `agent_error` (server→client). `send_prompt` and `execute_thread` accept optional `agentType` to override the project default per-thread. `send_prompt` also accepts an optional `images` array (base64-encoded `{ type, media_type, data }` objects) for multimodal prompts. `agent_status` values: `running`, `waiting_for_input`, `retrying`, `completed`, `error`. `agent_message` carries `system`/`init` (MCP servers, tools, model), `assistant` (content blocks + usage), and `result` (cost, tokens, duration, turns) subtypes.
 - Terminal events: `terminal_create`, `terminal_input`, `terminal_resize`, `terminal_close`, `terminal_list` (client→server); `terminal_created`, `terminal_output`, `terminal_exit`, `terminal_error`, `terminal_list` (server→client)
 - File events: `file_list`, `file_create`, `file_rename`, `file_delete`, `file_move`, `file_read`, `file_write` (client→server); `file_list_result`, `file_op_result`, `file_changed`, `file_read_result`, `file_write_result` (server→client)
 - Project info events: `project_info` (client→server + server→client) – returns `{ gitBranch, projectDir }` for the status bar and file tree root

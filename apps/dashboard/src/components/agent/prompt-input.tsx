@@ -6,18 +6,25 @@ import {
   forwardRef,
   useCallback,
 } from 'react';
-import { Send } from 'lucide-react';
+import { Send, ImagePlus, X } from 'lucide-react';
 import { FilePicker } from './file-picker';
 import { AgentDropdown, ModelDropdown } from './mode-model-dropdowns';
 import { useAgentSettingsStore } from '../../stores/agent-settings-store';
 import { useEditorStore, type CodeSelection } from '../../stores/editor-store';
+import type { ImageSource } from '../../api/client';
+
+export interface ImageAttachment {
+  id: string;
+  dataUrl: string;
+  source: ImageSource;
+}
 
 export interface PromptInputHandle {
   fill: (text: string) => void;
 }
 
 interface Props {
-  onSend: (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string) => void;
+  onSend: (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string, images?: ImageAttachment[]) => void;
   disabled?: boolean;
   placeholder?: string;
   autoFocus?: boolean;
@@ -109,9 +116,11 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
     ref,
   ) {
     const editorRef = useRef<HTMLDivElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
     const [showPicker, setShowPicker] = useState(false);
     const [pickerAnchor, setPickerAnchor] = useState<{ top: number; left: number } | null>(null);
     const [empty, setEmpty] = useState(true);
+    const [images, setImages] = useState<ImageAttachment[]>([]);
     const triggerRangeRef = useRef<Range | null>(null);
 
     useImperativeHandle(ref, () => ({
@@ -144,13 +153,37 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
       }
     }, []);
 
+    const addImageFiles = useCallback((fileList: File[]) => {
+      const ACCEPTED = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+      const MAX_SIZE = 20 * 1024 * 1024; // 20 MB
+      for (const file of fileList) {
+        if (!ACCEPTED.includes(file.type)) continue;
+        if (file.size > MAX_SIZE) continue;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result as string;
+          const base64 = dataUrl.split(',')[1];
+          const attachment: ImageAttachment = {
+            id: crypto.randomUUID(),
+            dataUrl,
+            source: { type: 'base64', media_type: file.type, data: base64 },
+          };
+          setImages((prev) => [...prev, attachment]);
+        };
+        reader.readAsDataURL(file);
+      }
+    }, []);
+
+    const removeImage = useCallback((id: string) => {
+      setImages((prev) => prev.filter((img) => img.id !== id));
+    }, []);
+
     const handleSubmit = useCallback(() => {
       const el = editorRef.current;
       if (!el || disabled) return;
       const { text, files, snippets } = extractContent(el);
-      if (!text.trim()) return;
+      if (!text.trim() && images.length === 0) return;
       const { mode, model, agentType } = useAgentSettingsStore.getState();
-      console.log('[prompt] sending with', { mode, model, agentType });
       onSend(
         text.trim(),
         files.length > 0 ? files : undefined,
@@ -158,10 +191,12 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
         model,
         snippets.length > 0 ? snippets : undefined,
         agentType,
+        images.length > 0 ? images : undefined,
       );
       el.innerHTML = '';
       setEmpty(true);
-    }, [onSend, disabled]);
+      setImages([]);
+    }, [onSend, disabled, images]);
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -238,6 +273,18 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
 
     const handlePaste = useCallback(
       (e: React.ClipboardEvent) => {
+        const clipItems = Array.from(e.clipboardData.items);
+        const imageFiles = clipItems
+          .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+          .map((item) => item.getAsFile())
+          .filter((f): f is File => f !== null);
+
+        if (imageFiles.length > 0) {
+          e.preventDefault();
+          addImageFiles(imageFiles);
+          return;
+        }
+
         e.preventDefault();
 
         const snippetJson = e.clipboardData.getData(SNIPPET_MIME);
@@ -265,7 +312,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
         const text = e.clipboardData.getData('text/plain');
         document.execCommand('insertText', false, text);
       },
-      [updateEmpty],
+      [updateEmpty, addImageFiles],
     );
 
     const handleFileSelect = useCallback(
@@ -334,10 +381,33 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
       [updateEmpty],
     );
 
+    const hasContent = !empty || images.length > 0;
+
     return (
       <div className="border-t border-border bg-sidebar p-4 relative">
         <div className="max-w-3xl mx-auto">
           <div className="relative">
+            {/* Image preview strip */}
+            {images.length > 0 && (
+              <div className="flex gap-2 px-4 py-2 bg-surface-thread border border-b-0 border-border rounded-t-xl overflow-x-auto">
+                {images.map((img) => (
+                  <div key={img.id} className="relative shrink-0 group">
+                    <img
+                      src={img.dataUrl}
+                      alt="Attachment"
+                      className="h-16 w-16 rounded-lg object-cover border border-border"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeImage(img.id)}
+                      className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-surface-secondary border border-border flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500/20 hover:border-red-500/40"
+                    >
+                      <X className="w-3 h-3 text-text-muted" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div
               ref={editorRef}
               contentEditable={!disabled}
@@ -348,7 +418,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
               aria-placeholder={placeholder}
               aria-disabled={disabled}
               data-placeholder={placeholder}
-              className="prompt-editor px-4 py-3 bg-surface-thread border border-border rounded-t-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50 max-h-32 overflow-y-auto whitespace-pre-wrap break-words"
+              className={`prompt-editor px-4 py-3 bg-surface-thread border border-border text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50 max-h-32 overflow-y-auto whitespace-pre-wrap break-words ${images.length > 0 ? '' : 'rounded-t-xl'}`}
               style={{ minHeight: '44px' }}
               suppressContentEditableWarning
               onClick={() => {
@@ -374,10 +444,30 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
             {!hideAgentDropdown && <AgentDropdown />}
             <ModelDropdown />
             <div className="flex-1" />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files) addImageFiles(Array.from(e.target.files));
+                e.target.value = '';
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={disabled}
+              title="Attach image"
+              className="p-1.5 rounded-lg text-text-muted hover:text-text-secondary hover:bg-surface-secondary transition-colors disabled:opacity-50"
+            >
+              <ImagePlus className="w-3.5 h-3.5" />
+            </button>
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={disabled || empty}
+              disabled={disabled || !hasContent}
               className="p-1.5 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50"
             >
               <Send className="w-3.5 h-3.5" />

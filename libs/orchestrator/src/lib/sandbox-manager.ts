@@ -565,9 +565,9 @@ export class SandboxManager extends EventEmitter {
     model?: string,
     agent?: string,
     forceRestart?: boolean,
+    images?: { type: 'base64'; media_type: string; data: string }[],
   ): Promise<void> {
     const session = await this.ensureConnected(sandboxId);
-    // Map legacy mode values to OpenCode agent names
     const effectiveAgent = agent || (mode === 'plan' ? 'plan' : 'build');
     session.ws!.send(
       JSON.stringify({
@@ -578,6 +578,7 @@ export class SandboxManager extends EventEmitter {
         agent: effectiveAgent,
         model: model || undefined,
         forceRestart: forceRestart || undefined,
+        images: images && images.length > 0 ? images : undefined,
       }),
     );
     session.status = "running";
