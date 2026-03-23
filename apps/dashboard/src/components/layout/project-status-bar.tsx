@@ -33,9 +33,12 @@ interface Props {
   project: Project;
   info: ProjectInfo;
   gitActions: GitActions;
+  onStop?: () => void;
+  onStart?: () => void;
+  onRestart?: () => void;
 }
 
-export function ProjectStatusBar({ project, info, gitActions }: Props) {
+export function ProjectStatusBar({ project, info, gitActions, onStop, onStart, onRestart }: Props) {
   const [vscLoading, setVscLoading] = useState(false);
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
   const storeBranch = useGitStore((s) => s.branch);
@@ -153,8 +156,15 @@ export function ProjectStatusBar({ project, info, gitActions }: Props) {
           <span>{portCount}</span>
         </button>
 
-        {/* Sandbox status */}
-        <SandboxStatus status={project.status} sandboxId={project.sandboxId} statusError={project.statusError} />
+        {/* Sandbox status (clickable — opens action menu) */}
+        <SandboxStatus
+          status={project.status}
+          sandboxId={project.sandboxId}
+          statusError={project.statusError}
+          onStop={onStop}
+          onStart={onStart}
+          onRestart={onRestart}
+        />
 
         {/* IDE button (Cursor / VS Code native or code-server fallback) */}
         <button

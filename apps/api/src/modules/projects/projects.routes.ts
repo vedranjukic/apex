@@ -17,6 +17,34 @@ export const projectsRoutes = new Elysia({ prefix: '/api/projects' })
     await projectsService.remove(params.id);
     return { ok: true };
   })
+  .post('/:id/stop', async ({ params, set }) => {
+    try {
+      return await projectsService.stopProject(params.id);
+    } catch (err) {
+      set.status = 500;
+      return { error: `Failed to stop sandbox: ${err}` };
+    }
+  })
+  .post('/:id/start', async ({ params, set }) => {
+    try {
+      const project = await projectsService.findById(params.id);
+      projectsService.startOrProvisionSandbox(params.id).catch((err) => {
+        console.error(`[projects] Background start failed for ${params.id}:`, err);
+      });
+      return project;
+    } catch (err) {
+      set.status = 500;
+      return { error: `Failed to start sandbox: ${err}` };
+    }
+  })
+  .post('/:id/restart', async ({ params, set }) => {
+    try {
+      return await projectsService.restartProject(params.id);
+    } catch (err) {
+      set.status = 500;
+      return { error: `Failed to restart sandbox: ${err}` };
+    }
+  })
   .post('/:id/fork', async ({ params, body }) => {
     const { branchName } = body as { branchName: string };
     return projectsService.forkProject(params.id, branchName);

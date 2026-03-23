@@ -64,6 +64,12 @@ export const projectsApi = {
       remotePath: string;
       expiresAt: string;
     }>(`/projects/${id}/ssh-access`, { method: 'POST' }),
+  stop: (id: string) =>
+    request<Project>(`/projects/${id}/stop`, { method: 'POST' }),
+  start: (id: string) =>
+    request<Project>(`/projects/${id}/start`, { method: 'POST' }),
+  restart: (id: string) =>
+    request<Project>(`/projects/${id}/restart`, { method: 'POST' }),
   fork: (id: string, branchName: string) =>
     request<Project>(`/projects/${id}/fork`, {
       method: 'POST',

@@ -6,13 +6,36 @@ import { useTerminalStore, type TerminalInfo } from '../stores/terminal-store';
 class XtermRegistry {
   private map = new Map<string, Terminal>();
   private buffers = new Map<string, Array<{ type: string; data: any }>>();
+  private pendingScrollback = new Map<string, { data: string; cols: number; rows: number }>();
 
   get(id: string): Terminal | undefined { return this.map.get(id); }
   values(): IterableIterator<Terminal> { return this.map.values(); }
   entries(): IterableIterator<[string, Terminal]> { return this.map.entries(); }
 
+  /** Store scrollback with its original terminal dimensions for proper replay. */
+  setScrollback(id: string, data: string, cols: number, rows: number) {
+    this.pendingScrollback.set(id, { data, cols, rows });
+  }
+
   register(id: string, xterm: Terminal) {
     this.map.set(id, xterm);
+
+    // Replay pending scrollback at the dimensions it was captured at,
+    // then resize back to the fitted dimensions.
+    const sb = this.pendingScrollback.get(id);
+    if (sb) {
+      const fittedCols = xterm.cols;
+      const fittedRows = xterm.rows;
+      xterm.resize(sb.cols, sb.rows);
+      xterm.write(sb.data);
+      if (fittedCols !== sb.cols || fittedRows !== sb.rows) {
+        xterm.resize(fittedCols, fittedRows);
+      }
+      this.pendingScrollback.delete(id);
+    }
+
+    // Then replay any other buffered events (real-time output that
+    // arrived between terminal_list and xterm mount).
     const buf = this.buffers.get(id);
     if (buf) {
       for (const evt of buf) {
@@ -25,12 +48,12 @@ class XtermRegistry {
   }
 
   unregister(id: string) { this.map.delete(id); }
-  destroy(id: string) { this.map.delete(id); this.buffers.delete(id); }
+  destroy(id: string) { this.map.delete(id); this.buffers.delete(id); this.pendingScrollback.delete(id); }
   clearBuffer(id: string) { this.buffers.delete(id); }
 
   clear() {
     for (const xterm of this.map.values()) xterm.dispose();
-    this.map.clear(); this.buffers.clear();
+    this.map.clear(); this.buffers.clear(); this.pendingScrollback.clear();
   }
 
   writeOutput(id: string, data: string) {
@@ -111,6 +134,13 @@ export function useTerminalSocket(
     const onTerminalList = (data: any) => {
       if (isStale()) return;
       const terminals = data.payload.terminals || [];
+      const newIds = new Set(terminals.map((t: any) => t.id));
+
+      // Dispose xterm instances for terminals no longer in the bridge
+      for (const [id] of reg.entries()) {
+        if (!newIds.has(id)) reg.destroy(id);
+      }
+
       const infos: TerminalInfo[] = terminals.map((t: any) => ({ id: t.id, name: t.name, status: 'alive' as const }));
       setTerminals(infos, true);
       for (const t of terminals) {
@@ -118,9 +148,19 @@ export function useTerminalSocket(
         if (t.scrollback) {
           const xterm = reg.get(t.id);
           if (xterm) {
+            // xterm already mounted — write scrollback at original dimensions
+            const fittedCols = xterm.cols;
+            const fittedRows = xterm.rows;
             xterm.reset();
+            xterm.resize(t.cols || 80, t.rows || 24);
+            xterm.write(t.scrollback);
+            if (fittedCols !== (t.cols || 80) || fittedRows !== (t.rows || 24)) {
+              xterm.resize(fittedCols, fittedRows);
+            }
+          } else {
+            // xterm not yet mounted — store for replay at correct dimensions
+            reg.setScrollback(t.id, t.scrollback, t.cols || 80, t.rows || 24);
           }
-          reg.writeOutput(t.id, t.scrollback);
         }
       }
     };

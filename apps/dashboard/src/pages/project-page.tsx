@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Loader2, ArrowLeft, AlertCircle, RefreshCw } from 'lucide-react';
+import { Loader2, ArrowLeft, AlertCircle, RefreshCw, Play } from 'lucide-react';
 import { projectsApi, type Project } from '../api/client';
 import { AppShell } from '../components/layout/app-shell';
 import { LeftSidebar } from '../components/layout/left-sidebar';
@@ -120,7 +120,7 @@ export function ProjectPage() {
 
 
 
-  const shouldPoll = project?.status === 'creating' || project?.status === 'pulling_image' || project?.status === 'stopped' || project?.status === 'starting';
+  const shouldPoll = project?.status === 'creating' || project?.status === 'pulling_image' || project?.status === 'stopped' || project?.status === 'starting' || project?.status === 'stopping';
 
   useEffect(() => {
     if (!projectId || !project || !shouldPoll) {
@@ -161,6 +161,30 @@ export function ProjectPage() {
     },
     [executeThread],
   );
+
+  const handleStopSandbox = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const updated = await projectsApi.stop(projectId);
+      setProject(updated);
+    } catch (err) { console.error('Failed to stop sandbox:', err); }
+  }, [projectId]);
+
+  const handleStartSandbox = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const updated = await projectsApi.start(projectId);
+      setProject(updated);
+    } catch (err) { console.error('Failed to start sandbox:', err); }
+  }, [projectId]);
+
+  const handleRestartSandbox = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const updated = await projectsApi.restart(projectId);
+      setProject(updated);
+    } catch (err) { console.error('Failed to restart sandbox:', err); }
+  }, [projectId]);
 
   const handleAnalyzeGitignore = useCallback(
     async (prompt: string) => {
@@ -216,12 +240,15 @@ export function ProjectPage() {
           project={project}
           info={projectInfo}
           gitActions={gitActions}
+          onStop={handleStopSandbox}
+          onStart={handleStartSandbox}
+          onRestart={handleRestartSandbox}
         />
       }
     >
       {/* Loading overlay while sandbox provisions, starts, or layout restores */}
-      {(project.status === 'creating' || project.status === 'pulling_image' || project.status === 'starting' || project.status === 'stopped' || project.status === 'error' || !layoutReady) && (
-        <SandboxOverlay project={project} provisionMsg={provisionMsg} />
+      {(project.status === 'creating' || project.status === 'pulling_image' || project.status === 'starting' || project.status === 'stopping' || project.status === 'stopped' || project.status === 'error' || !layoutReady) && (
+        <SandboxOverlay project={project} provisionMsg={provisionMsg} onStart={handleStartSandbox} onRestart={handleRestartSandbox} />
       )}
       <CentralPanel
         projectId={projectId}
@@ -305,11 +332,12 @@ function BackToProjectsButton() {
   );
 }
 
-function SandboxOverlay({ project, provisionMsg }: { project: Project; provisionMsg: string | null }) {
+function SandboxOverlay({ project, provisionMsg, onStart, onRestart }: { project: Project; provisionMsg: string | null; onStart?: () => void; onRestart?: () => void }) {
   const isError = project.status === 'error';
   const isStopped = project.status === 'stopped';
   const sandboxMissing = !project.sandboxId && (isStopped || isError);
 
+  const isStopping = project.status === 'stopping';
   const statusMessage = provisionMsg
     ? provisionMsg
     : project.status === 'pulling_image'
@@ -318,13 +346,15 @@ function SandboxOverlay({ project, provisionMsg }: { project: Project; provision
         ? 'Provisioning sandbox environment…'
         : project.status === 'starting'
           ? 'Starting sandbox…'
-          : isStopped && !project.sandboxId
-            ? 'No sandbox provisioned. Attempting to create one…'
-            : isStopped
-              ? 'Sandbox is stopped. Starting…'
-              : isError
-                ? project.statusError || 'Unknown sandbox error'
-                : 'Restoring workspace…';
+          : isStopping
+            ? 'Stopping sandbox…'
+            : isStopped && !project.sandboxId
+              ? 'No sandbox provisioned.'
+              : isStopped
+                ? 'Sandbox is stopped.'
+                : isError
+                  ? project.statusError || 'Unknown sandbox error'
+                  : 'Restoring workspace…';
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.85)' }}>
@@ -346,13 +376,22 @@ function SandboxOverlay({ project, provisionMsg }: { project: Project; provision
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
           <BackToProjectsButton />
-          {isError && (
+          {isStopped && onStart && (
             <button
-              onClick={() => window.location.reload()}
+              onClick={onStart}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-green-600 text-white hover:bg-green-500 transition-colors"
+            >
+              <Play className="w-3 h-3" />
+              Start
+            </button>
+          )}
+          {isError && onRestart && (
+            <button
+              onClick={onRestart}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors"
             >
               <RefreshCw className="w-3 h-3" />
-              Retry
+              Restart
             </button>
           )}
         </div>

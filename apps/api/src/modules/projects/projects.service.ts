@@ -210,6 +210,58 @@ class ProjectsService {
     }
   }
 
+  async stopProject(projectId: string): Promise<Project> {
+    const project = await this.findById(projectId);
+    if (!project.sandboxId) throw new Error('No sandbox to stop');
+    const manager = this.getManagerForProject(project);
+    if (!manager) throw new Error('Sandbox manager not available');
+
+    await db.update(projects).set({ status: 'stopping' }).where(eq(projects.id, projectId));
+    const intermediate = await this.findById(projectId);
+    projectsWsBroadcast('project_updated', intermediate);
+
+    this.stopProjectAsync(projectId, project.sandboxId, manager).catch((err) => {
+      console.error(`[projects] Background stop failed for ${projectId}:`, err);
+    });
+
+    return intermediate;
+  }
+
+  private async stopProjectAsync(projectId: string, sandboxId: string, manager: SandboxManager): Promise<void> {
+    try {
+      await manager.stopSandbox(sandboxId);
+      await db.update(projects).set({ status: 'stopped', statusError: null }).where(eq(projects.id, projectId));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await db.update(projects).set({ status: 'error', statusError: message }).where(eq(projects.id, projectId));
+    }
+    projectsWsBroadcast('project_updated', await this.findById(projectId));
+  }
+
+  async restartProject(projectId: string): Promise<Project> {
+    const project = await this.findById(projectId);
+    if (!project.sandboxId) throw new Error('No sandbox to restart');
+    const manager = this.getManagerForProject(project);
+    if (!manager) throw new Error('Sandbox manager not available');
+
+    await db.update(projects).set({ status: 'stopping' }).where(eq(projects.id, projectId));
+    const intermediate = await this.findById(projectId);
+    projectsWsBroadcast('project_updated', intermediate);
+
+    this.restartProjectAsync(projectId, project.sandboxId, manager).catch((err) => {
+      console.error(`[projects] Background restart failed for ${projectId}:`, err);
+    });
+
+    return intermediate;
+  }
+
+  private async restartProjectAsync(projectId: string, sandboxId: string, manager: SandboxManager): Promise<void> {
+    try { await manager.stopSandbox(sandboxId); } catch { /* may already be stopped */ }
+    await db.update(projects).set({ status: 'stopped', statusError: null }).where(eq(projects.id, projectId));
+    projectsWsBroadcast('project_updated', await this.findById(projectId));
+    await this.startOrProvisionSandbox(projectId);
+  }
+
   async findAllByUser(userId: string): Promise<Project[]> {
     return db.query.projects.findMany({
       where: and(eq(projects.userId, userId), isNull(projects.deletedAt)),

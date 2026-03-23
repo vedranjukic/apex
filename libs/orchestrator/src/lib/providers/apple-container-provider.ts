@@ -81,13 +81,13 @@ function extractIp(networks?: ContainerNetwork[]): string {
 /** Shell out to the `container` CLI and collect output. */
 async function runContainerCmd(
   args: string[],
-  opts: { maxBuffer?: number } = {},
+  opts: { maxBuffer?: number; timeout?: number } = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
     execFileCb(
       CONTAINER_BIN,
       args,
-      { maxBuffer: opts.maxBuffer ?? 50 * 1024 * 1024 },
+      { maxBuffer: opts.maxBuffer ?? 50 * 1024 * 1024, timeout: opts.timeout ?? 60_000 },
       (error, stdout, stderr) => {
         if (error && typeof error.code === "string") {
           reject(
@@ -159,6 +159,22 @@ class AppleContainerInstance implements SandboxInstance {
     await runContainerCmd(["start", this.id]);
     this.state = "started";
     await this.refreshIp();
+    await this.waitForExec();
+  }
+
+  /** Wait until `container exec` works (container init fully booted). */
+  private async waitForExec(maxAttempts = 20, intervalMs = 1000): Promise<void> {
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        const { exitCode } = await runContainerCmd(
+          ["exec", "--user", CONTAINER_USER, this.id, "true"],
+          { timeout: 5_000 },
+        );
+        if (exitCode === 0) return;
+      } catch { /* not ready yet */ }
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    console.warn(`[apple-container] Container ${this.id} exec not ready after ${maxAttempts * intervalMs / 1000}s, proceeding anyway`);
   }
 
   async stop(): Promise<void> {

@@ -1,11 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
-import { Loader2, AlertCircle } from 'lucide-react';
+import { Loader2, AlertCircle, Play, Square, RotateCw } from 'lucide-react';
 import { cn } from '../../lib/cn';
 
 interface Props {
   status: string;
   sandboxId: string | null;
   statusError?: string | null;
+  onStop?: () => void;
+  onStart?: () => void;
+  onRestart?: () => void;
 }
 
 const statusConfig: Record<
@@ -30,6 +33,12 @@ const statusConfig: Record<
     dotColor: 'bg-yellow-400',
     animate: true,
   },
+  stopping: {
+    label: 'Stopping…',
+    color: 'text-yellow-500',
+    dotColor: 'bg-yellow-400',
+    animate: true,
+  },
   running: {
     label: 'Running',
     color: 'text-emerald-500',
@@ -47,40 +56,48 @@ const statusConfig: Record<
   },
 };
 
-export function SandboxStatus({ status, sandboxId, statusError }: Props) {
+export function SandboxStatus({ status, sandboxId, statusError, onStop, onStart, onRestart }: Props) {
   const config = statusConfig[status] || statusConfig.stopped;
-  const [showPopover, setShowPopover] = useState(false);
-  const popoverRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!showPopover) return;
-    const handleClick = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        setShowPopover(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [showPopover]);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const hasError = status === 'error' && !!statusError;
+  const isRunning = status === 'running';
+  const isStopped = status === 'stopped' || status === 'error';
+  const hasActions = isRunning || isStopped;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [menuOpen]);
+
+  const itemClass =
+    'w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-sidebar-hover text-text-secondary hover:text-text-primary';
 
   return (
-    <div className="relative" ref={popoverRef}>
+    <div className="relative" ref={containerRef}>
       <button
         type="button"
         className={cn(
-          'flex items-center gap-1.5 text-xs',
-          hasError && 'cursor-pointer hover:underline',
+          'flex items-center gap-1.5 text-xs transition-colors',
+          hasActions && 'hover:text-text-primary cursor-pointer',
+          menuOpen && 'text-text-primary',
         )}
-        title={
-          hasError
-            ? 'Click to view error details'
-            : sandboxId
-              ? `Sandbox: ${sandboxId}`
-              : 'No sandbox yet'
-        }
-        onClick={() => hasError && setShowPopover((v) => !v)}
+        title={sandboxId ? `Sandbox: ${sandboxId}` : 'No sandbox yet'}
+        onClick={() => hasActions && setMenuOpen((v) => !v)}
       >
         {config.animate ? (
           <Loader2 className={cn('w-3 h-3 animate-spin', config.color)} />
@@ -106,17 +123,61 @@ export function SandboxStatus({ status, sandboxId, statusError }: Props) {
         {hasError && <AlertCircle className="w-3 h-3 text-red-400" />}
       </button>
 
-      {showPopover && hasError && (
-        <div className="absolute bottom-full right-0 mb-2 w-80 max-w-[90vw] rounded-lg border border-red-500/30 bg-surface shadow-lg z-50">
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-red-500/20">
-            <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-            <span className="text-xs font-medium text-red-400">Sandbox Error</span>
-          </div>
-          <div className="px-3 py-2">
-            <p className="text-xs text-text-secondary break-words whitespace-pre-wrap leading-relaxed">
-              {statusError}
-            </p>
-          </div>
+      {menuOpen && (
+        <div className="absolute bottom-full right-0 mb-1 w-52 rounded-lg border border-border bg-sidebar shadow-xl z-50 py-1">
+          {/* Error details */}
+          {hasError && (
+            <>
+              <div className="px-3 py-2">
+                <p className="text-[11px] text-red-400 break-words whitespace-pre-wrap leading-relaxed line-clamp-4">
+                  {statusError}
+                </p>
+              </div>
+              <div className="border-t border-border my-1" />
+            </>
+          )}
+
+          {/* Actions */}
+          {isStopped && onStart && (
+            <button
+              type="button"
+              className={itemClass}
+              onClick={() => { setMenuOpen(false); onStart(); }}
+            >
+              <Play className="w-3.5 h-3.5 text-green-400" />
+              Start sandbox
+            </button>
+          )}
+          {isStopped && onRestart && (
+            <button
+              type="button"
+              className={itemClass}
+              onClick={() => { setMenuOpen(false); onRestart(); }}
+            >
+              <RotateCw className="w-3.5 h-3.5 text-yellow-400" />
+              Restart sandbox
+            </button>
+          )}
+          {isRunning && onRestart && (
+            <button
+              type="button"
+              className={itemClass}
+              onClick={() => { setMenuOpen(false); onRestart(); }}
+            >
+              <RotateCw className="w-3.5 h-3.5 text-yellow-400" />
+              Restart sandbox
+            </button>
+          )}
+          {isRunning && onStop && (
+            <button
+              type="button"
+              className={itemClass}
+              onClick={() => { setMenuOpen(false); onStop(); }}
+            >
+              <Square className="w-3.5 h-3.5 text-red-400" />
+              Stop sandbox
+            </button>
+          )}
         </div>
       )}
     </div>

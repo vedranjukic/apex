@@ -417,8 +417,9 @@ export class SandboxManager extends EventEmitter {
         `[reconnect:${sandboxId.slice(0, 8)}] ${msg} (+${Date.now() - t0}ms)`,
       );
 
-    // Hard timeout so doReconnect never blocks forever
-    const RECONNECT_TIMEOUT = 30_000;
+    // Hard timeout so doReconnect never blocks forever.
+    // 90s allows for container restart + bridge upload + WS connect.
+    const RECONNECT_TIMEOUT = 90_000;
 
     const work = async () => {
       log("start");

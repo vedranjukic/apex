@@ -27,12 +27,14 @@ export function TerminalTab({
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const registeredRef = useRef(false);
   const themeId = useThemeStore((s) => s.themeId);
   const panelOpen = useTerminalStore((s) => s.panelOpen);
 
   // Create xterm instance on mount
   useEffect(() => {
     if (!containerRef.current) return;
+    registeredRef.current = false;
     const currentTheme = themes[useThemeStore.getState().themeId];
 
     const xterm = new Terminal({
@@ -47,14 +49,6 @@ export function TerminalTab({
     xterm.loadAddon(fitAddon);
     xterm.open(containerRef.current);
 
-    requestAnimationFrame(() => {
-      try {
-        fitAddon.fit();
-      } catch {
-        // ignore if not visible yet
-      }
-    });
-
     xterm.onData((data) => {
       onInput(terminalId, data);
     });
@@ -62,9 +56,9 @@ export function TerminalTab({
     xtermRef.current = xterm;
     fitAddonRef.current = fitAddon;
     lastSizeRef.current = null;
-    registerXterm(terminalId, xterm);
 
     return () => {
+      registeredRef.current = false;
       unregisterXterm(terminalId);
       xterm.dispose();
       xtermRef.current = null;
@@ -88,8 +82,24 @@ export function TerminalTab({
     }
   }, [terminalId, onResize]);
 
+  // Register xterm (replay buffered scrollback) only when the tab is
+  // visible so fit() returns correct dimensions. Hidden tabs (display:none)
+  // would produce wrong dimensions and garbled scrollback.
   useEffect(() => {
-    if (isActive && panelOpen) {
+    if (isActive && panelOpen && xtermRef.current && !registeredRef.current) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!xtermRef.current || registeredRef.current) return;
+          handleFit();
+          registeredRef.current = true;
+          registerXterm(terminalId, xtermRef.current);
+        });
+      });
+    }
+  }, [isActive, panelOpen, terminalId, registerXterm, handleFit]);
+
+  useEffect(() => {
+    if (isActive && panelOpen && registeredRef.current) {
       requestAnimationFrame(() => {
         handleFit();
         xtermRef.current?.refresh(0, xtermRef.current.rows - 1);

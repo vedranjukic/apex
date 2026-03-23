@@ -122,11 +122,19 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const desiredActiveId = pending?.activeTerminalId ?? current.activeTerminalId;
     const desiredPanelOpen = pending?.panelOpen ?? current.panelOpen;
 
-    const bridgeIds = new Set(list.map((t) => t.id));
-    const optimistic = current.terminals.filter(
-      (t) => !bridgeIds.has(t.id),
-    );
-    const merged = [...list, ...optimistic];
+    // When the bridge sends an authoritative list, drop stale terminals.
+    // Only keep optimistic (locally-created, not-yet-confirmed) terminals
+    // when the list is NOT from the bridge (e.g. timeout fallback).
+    let merged: TerminalInfo[];
+    if (fromBridge) {
+      merged = list;
+    } else {
+      const bridgeIds = new Set(list.map((t) => t.id));
+      const optimistic = current.terminals.filter(
+        (t) => !bridgeIds.has(t.id),
+      );
+      merged = [...list, ...optimistic];
+    }
 
     let maxNum = current.nextTerminalNumber;
     for (const t of merged) {

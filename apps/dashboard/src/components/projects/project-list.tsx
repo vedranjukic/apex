@@ -3,18 +3,20 @@ import { useNavigate } from 'react-router-dom';
 import {
   Plus, FolderOpen, Trash2, ExternalLink, Loader2, CheckCircle2,
   CircleHelp, CirclePause, XCircle, Circle, GitBranch, ChevronDown, ChevronRight, Settings, Shield,
+  Play, Square, RotateCw,
 } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { useProjectsStore } from '../../stores/projects-store';
 import { useProjectsSocket } from '../../hooks/use-projects-socket';
 import { CreateProjectDialog } from './create-project-dialog';
-import { settingsApi } from '../../api/client';
+import { settingsApi, projectsApi } from '../../api/client';
 import type { Project, Thread } from '../../api/client';
 
 const STATUS_LABELS: Record<string, string> = {
   creating: 'creating',
   pulling_image: 'pulling image',
   starting: 'starting',
+  stopping: 'stopping',
   running: 'running',
   stopped: 'stopped',
   error: 'error',
@@ -47,6 +49,80 @@ function timeAgo(dateStr: string): string {
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
   return `${days}d ago`;
+}
+
+function SandboxControls({ project, className }: { project: Project; className?: string }) {
+  const [loading, setLoading] = useState(false);
+  const { fetchProjects } = useProjectsStore();
+  const iconSize = className ?? 'w-4 h-4';
+
+  const isRunning = project.status === 'running';
+  const isStopped = project.status === 'stopped' || project.status === 'error';
+  const isTransitioning = project.status === 'starting' || project.status === 'stopping' || project.status === 'creating' || project.status === 'pulling_image';
+
+  const handleStop = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setLoading(true);
+    try { await projectsApi.stop(project.id); } catch { /* ignore */ }
+    finally { setLoading(false); fetchProjects(); }
+  };
+
+  const handleStart = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setLoading(true);
+    try { await projectsApi.start(project.id); } catch { /* ignore */ }
+    finally { setLoading(false); fetchProjects(); }
+  };
+
+  const handleRestart = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setLoading(true);
+    try { await projectsApi.restart(project.id); } catch { /* ignore */ }
+    finally { setLoading(false); fetchProjects(); }
+  };
+
+  if (loading || isTransitioning) {
+    return (
+      <span className="p-1.5" title={loading ? 'Working…' : project.status}>
+        <Loader2 className={cn(iconSize, 'animate-spin text-text-muted')} />
+      </span>
+    );
+  }
+
+  if (isStopped) {
+    return (
+      <button
+        onClick={handleStart}
+        className="p-1.5 rounded-lg hover:bg-green-400/10 text-text-secondary hover:text-green-400 transition-colors"
+        title="Start sandbox"
+      >
+        <Play className={iconSize} />
+      </button>
+    );
+  }
+
+  if (isRunning) {
+    return (
+      <div className="flex items-center">
+        <button
+          onClick={handleRestart}
+          className="p-1.5 rounded-lg hover:bg-surface-secondary text-text-secondary hover:text-yellow-400 transition-colors"
+          title="Restart sandbox"
+        >
+          <RotateCw className={iconSize} />
+        </button>
+        <button
+          onClick={handleStop}
+          className="p-1.5 rounded-lg hover:bg-red-400/10 text-text-secondary hover:text-red-400 transition-colors"
+          title="Stop sandbox"
+        >
+          <Square className={iconSize} />
+        </button>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 interface ForkGroup {
@@ -355,6 +431,7 @@ function ForkRow({
     creating: 'text-yellow-400 bg-yellow-400/10',
     pulling_image: 'text-yellow-400 bg-yellow-400/10',
     starting: 'text-yellow-400 bg-yellow-400/10',
+    stopping: 'text-yellow-400 bg-yellow-400/10',
     running: 'text-green-400 bg-green-400/10',
     stopped: 'text-gray-400 bg-gray-400/10',
     error: 'text-red-400 bg-red-400/10',
@@ -390,6 +467,7 @@ function ForkRow({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <SandboxControls project={project} className="w-3.5 h-3.5" />
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -455,6 +533,7 @@ function ProjectCard({
     creating: 'text-yellow-400 bg-yellow-400/10',
     pulling_image: 'text-yellow-400 bg-yellow-400/10',
     starting: 'text-yellow-400 bg-yellow-400/10',
+    stopping: 'text-yellow-400 bg-yellow-400/10',
     running: 'text-green-400 bg-green-400/10',
     stopped: 'text-gray-400 bg-gray-400/10',
     error: 'text-red-400 bg-red-400/10',
@@ -501,6 +580,7 @@ function ProjectCard({
           )}
         </div>
         <div className="flex items-center gap-1 ml-4">
+          <SandboxControls project={project} className="w-4 h-4" />
           <button
             onClick={(e) => {
               e.stopPropagation();
