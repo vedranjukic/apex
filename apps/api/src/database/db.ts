@@ -68,6 +68,19 @@ sqlite.exec(`
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS secrets (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    value TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    auth_type TEXT NOT NULL DEFAULT 'bearer',
+    description TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, project_id, name)
+  );
 `);
 
 // Migrations for columns added after initial schema

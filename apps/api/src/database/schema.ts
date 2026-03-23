@@ -73,6 +73,24 @@ export const messagesRelations = relations(messages, ({ one }) => ({
   task: one(tasks, { fields: [messages.taskId], references: [tasks.id] }),
 }));
 
+export const secrets = sqliteTable('secrets', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  projectId: text('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  value: text('value').notNull(),
+  domain: text('domain').notNull(),
+  authType: text('auth_type').notNull().default('bearer'),
+  description: text('description'),
+  createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()).$onUpdateFn(() => new Date().toISOString()),
+});
+
+export const secretsRelations = relations(secrets, ({ one }) => ({
+  user: one(users, { fields: [secrets.userId], references: [users.id] }),
+  project: one(projects, { fields: [secrets.projectId], references: [projects.id] }),
+}));
+
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),

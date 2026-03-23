@@ -187,6 +187,14 @@ const TOOLS = [
     },
   },
   {
+    name: "list_secrets",
+    description: "List API key secrets configured for this project. Returns names, domains, and auth types only — never actual secret values. Use this to know which API keys are available at runtime so you can write code that references them correctly. Secrets are automatically injected into outbound HTTPS requests by a transparent proxy.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
     name: "ask_user",
     description: "Ask the user a question and wait for their answer. Use this when you need clarification, want to present options, or need the user to make a decision before proceeding. The tool will BLOCK until the user responds, so only use it when you genuinely need input. Each question can have multiple options for the user to choose from.",
     inputSchema: {
@@ -366,6 +374,29 @@ async function handleRequest(request) {
         sendResponse(id, {
           content: [{ type: "text", text: instruction }],
         });
+
+      } else if (toolName === "list_secrets") {
+        const result = await bridgeGet("/internal/list-secrets");
+        if (result.error) {
+          sendResponse(id, {
+            content: [{ type: "text", text: "Error: " + result.error }],
+            isError: true,
+          });
+        } else {
+          const secrets = result.secrets || [];
+          if (secrets.length === 0) {
+            sendResponse(id, {
+              content: [{ type: "text", text: "No secrets configured for this project." }],
+            });
+          } else {
+            const lines = secrets.map(function(s) {
+              return "- " + s.name + " (" + s.domain + ", auth: " + s.authType + ")" + (s.description ? " — " + s.description : "");
+            });
+            sendResponse(id, {
+              content: [{ type: "text", text: "Configured secrets (values injected automatically via HTTPS proxy):\\n" + lines.join("\\n") }],
+            });
+          }
+        }
 
       } else if (toolName === "ask_user") {
         const result = await bridgeRequest("/internal/ask-user", {

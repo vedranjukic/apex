@@ -79,6 +79,39 @@ function resolveProxyBaseUrl(
   }
 }
 
+/**
+ * Resolve the MITM secrets proxy URL that containers will use.
+ * Same host-resolution logic as resolveProxyBaseUrl but for the secrets proxy port.
+ */
+function resolveSecretsProxyUrl(
+  proxyBaseUrl: string,
+  provider: string,
+  secretsProxyPort: number,
+): string | null {
+  try {
+    const u = new URL(proxyBaseUrl);
+    u.port = String(secretsProxyPort);
+    const isLocal = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+
+    if (provider === "daytona") {
+      return isLocal ? null : u.toString().replace(/\/$/, "");
+    }
+
+    if (isLocal) {
+      const hostIp = getHostLanIp();
+      if (hostIp) {
+        u.hostname = hostIp;
+        return u.toString().replace(/\/$/, "");
+      }
+    }
+    return u.toString().replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
+const CA_CERT_PATH = "/usr/local/share/ca-certificates/apex-proxy.crt";
+
 /** Find the first non-internal IPv4 address on a LAN interface. */
 function getHostLanIp(): string | null {
   const ifaces = os.networkInterfaces();
@@ -185,6 +218,11 @@ export class SandboxManager extends EventEmitter {
         config.proxyBaseUrl ||
         process.env["API_BASE_URL"] ||
         `http://localhost:${process.env["PORT"] || "3000"}`,
+      secretsProxyCaCert: config.secretsProxyCaCert || "",
+      secretsProxyPort:
+        config.secretsProxyPort ||
+        Number(process.env["SECRETS_PROXY_PORT"] || "6001"),
+      secretPlaceholders: config.secretPlaceholders || {},
     };
   }
 
@@ -473,21 +511,6 @@ export class SandboxManager extends EventEmitter {
     );
   }
 
-  /** Send a user's answer to an AskUserQuestion back to the running Claude process. */
-  async sendUserAnswer(
-    sandboxId: string,
-    chatId: string,
-    toolUseId: string,
-    answer: string,
-  ): Promise<void> {
-    const session = await this.ensureConnected(sandboxId);
-    session.ws!.send(JSON.stringify({
-      type: 'claude_user_answer',
-      chatId,
-      toolUseId,
-      answer,
-    }));
-  }
 
   /** Get session info for a sandbox */
   getSession(sandboxId: string): SandboxSession | undefined {
@@ -710,40 +733,6 @@ export class SandboxManager extends EventEmitter {
     host: string;
     port: number;
   } {
-    const userHostMatch = cmd.match(/(\S+)@(\S+)/);
-    const portMatch = cmd.match(/-p\s+(\d+)/);
-    if (!userHostMatch) {
-      throw new Error(`Unable to parse SSH command: ${cmd}`);
-    }
-    return {
-      user: userHostMatch[1],
-      host: userHostMatch[2],
-      port: portMatch ? parseInt(portMatch[1], 10) : 22,
-    };
-  }
-
-  /** Create an SSH access token for the sandbox (default 24 hours). */
-  async createSshAccess(
-    sandboxId: string,
-    expiresInMinutes = 1440,
-  ): Promise<{ sshUser: string; sshHost: string; sshPort: number; sandboxId: string; remotePath: string; expiresAt: string }> {
-    const sandbox = await this.ensureSandbox(sandboxId);
-    const access = await sandbox.createSshAccess(expiresInMinutes);
-    const { user, host, port } = this.parseSshCommand(access.sshCommand);
-    const remotePath = this.getProjectDir(sandboxId);
-    return {
-      sshUser: user,
-      sshHost: host,
-      sshPort: port,
-      sandboxId,
-      remotePath,
-      expiresAt: new Date(access.expiresAt).toISOString(),
-    };
-  }
-
-  /** Parse a Daytona sshCommand string into components.
-   *  Handles both `ssh USER@HOST -p PORT` and `ssh -p PORT USER@HOST`. */
-  private parseSshCommand(cmd: string): { user: string; host: string; port: number } {
     const userHostMatch = cmd.match(/(\S+)@(\S+)/);
     const portMatch = cmd.match(/-p\s+(\d+)/);
     if (!userHostMatch) {
@@ -1353,129 +1342,6 @@ export class SandboxManager extends EventEmitter {
     }
   }
 
-  private static readonly DEFAULT_EXCLUDE_DIRS = [
-    // Version control
-    '.git', '.svn', '.hg',
-    // JS / Node
-    'node_modules', '.npm', '.yarn', '.pnp', 'bower_components',
-    // Build output
-    'dist', 'build', 'out', '.output', '.next', '.nuxt', '.svelte-kit',
-    // Bundler / cache
-    '.cache', '.parcel-cache', '.turbo', '.vite',
-    // Python
-    '__pycache__', '.venv', 'venv', 'env', '.mypy_cache', '.pytest_cache', '.tox', '*.egg-info',
-    // Rust
-    'target',
-    // Go
-    'vendor',
-    // Java / JVM
-    '.gradle', '.m2', '.mvn',
-    // IDE / editor
-    '.idea', '.vscode', '.vs',
-    // OS
-    '.DS_Store',
-    // Misc
-    'coverage', '.nyc_output', '.terraform', 'tmp', '.tmp',
-  ];
-
-  /** Search file contents in the sandbox using grep */
-  async searchFiles(
-    sandboxId: string,
-    query: string,
-    searchDir: string,
-    options: {
-      matchCase?: boolean;
-      wholeWord?: boolean;
-      useRegex?: boolean;
-      includePattern?: string;
-      excludePattern?: string;
-    } = {},
-  ): Promise<SearchResult[]> {
-    if (!query) return [];
-
-    const sandbox = await this.ensureSandbox(sandboxId);
-
-    const flags = ['-rn', '--binary-files=without-match'];
-    if (!options.matchCase) flags.push('-i');
-    if (options.wholeWord) flags.push('-w');
-    if (options.useRegex) flags.push('-E');
-    else flags.push('-F');
-
-    if (options.includePattern) {
-      for (const pat of options.includePattern.split(',').map(p => p.trim()).filter(Boolean)) {
-        flags.push(`--include=${pat}`);
-      }
-    }
-
-    // Build the set of directories to exclude:
-    // start with defaults, add user excludes, but remove any that appear in includePattern
-    const includeParts = (options.includePattern ?? '')
-      .split(',').map(p => p.trim().replace(/\/$/, '')).filter(Boolean);
-    const includeSet = new Set(includeParts);
-
-    const excludeDirs = new Set<string>();
-    for (const dir of SandboxManager.DEFAULT_EXCLUDE_DIRS) {
-      if (!includeSet.has(dir)) excludeDirs.add(dir);
-    }
-    if (options.excludePattern) {
-      for (const pat of options.excludePattern.split(',').map(p => p.trim()).filter(Boolean)) {
-        if (pat.includes('.') && !pat.includes('/')) {
-          flags.push(`--exclude=${pat}`);
-        } else {
-          excludeDirs.add(pat);
-        }
-      }
-    }
-    for (const dir of excludeDirs) {
-      flags.push(`--exclude-dir=${dir}`);
-    }
-
-    const escapedQuery = query.replace(/'/g, "'\\''");
-    const cmd = `grep ${flags.join(' ')} -- '${escapedQuery}' . 2>/dev/null | head -2000; exit 0`;
-
-    try {
-      const result = await sandbox.process.executeCommand(cmd, searchDir);
-      const raw = (result.result ?? '').trim();
-      if (!raw) return [];
-
-      const resultsByFile = new Map<string, SearchMatch[]>();
-
-      for (const line of raw.split('\n')) {
-        const colonIdx1 = line.indexOf(':');
-        if (colonIdx1 <= 0) continue;
-        const colonIdx2 = line.indexOf(':', colonIdx1 + 1);
-        if (colonIdx2 <= 0) continue;
-
-        const relPath = line.substring(0, colonIdx1);
-        const lineNum = parseInt(line.substring(colonIdx1 + 1, colonIdx2), 10);
-        const content = line.substring(colonIdx2 + 1);
-
-        if (isNaN(lineNum)) continue;
-
-        const cleanPath = relPath.startsWith('./') ? relPath.substring(2) : relPath;
-        const absPath = searchDir.endsWith('/')
-          ? `${searchDir}${cleanPath}`
-          : `${searchDir}/${cleanPath}`;
-
-        if (!resultsByFile.has(absPath)) {
-          resultsByFile.set(absPath, []);
-        }
-        resultsByFile.get(absPath)!.push({
-          line: lineNum,
-          content: content.substring(0, 500),
-        });
-      }
-
-      const results: SearchResult[] = [];
-      for (const [filePath, matches] of resultsByFile) {
-        results.push({ filePath, matches });
-      }
-      return results;
-    } catch {
-      return [];
-    }
-  }
-
   // ── Layout persistence methods ────────────────────
 
   private static readonly LAYOUT_FILE = "/home/daytona/.apex-layout.json";
@@ -1511,8 +1377,8 @@ export class SandboxManager extends EventEmitter {
   private async waitForBridge(
     sandbox: SandboxInstance,
     sandboxId: string,
-    maxAttempts = 10,
-    intervalMs = 1500,
+    maxAttempts = 20,
+    intervalMs = 500,
   ): Promise<void> {
     for (let i = 0; i < maxAttempts; i++) {
       try {
@@ -1768,6 +1634,25 @@ export class SandboxManager extends EventEmitter {
       console.log(`[bridge:${sid}] wrote opencode.json`);
     }
 
+    // Ensure CA cert is installed (may be missing on older sandboxes)
+    const secretsProxyUrlR = resolveSecretsProxyUrl(
+      this.config.proxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
+    );
+    if (this.config.secretsProxyCaCert && secretsProxyUrlR) {
+      try {
+        await sandbox.fs.uploadFile(
+          Buffer.from(this.config.secretsProxyCaCert),
+          CA_CERT_PATH,
+        );
+        await sandbox.process.executeCommand(
+          "sudo update-ca-certificates 2>/dev/null || true",
+        );
+        console.log(`[bridge:${sid}] CA cert installed`);
+      } catch {
+        console.log(`[bridge:${sid}] CA cert install failed (non-fatal)`);
+      }
+    }
+
     const bridgeSessionId = `bridge-restart-${Date.now()}`;
     session.bridgeSessionId = bridgeSessionId;
     await sandbox.process.createSession(bridgeSessionId);
@@ -1795,7 +1680,44 @@ export class SandboxManager extends EventEmitter {
       `APEX_PROJECT_ID="${projectIdForBridge}"`,
       `HOME="/home/daytona"`,
       `PATH="/home/daytona/.opencode/bin:$PATH"`,
+      ...(secretsProxyUrlR
+        ? [
+            `HTTPS_PROXY="${secretsProxyUrlR}"`,
+            `HTTP_PROXY="${secretsProxyUrlR}"`,
+            `https_proxy="${secretsProxyUrlR}"`,
+            `http_proxy="${secretsProxyUrlR}"`,
+            `NO_PROXY="localhost,127.0.0.1,0.0.0.0"`,
+            `no_proxy="localhost,127.0.0.1,0.0.0.0"`,
+            `NODE_EXTRA_CA_CERTS="${CA_CERT_PATH}"`,
+            `SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"`,
+            `REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+            `CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+          ]
+        : []),
     ];
+    if (secretsProxyUrlR) {
+      dotEnvLines.push(`HTTPS_PROXY=${secretsProxyUrlR}`);
+      dotEnvLines.push(`HTTP_PROXY=${secretsProxyUrlR}`);
+      dotEnvLines.push(`https_proxy=${secretsProxyUrlR}`);
+      dotEnvLines.push(`http_proxy=${secretsProxyUrlR}`);
+      dotEnvLines.push(`NO_PROXY=localhost,127.0.0.1,0.0.0.0`);
+      dotEnvLines.push(`no_proxy=localhost,127.0.0.1,0.0.0.0`);
+      dotEnvLines.push(`NODE_EXTRA_CA_CERTS=${CA_CERT_PATH}`);
+      dotEnvLines.push(`SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt`);
+      dotEnvLines.push(`REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt`);
+      dotEnvLines.push(`CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt`);
+    }
+    // Write placeholder env vars for user-defined secrets so SDKs can initialize
+    for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
+      dotEnvLines.push(`${name}=${placeholder}`);
+      envParts.push(`${name}="${placeholder}"`);
+    }
+    if (dotEnvLines.length > 0 && projectDir) {
+      await sandbox.fs.uploadFile(
+        Buffer.from(dotEnvLines.join("\n") + "\n"),
+        `${projectDir}/.env`,
+      );
+    }
     await sandbox.process.executeSessionCommand(bridgeSessionId, {
       command: `cd ${BRIDGE_DIR} && ${envParts.join(" ")} node bridge.js > ${BRIDGE_DIR}/bridge.log 2>&1`,
       async: true,
@@ -1806,6 +1728,34 @@ export class SandboxManager extends EventEmitter {
     const previewInfo = await sandbox.getPreviewLink(BRIDGE_PORT);
     session.previewUrl = previewInfo.url;
     session.previewToken = previewInfo.token ?? null;
+  }
+
+  /**
+   * Write multiple files inside the sandbox in a single `exec` call.
+   * Each file's content is base64-encoded and decoded inline, avoiding
+   * one `container exec` round-trip per file.
+   */
+  private async batchWriteFiles(
+    sandbox: SandboxInstance,
+    files: { path: string; content: string }[],
+  ): Promise<void> {
+    if (files.length === 0) return;
+
+    // Build a single shell script: create parent dirs + decode each file
+    const parts: string[] = [];
+    const dirs = new Set<string>();
+    for (const f of files) {
+      const dir = f.path.replace(/\/[^/]+$/, "");
+      if (dir && !dirs.has(dir)) {
+        dirs.add(dir);
+        parts.push(`mkdir -p '${dir}'`);
+      }
+    }
+    for (const f of files) {
+      const b64 = Buffer.from(f.content).toString("base64");
+      parts.push(`printf '%s' '${b64}' | base64 -d > '${f.path}'`);
+    }
+    await sandbox.process.executeCommand(parts.join(" && "));
   }
 
   private async installBridge(
@@ -1822,17 +1772,7 @@ export class SandboxManager extends EventEmitter {
     const log = (msg: string) =>
       console.log(`[install:${sid}] ${msg} (+${Date.now() - t0}ms)`);
 
-    // ── Phase 0: Create directories (parallel) ──────
-    const mkdirPromises: Promise<void>[] = [
-      sandbox.fs.createFolder(BRIDGE_DIR, "755"),
-    ];
-    if (projectDir && projectDir !== HOME_DIR) {
-      mkdirPromises.push(sandbox.fs.createFolder(projectDir, "755"));
-    }
-    await Promise.all(mkdirPromises);
-    log("dirs created");
-
-    // ── Prepare all file contents upfront (no I/O) ──
+    // ── Prepare all file contents upfront (CPU only, no I/O) ──
     const proxyBaseUrlForEnv = resolveProxyBaseUrl(this.config.proxyBaseUrl, this.config.provider);
     const useProxyI = !!proxyBaseUrlForEnv;
 
@@ -1952,8 +1892,46 @@ export class SandboxManager extends EventEmitter {
       "multiple task tool calls in the same response.",
     ].join("\n");
 
-    // ── Phase 1: All independent I/O in parallel ────
-    // Group A: git init/clone
+    const secretsProxyUrl = resolveSecretsProxyUrl(
+      this.config.proxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
+    );
+
+    // Add proxy env vars to .env for user app processes
+    if (secretsProxyUrl) {
+      dotEnvLines.push(`HTTPS_PROXY=${secretsProxyUrl}`);
+      dotEnvLines.push(`HTTP_PROXY=${secretsProxyUrl}`);
+      dotEnvLines.push(`https_proxy=${secretsProxyUrl}`);
+      dotEnvLines.push(`http_proxy=${secretsProxyUrl}`);
+      dotEnvLines.push(`NO_PROXY=localhost,127.0.0.1,0.0.0.0`);
+      dotEnvLines.push(`no_proxy=localhost,127.0.0.1,0.0.0.0`);
+      dotEnvLines.push(`NODE_EXTRA_CA_CERTS=${CA_CERT_PATH}`);
+      dotEnvLines.push(`SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt`);
+      dotEnvLines.push(`REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt`);
+      dotEnvLines.push(`CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt`);
+    }
+    for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
+      dotEnvLines.push(`${name}=${placeholder}`);
+    }
+
+    // ── Exec 1: Write ALL files in a single call ────
+    // Batches ~7 individual uploadFile calls (each a container exec) into one.
+    const allFiles: { path: string; content: string }[] = [
+      { path: `${BRIDGE_DIR}/bridge.js`, content: bridgeCode },
+      { path: `${BRIDGE_DIR}/mcp-terminal-server.js`, content: mcpCode },
+      { path: `${projectDir}/opencode.json`, content: JSON.stringify(openCodeConfig) },
+      { path: `${projectDir}/AGENTS.md`, content: sandboxInstructions },
+      { path: `${projectDir}/.opencode/agents/sisyphus-prompt.txt`, content: sisyphusPrompt },
+    ];
+    if (dotEnvLines.length > 0) {
+      allFiles.push({ path: `${projectDir}/.env`, content: dotEnvLines.join("\n") + "\n" });
+    }
+    if (this.config.secretsProxyCaCert && secretsProxyUrl) {
+      allFiles.push({ path: CA_CERT_PATH, content: this.config.secretsProxyCaCert });
+    }
+
+    const writeFilesTask = this.batchWriteFiles(sandbox, allFiles).then(() => log("files written"));
+
+    // ── Exec 2: git init/clone (parallel with file writes) ──
     const gitTask = (async () => {
       if (gitRepo) {
         this.emit("status", session.sandboxId, "cloning_repo");
@@ -1966,71 +1944,27 @@ export class SandboxManager extends EventEmitter {
           await sandbox.process.executeCommand(`git clone ${gitRepo} .`, projectDir);
         }
       } else {
-        await sandbox.process.executeCommand("git init", projectDir);
-      }
-      if (this.config.githubToken) {
         await sandbox.process.executeCommand(
-          `git config --global credential.helper store` +
-            ` && echo "https://x-access-token:${this.config.githubToken}@github.com" > ~/.git-credentials`,
-          projectDir,
+          `mkdir -p '${projectDir}' && git init '${projectDir}'`
+          + (this.config.githubToken
+            ? ` && git config --global credential.helper store && echo "https://x-access-token:${this.config.githubToken}@github.com" > ~/.git-credentials`
+            : ""),
         );
       }
       log("git done");
     })();
 
-    // Group B: upload bridge scripts to BRIDGE_DIR
-    const uploadScriptsTask = Promise.all([
-      sandbox.fs.uploadFile(Buffer.from(bridgeCode), `${BRIDGE_DIR}/bridge.js`),
-      sandbox.fs.uploadFile(Buffer.from(mcpCode), `${BRIDGE_DIR}/mcp-terminal-server.js`),
-    ]).then(() => log("scripts uploaded"));
+    // ── Exec 3: Update CA certs if needed (parallel) ──
+    const caCertTask = (this.config.secretsProxyCaCert && secretsProxyUrl)
+      ? writeFilesTask.then(() =>
+          sandbox.process.executeCommand("sudo update-ca-certificates 2>/dev/null || true"),
+        ).then(() => log("CA cert updated"))
+      : Promise.resolve();
 
-    // Group C: npm install (skip if already installed)
-    const npmTask = (async () => {
-      const check = await sandbox.process.executeCommand(
-        `test -d ${BRIDGE_DIR}/node_modules/ws && test -d ${BRIDGE_DIR}/node_modules/node-pty && echo "installed" || echo "missing"`,
-      );
-      if ((check.result ?? "").includes("installed")) {
-        log("npm install skipped (already installed)");
-        return;
-      }
-      await sandbox.process.executeCommand("npm init -y", BRIDGE_DIR);
-      const npmResult = await sandbox.process.executeCommand(
-        "npm install ws node-pty 2>&1", BRIDGE_DIR,
-      );
-      const npmOutput = (npmResult.result ?? "").trim();
-      if (npmOutput.includes("ERR!") || npmOutput.includes("error")) {
-        console.error(`[sandbox:${sid}] npm install issues: ${npmOutput.slice(-500)}`);
-      }
-      log("npm install done");
-    })();
+    await Promise.all([writeFilesTask, gitTask, caCertTask]);
+    log("setup complete");
 
-    // Group D: apt-get inotify-tools (skip if present)
-    const inotifyTask = sandbox.process.executeCommand(
-      "which inotifywait >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq inotify-tools) 2>/dev/null || true",
-    ).then(() => log("inotify done"));
-
-    // Group E: upload all project-dir config files in parallel
-    const configUploadsTask = Promise.all([
-      dotEnvLines.length > 0
-        ? sandbox.fs.uploadFile(Buffer.from(dotEnvLines.join("\n") + "\n"), `${projectDir}/.env`)
-        : Promise.resolve(),
-      sandbox.fs.uploadFile(Buffer.from(JSON.stringify(openCodeConfig)), `${projectDir}/opencode.json`),
-      sandbox.fs.uploadFile(Buffer.from(sandboxInstructions), `${projectDir}/AGENTS.md`),
-      sandbox.process.executeCommand(`mkdir -p ${projectDir}/.opencode/agents`).then(() =>
-        sandbox.fs.uploadFile(Buffer.from(sisyphusPrompt), `${projectDir}/.opencode/agents/sisyphus-prompt.txt`),
-      ),
-    ]).then(() => log("config files uploaded"));
-
-    await Promise.all([gitTask, uploadScriptsTask, npmTask, inotifyTask, configUploadsTask]);
-    log("phase 1 complete");
-
-    // ── Phase 2: Pre-warm opencode (needs opencode.json from Phase 1) ──
-    await sandbox.process.executeCommand(
-      `cd ${projectDir} && HOME=/home/daytona /home/daytona/.opencode/bin/opencode session list 2>&1; echo "opencode pre-warm done"`,
-    );
-    log("opencode pre-warm done");
-
-    // ── Phase 3: Start bridge + code-server, connect ──
+    // ── Exec 4: Start bridge ────────────────────────
     const bridgeSessionId = `bridge-${session.id}`;
     session.bridgeSessionId = bridgeSessionId;
     await sandbox.process.createSession(bridgeSessionId);
@@ -2060,24 +1994,31 @@ export class SandboxManager extends EventEmitter {
       `APEX_PROJECT_ID="${projectIdI}"`,
       `HOME="/home/daytona"`,
       `PATH="/home/daytona/.opencode/bin:$PATH"`,
+      ...(secretsProxyUrl
+        ? [
+            `HTTPS_PROXY="${secretsProxyUrl}"`,
+            `HTTP_PROXY="${secretsProxyUrl}"`,
+            `https_proxy="${secretsProxyUrl}"`,
+            `http_proxy="${secretsProxyUrl}"`,
+            `NO_PROXY="localhost,127.0.0.1,0.0.0.0"`,
+            `no_proxy="localhost,127.0.0.1,0.0.0.0"`,
+            `NODE_EXTRA_CA_CERTS="${CA_CERT_PATH}"`,
+            `SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"`,
+            `REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+            `CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+          ]
+        : []),
     ];
+    for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
+      envParts.push(`${name}="${placeholder}"`);
+    }
 
     await sandbox.process.executeSessionCommand(bridgeSessionId, {
       command: `cd ${BRIDGE_DIR} && ${envParts.join(" ")} node bridge.js > ${BRIDGE_DIR}/bridge.log 2>&1`,
       async: true,
     });
 
-    const vscodeSessionId = `vscode-${session.id}`;
-    try {
-      await sandbox.process.createSession(vscodeSessionId);
-      await sandbox.process.executeSessionCommand(vscodeSessionId, {
-        command: `code-server --bind-addr 0.0.0.0:${VSCODE_PORT} --auth none --disable-telemetry ${projectDir} 2>&1 || true`,
-        async: true,
-      });
-    } catch {
-      // code-server not installed in this image – skip silently
-    }
-
+    // ── Exec 5+: waitForBridge (fast polling) + connect ─
     await this.waitForBridge(sandbox, session.sandboxId);
     log("bridge ready");
 

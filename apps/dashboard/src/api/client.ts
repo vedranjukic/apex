@@ -138,6 +138,44 @@ export const settingsApi = {
     }),
 };
 
+// ── Secrets ──────────────────────────────────────────
+export interface Secret {
+  id: string;
+  name: string;
+  domain: string;
+  authType: string;
+  description: string | null;
+  projectId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateSecretInput {
+  name: string;
+  value: string;
+  domain: string;
+  authType?: string;
+  description?: string;
+  projectId?: string | null;
+}
+
+export const secretsApi = {
+  list: (projectId?: string) =>
+    request<Secret[]>(`/secrets${projectId ? `?projectId=${projectId}` : ''}`),
+  create: (data: CreateSecretInput) =>
+    request<Secret>('/secrets', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  update: (id: string, data: Partial<CreateSecretInput>) =>
+    request<Secret>(`/secrets/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  delete: (id: string) =>
+    request<{ ok: boolean }>(`/secrets/${id}`, { method: 'DELETE' }),
+};
+
 // ── Threads ──────────────────────────────────────────
 export const threadsApi = {
   listByProject: (projectId: string, search?: string) => {

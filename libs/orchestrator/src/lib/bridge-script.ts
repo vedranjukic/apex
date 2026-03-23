@@ -584,6 +584,38 @@ const server = http.createServer((req, res) => {
       } catch (e) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: e.message })); }
     }); return;
   }
+  if (req.method === "GET" && req.url === "/internal/list-secrets") {
+    const proxyBase = process.env.APEX_PROXY_BASE_URL || "";
+    const projectId = process.env.APEX_PROJECT_ID || "";
+    if (!proxyBase || !projectId) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ secrets: [] }));
+      return;
+    }
+    const fetchUrl = proxyBase + "/api/secrets?projectId=" + encodeURIComponent(projectId);
+    const proto = fetchUrl.startsWith("https") ? require("https") : require("http");
+    proto.get(fetchUrl, (apiRes) => {
+      let data = "";
+      apiRes.on("data", (c) => data += c);
+      apiRes.on("end", () => {
+        try {
+          const items = JSON.parse(data);
+          const safe = (Array.isArray(items) ? items : []).map((s) => ({
+            name: s.name, domain: s.domain, authType: s.authType, description: s.description,
+          }));
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ secrets: safe }));
+        } catch (e) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ secrets: [], error: e.message }));
+        }
+      });
+    }).on("error", (e) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ secrets: [], error: e.message }));
+    });
+    return;
+  }
   res.writeHead(200); res.end("bridge-ok");
 });
 

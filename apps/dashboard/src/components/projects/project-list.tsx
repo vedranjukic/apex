@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus, FolderOpen, Trash2, ExternalLink, Loader2, CheckCircle2,
-  CircleHelp, CirclePause, XCircle, Circle, GitBranch, ChevronDown, ChevronRight, Settings,
+  CircleHelp, CirclePause, XCircle, Circle, GitBranch, ChevronDown, ChevronRight, Settings, Shield,
 } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { useProjectsStore } from '../../stores/projects-store';
@@ -116,13 +116,22 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
           <h1 className="text-2xl font-bold">Projects</h1>
           <div className="flex items-center gap-2">
             {settingsVisible && (
-              <button
-                onClick={() => navigate('/settings')}
-                className="p-2 rounded-lg hover:bg-surface-secondary text-text-secondary hover:text-text-primary transition-colors"
-                title="Settings"
-              >
-                <Settings className="w-4 h-4" />
-              </button>
+              <>
+                <button
+                  onClick={() => navigate('/secrets')}
+                  className="p-2 rounded-lg hover:bg-surface-secondary text-text-secondary hover:text-text-primary transition-colors"
+                  title="Secrets"
+                >
+                  <Shield className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => navigate('/settings')}
+                  className="p-2 rounded-lg hover:bg-surface-secondary text-text-secondary hover:text-text-primary transition-colors"
+                  title="Settings"
+                >
+                  <Settings className="w-4 h-4" />
+                </button>
+              </>
             )}
             <button
               onClick={() => setDialogOpen(true)}

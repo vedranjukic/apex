@@ -12,16 +12,21 @@ import { agentWs } from './modules/agent/agent.ws';
 import { projectsWs } from './modules/projects/projects.ws';
 import { previewRoutes } from './modules/preview/preview.routes';
 import { llmProxyRoutes } from './modules/llm-proxy/llm-proxy.routes';
+import { secretsRoutes } from './modules/secrets/secrets.routes';
 
 import { usersService } from './modules/users/users.service';
 import { settingsService } from './modules/settings/settings.service';
 import { threadsService } from './modules/tasks/tasks.service';
 import { projectsService } from './modules/projects/projects.service';
+import { initCA } from './modules/secrets-proxy/ca-manager';
+import { startSecretsProxy } from './modules/secrets-proxy/secrets-proxy';
 
 async function bootstrap() {
   await settingsService.init();
   await usersService.init();
   await threadsService.init();
+  await initCA();
+  await startSecretsProxy();
   await projectsService.init();
 
   const dashboardDir = process.env.DASHBOARD_DIR || join(__dirname, '../../dashboard/dist');
@@ -35,6 +40,7 @@ async function bootstrap() {
     .use(configRoutes)
     .use(previewRoutes)
     .use(llmProxyRoutes)
+    .use(secretsRoutes)
     .use(agentWs)
     .use(projectsWs);
 

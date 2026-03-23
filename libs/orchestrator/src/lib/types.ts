@@ -328,4 +328,11 @@ export interface OrchestratorConfig {
   /** Base URL of the LLM proxy (e.g. `http://localhost:6000`).
    *  When set, containers receive proxy URLs instead of raw API keys. */
   proxyBaseUrl?: string;
+  /** PEM-encoded CA certificate for the MITM secrets proxy. */
+  secretsProxyCaCert?: string;
+  /** Port the MITM secrets proxy listens on (default 6001). */
+  secretsProxyPort?: number;
+  /** Secret env var names to write as placeholders in the container .env.
+   *  SDKs can initialize with the placeholder; the proxy replaces it at HTTP level. */
+  secretPlaceholders?: Record<string, string>;
 }

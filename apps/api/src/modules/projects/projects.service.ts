@@ -3,6 +3,9 @@ import { db } from '../../database/db';
 import { projects, tasks } from '../../database/schema';
 import { SandboxManager } from '@apex/orchestrator';
 import { projectsWsBroadcast } from './projects.ws';
+import { getCACertPem } from '../secrets-proxy/ca-manager';
+import { getSecretsProxyPort } from '../secrets-proxy/secrets-proxy';
+import { secretsService } from '../secrets/secrets.service';
 
 export type Project = typeof projects.$inferSelect & { threads?: (typeof tasks.$inferSelect)[] };
 
@@ -18,10 +21,30 @@ class ProjectsService {
   private async initSandboxManagers() {
     this.sandboxManagers.clear();
 
+    let caCert = '';
+    try { caCert = getCACertPem(); } catch { /* CA not yet initialized */ }
+
+    // Build placeholder env vars for all secrets (name → "sk-proxy-placeholder")
+    const secretPlaceholders: Record<string, string> = {};
+    try {
+      const domains = await secretsService.getSecretDomains();
+      if (domains.size > 0) {
+        const allSecrets = await secretsService.list(
+          '00000000-0000-0000-0000-000000000001',
+        );
+        for (const s of allSecrets) {
+          secretPlaceholders[s.name] = 'sk-proxy-placeholder';
+        }
+      }
+    } catch { /* secrets table may not exist yet */ }
+
     const sharedConfig = {
       anthropicApiKey: process.env.ANTHROPIC_API_KEY,
       openaiApiKey: process.env.OPENAI_API_KEY,
       githubToken: process.env.GITHUB_TOKEN,
+      secretsProxyCaCert: caCert,
+      secretsProxyPort: getSecretsProxyPort(),
+      secretPlaceholders,
     };
 
     const hasDaytonaKey = !!process.env.DAYTONA_API_KEY;

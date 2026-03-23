@@ -154,6 +154,71 @@ The proxy URL resolution in `sandbox-manager.ts` adapts to the sandbox provider:
 | `libs/orchestrator/src/lib/sandbox-manager.ts` | `resolveProxyBaseUrl()` — adapts proxy URL per provider; `restartBridge()` / `installBridge()` — writes `.env` with proxy URLs + dummy keys, configures `opencode.json` with provider base URLs |
 | `apps/api/src/modules/settings/settings.service.ts` | Stores and retrieves API keys (SQLite DB + env var fallback) — keys never leave this service |
 
+## Secrets Proxy (MITM)
+
+User-defined API key secrets (Stripe, Twilio, etc.) are stored server-side and **never enter sandbox containers as plaintext**. A transparent MITM HTTPS proxy intercepts outbound traffic from containers and injects real credentials at the HTTP level.
+
+### How It Works
+
+```
+Container app → CONNECT api.stripe.com:443 via HTTPS_PROXY
+                            ↓
+              MITM Proxy (secrets-proxy.ts, port 6001)
+                            ↓
+              Looks up domain in secrets DB → match found
+                            ↓
+              TLS termination with dynamic cert (signed by Apex CA)
+                            ↓
+              Reads decrypted HTTP request, injects auth header
+                            ↓
+              https://api.stripe.com (with real Authorization: Bearer <key>)
+```
+
+For domains **without** secrets, the proxy acts as a transparent TCP tunnel (no interception, no certificate).
+
+Containers receive:
+- `HTTPS_PROXY` / `HTTP_PROXY` pointing to the proxy (e.g. `http://<host-lan-ip>:6001`)
+- `NO_PROXY=localhost,127.0.0.1,0.0.0.0` so local traffic skips the proxy
+- Custom CA certificate installed in the system trust store (`update-ca-certificates`)
+- `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` for per-runtime CA trust
+- Placeholder env vars for each secret (e.g. `STRIPE_KEY=sk-proxy-placeholder`) so SDKs initialize without error
+
+### Agent Awareness
+
+Agents can discover configured secrets via the `list_secrets` MCP tool (`mcp__terminal-server__list_secrets`). It returns secret names, domains, and auth types — **never values**. The bridge's `/internal/list-secrets` endpoint fetches this from the API server.
+
+### Auth Types
+
+Each secret specifies how the proxy injects the credential:
+
+| `authType` | Injected Header |
+|---|---|
+| `bearer` | `Authorization: Bearer <value>` |
+| `x-api-key` | `x-api-key: <value>` |
+| `basic` | `Authorization: Basic base64(<value>)` |
+| `header:X-Custom` | `X-Custom: <value>` |
+
+### CA Certificate Lifecycle
+
+1. On first API server startup, `ca-manager.ts` generates an RSA 2048-bit CA keypair + self-signed certificate using `node-forge`
+2. CA cert + key are persisted in the `settings` table (`PROXY_CA_CERT`, `PROXY_CA_KEY`)
+3. During `installBridge()` and `restartBridge()`, the CA cert is uploaded to the container and `update-ca-certificates` is run
+4. Per-domain certificates are generated on-the-fly by the proxy and cached in memory
+
+### Key Files
+
+| File | Role |
+|---|---|
+| `apps/api/src/modules/secrets/secrets.service.ts` | CRUD + domain lookup for secrets (SQLite) |
+| `apps/api/src/modules/secrets/secrets.routes.ts` | Elysia REST API under `/api/secrets` |
+| `apps/api/src/modules/secrets-proxy/secrets-proxy.ts` | MITM proxy server — CONNECT handler, selective TLS interception, auth injection, transparent tunnel fallback |
+| `apps/api/src/modules/secrets-proxy/ca-manager.ts` | CA keypair generation, persistence, per-domain certificate generation + caching |
+| `apps/api/src/database/schema.ts` | `secrets` table definition |
+| `libs/orchestrator/src/lib/sandbox-manager.ts` | CA cert upload, `HTTPS_PROXY` env injection, secret placeholder env vars |
+| `libs/orchestrator/src/lib/mcp-terminal-script.ts` | `list_secrets` MCP tool |
+| `libs/orchestrator/src/lib/bridge-script.ts` | `/internal/list-secrets` bridge endpoint |
+| `apps/dashboard/src/pages/secrets-page.tsx` | Secrets management UI at `/secrets` |
+
 ## Preview Proxy (Local Providers)
 
 Docker and Apple Container sandboxes have IPs reachable only from the API server host (Docker bridge network or macOS virtual network). The **preview proxy** makes sandbox ports accessible to the browser without port mapping.
@@ -268,6 +333,10 @@ apps/dashboard/src/components/terminal/terminal-tab.tsx    – Single xterm.js t
 apps/dashboard/src/components/terminal/terminal-tabs.tsx   – Tab bar (names, +, x)
 apps/api/src/modules/preview/preview.routes.ts             – HTTP reverse proxy for Docker/Apple Container sandbox ports
 apps/api/src/modules/preview/port-forwarder.ts             – TCP port forwarding for local sandboxes (Electron)
+apps/api/src/modules/secrets/secrets.service.ts            – Secrets CRUD + domain lookup
+apps/api/src/modules/secrets/secrets.routes.ts             – Secrets REST API (/api/secrets)
+apps/api/src/modules/secrets-proxy/secrets-proxy.ts        – MITM HTTPS proxy (port 6001)
+apps/api/src/modules/secrets-proxy/ca-manager.ts           – CA cert generation + per-domain cert caching
 apps/dashboard/src/hooks/use-file-tree-socket.ts          – Socket.io hook for file explorer (list, CRUD, read, write)
 apps/dashboard/src/components/layout/project-status-bar.tsx – Bottom status bar (project name, git branch picker, sync status)
 apps/dashboard/src/components/layout/branch-picker.tsx     – Branch picker dropdown (create/checkout/list branches)

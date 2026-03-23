@@ -9,6 +9,8 @@ export const ALLOWED_KEYS = new Set([
   'DAYTONA_API_URL',
   'DAYTONA_SNAPSHOT',
   'GITHUB_TOKEN',
+  'PROXY_CA_CERT',
+  'PROXY_CA_KEY',
 ]);
 
 export type SettingSource = 'settings' | 'env' | 'none';
