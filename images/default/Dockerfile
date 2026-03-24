@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM mcr.microsoft.com/devcontainers/python:3.14
 
 # Update package list and install required dependencies
@@ -79,7 +80,7 @@ RUN python3 -m pip install --no-cache-dir \
 RUN useradd -m daytona && echo "daytona ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/91-daytona
 
 # Install Go (arch-aware)
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 RUN curl -fsSL "https://go.dev/dl/go1.26.1.linux-${TARGETARCH}.tar.gz" | tar -C /usr/local -xzf -
 ENV PATH="/usr/local/go/bin:${PATH}" \
     GOBIN=/usr/local/bin
