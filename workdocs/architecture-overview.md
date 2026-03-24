@@ -3,16 +3,16 @@
 ## Stack
 - **API**: NestJS + TypeORM + SQLite (`apps/api`) on port 6000
 - **Dashboard**: React + Zustand + Tailwind (`apps/dashboard`) on port 4200 (Vite)
-- **Orchestrator lib**: `libs/orchestrator` – provider-agnostic sandbox management (Daytona cloud, Docker local, or Apple Container macOS VM) + WebSocket bridge to agent CLIs
-- **Sandbox bridge**: Node.js script uploaded into each Daytona sandbox. Uses an adapter pattern to support three agent backends:
-  - **Claude Code**: long-lived `claude --output-format stream-json --input-format stream-json` process with bidirectional stdin/stdout pipes
-  - **OpenCode**: per-prompt `opencode run --format json` processes with `--session` for context continuity
-  - **Codex**: long-lived `codex app-server --listen stdio://` process with JSON-RPC 2.0 protocol (thread/turn lifecycle)
-  All adapters normalize output into the same event format (`system`/`assistant`/`result` with content blocks) so the gateway and dashboard stay agent-agnostic. Terminal PTY sessions are shared across all agent types.
+- **Orchestrator lib**: `libs/orchestrator` – provider-agnostic sandbox management (Daytona cloud, Docker local, Apple Container macOS VM, or local host) + WebSocket bridge to agent CLI
+- **Sandbox bridge**: Node.js script uploaded into each sandbox. Uses OpenCode as the single agent runtime with three named agents:
+  - **Build**: full autonomous coding agent
+  - **Plan**: read-only analysis and planning
+  - **Sisyphus**: orchestration agent (Anthropic models only)
+  All agents are invoked via `opencode run --agent <name> --format json` as per-prompt PTY processes with `--session` for context continuity. Output is normalized into a unified event format (`system`/`assistant`/`result` with content blocks). Terminal PTY sessions are shared across all agent types.
 
 ## Data Model
-- **Project** → has a sandbox (provisioned async on creation). Each project stores a `provider` field (`daytona`, `docker`, or `apple-container`) that selects the sandbox backend. Optional `gitRepo` URL for cloning a repository. Stores `agentType` as the project-level default agent (claude_code, open_code, codex).
-- **Thread** (DB table: `tasks`) → belongs to a project, has messages. Title auto-generated from first prompt. Stores `claudeSessionId` to maintain a persistent Claude Code session across follow-up prompts. Optional `agentType` overrides the project default, allowing different threads within one project to use different agents.
+- **Project** → has a sandbox (provisioned async on creation). Each project stores a `provider` field (`daytona`, `docker`, `apple-container`, or `local`) that selects the sandbox backend. Optional `gitRepo` URL for cloning a repository. Stores `agentType` as the project-level default agent (`build`, `plan`, `sisyphus`; defaults to `build`).
+- **Thread** (DB table: `tasks`) → belongs to a project, has messages. Title auto-generated from first prompt. Stores `claudeSessionId` for session context continuity across follow-up prompts. Optional `agentType` overrides the project default, allowing different threads within one project to use different agents (e.g., one with Build, another with Plan).
 - **Message** → belongs to a thread. Roles: `user`, `assistant`, `system`. Content is JSON array of blocks (text, tool_use, tool_result, image). Image blocks carry a `source` field with base64-encoded data.
 
 ## Key Flows
@@ -24,23 +24,53 @@
 4. Dashboard polls project status while `creating`, shows sandbox status indicator (green/yellow/red) in top bar
 
 ### Thread + Agent Execution (Session-per-Thread)
-Each thread maintains a long-lived Claude Code process. The first prompt spawns the process; follow-ups are piped to stdin as JSONL messages, keeping full conversational context within a single process.
+Each thread uses OpenCode serve mode. The bridge starts `opencode serve` once on boot and communicates via its HTTP API and SSE event stream.
 
 1. User clicks "New Thread" → composing mode (prompt input, no dialog)
 2. User types prompt → `POST /api/projects/:id/threads` creates thread + stores first user message
 3. Dashboard emits `execute_thread { threadId }` via Socket.io → gateway reads first message, sends to sandbox
 4. `SandboxManager.sendPrompt(sandboxId, prompt, threadId, sessionId)` → auto-reconnects if server restarted
-5. Bridge spawns `claude --dangerously-skip-permissions --output-format stream-json --input-format stream-json -p <prompt>` (first prompt), or pipes a JSONL user message to the existing process's stdin (follow-ups). If the process has exited (crash/reload), `--resume <sessionId>` restores context.
-6. Claude's `system` init message contains `session_id` → gateway captures it → stored on the thread entity as `claudeSessionId`
-7. Claude output streams: bridge → WS (tagged with `threadId`) → SandboxManager → gateway filters by `threadId` → forwards via Socket.io `agent_message` → dashboard renders in real-time
-8. Multiple threads can have concurrent Claude processes in the same sandbox (bridge tracks processes per threadId in a Map)
+5. Bridge sends prompt to OpenCode serve via `POST /session/:id/prompt_async`, polls `/session/:id/message` for output
+6. OpenCode's `system` init message contains `session_id` → gateway captures it → stored on the thread entity as `claudeSessionId`
+7. Agent output streams: bridge → WS (tagged with `threadId`) → SandboxManager → gateway filters by `threadId` → forwards via Socket.io `agent_message` → dashboard renders in real-time
+8. Multiple threads can have concurrent agent processes in the same sandbox (bridge tracks active threads per threadId)
 
 ### Follow-up Prompts
 1. User sends another message → dashboard emits `send_prompt { threadId, prompt, images? }`
-2. Gateway stores user message in DB (with image content blocks if present), sends `start_claude` to bridge with optional `images` array → bridge converts images to OpenCode `FilePartInput` format (`{ type: "file", mime, url: "data:..." }`) and includes them in the `prompt_async` parts alongside the text
+2. Gateway builds conversation context from prior messages via `buildConversationContext()` (last 20KB of conversation history), prepends it as `<conversation_history>` tags, and creates a fresh OpenCode session for the follow-up to avoid stale session races
+3. Gateway stores user message in DB (with image content blocks if present), sends `start_claude` to bridge with optional `images` array → bridge converts images to OpenCode `FilePartInput` format (`{ type: "file", mime, url: "data:..." }`) and includes them in the prompt alongside the text
+
+### Stop Agent
+Users can abort a running agent at any time:
+
+1. Dashboard sends `stop_agent { threadId }` via WebSocket
+2. Gateway cleans up the active message handler, timeout, and health check for that thread
+3. Gateway calls `manager.stopClaude()` → bridge sends abort to the OpenCode session
+4. Thread status is set to `completed` and broadcast to all subscribers
+
+### Prompt Queue
+The prompt input stays editable while the agent is running. If the user submits a prompt while the agent is working:
+
+1. The prompt is added to a local queue displayed above the input with Play (send) and Delete buttons
+2. When the agent finishes (status transitions from `running`), the first queued prompt auto-sends
+3. Clicking Play on a queued prompt stops the current agent, then sends the queued prompt when the stop completes
+
+### Bridge Health Check
+A 10-second health check interval runs alongside every active agent execution:
+
+1. Every 10s, the gateway checks `manager.isBridgeConnected()` to verify the bridge WebSocket is alive
+2. If disconnected, immediately attempts reconnect + retry (instead of waiting for the 90-300s timeout)
+3. Emits "Lost connection to sandbox. Reconnecting…" system message to the client
+4. If recovery fails, marks the thread as `error` immediately
+
+### Stale Thread Reconciliation
+On server startup and client subscription, threads stuck in active states are cleaned up:
+
+1. **Server startup** (`init()`): resets all `running`/`waiting_for_input`/`idle` threads to `completed`, clears stale `claudeSessionId`
+2. **Client subscribe** (`subscribe_project`): synchronously reconciles stale threads (checks `activeHandlers` map) before sending `subscribed` response, ensuring `fetchThreads` reads clean data
 
 ### AskUserQuestion (waiting_for_input)
-Claude's native `AskUserQuestion` tool is **disallowed** in all modes (both TS and Go bridges). Instead, all agents use the MCP `ask_user` tool (`mcp__terminal-server__ask_user`) which routes through the bridge's `/internal/ask-user` endpoint:
+All agents use the MCP `ask_user` tool (`mcp__terminal-server__ask_user`) which routes through the bridge's `/internal/ask-user` endpoint:
 
 1. Agent calls `mcp__terminal-server__ask_user` → MCP server POSTs to bridge `/internal/ask-user`
 2. Bridge emits `claude_message` (with `AskUserQuestion` tool_use block) + `ask_user_pending` over WebSocket
@@ -70,7 +100,7 @@ Each project supports multiple persistent terminal sessions (like tmux). Termina
 4. User sees all terminals exactly as they left them
 
 #### Claude-driven terminals (MCP)
-An MCP server (`mcp-terminal-server.js`) runs inside the sandbox alongside the bridge. It gives Claude Code 5 tools:
+An MCP server (`mcp-terminal-server.js`) runs inside the sandbox alongside the bridge. It provides these tools:
 
 | MCP Tool | Description |
 |---|---|
@@ -83,9 +113,9 @@ An MCP server (`mcp-terminal-server.js`) runs inside the sandbox alongside the b
 | `get_plan_format_instructions` | Get the exact plan format delimiters for Plan mode |
 | `ask_user` | Ask the user a question and block until they respond (triggers `waiting_for_input` status) |
 
-The MCP server communicates with the bridge via local HTTP endpoints (`/internal/terminal-create`, `/internal/terminal-read`, `/internal/ask-user`, etc.). Agents discover the tools via their MCP config: Claude Code uses `~/.claude.json`, OpenCode uses `opencode.json`, Codex uses `codex mcp add`.
+The MCP server communicates with the bridge via local HTTP endpoints (`/internal/terminal-create`, `/internal/terminal-read`, `/internal/ask-user`, etc.). Agents discover the tools via the `opencode.json` MCP configuration in the project directory.
 
-Example: user asks *"start the dev server so I can watch it"* → Claude calls `open_terminal({ name: "Dev Server", command: "npm run dev" })` → a new tab appears in the dashboard terminal panel with live output.
+Example: user asks *"start the dev server so I can watch it"* → agent calls `open_terminal({ name: "Dev Server", command: "npm run dev" })` → a new tab appears in the dashboard terminal panel with live output.
 
 ## Socket.io Setup
 - Server: NestJS `@WebSocketGateway` at namespace `/ws/agent`, path `/ws/socket.io`
@@ -237,7 +267,7 @@ For Daytona sandboxes, the MCP tool falls back to the Daytona API's signed previ
 
 ### TCP Port Forwarding
 
-`apps/api/src/modules/preview/port-forwarder.ts` provides on-demand TCP tunnels for Docker and Apple Container sandboxes. The `forward_port` socket event creates a local TCP server that pipes connections to the container IP. This is used by the Electron desktop app where `localhost` URLs are required. Forwards are cleaned up via `unforward_port` or when the sandbox is deleted.
+`apps/api/src/modules/preview/port-forwarder.ts` provides on-demand TCP tunnels for Docker and Apple Container sandboxes. The `forward_port` socket event creates a local TCP server that pipes connections to the container IP. This is used by the desktop app where `localhost` URLs are required. Forwards are cleaned up via `unforward_port` or when the sandbox is deleted.
 
 ### Socket Events
 
@@ -275,7 +305,7 @@ A single-line bottom bar displays project info and git controls (VS Code-style).
 - **Git branch button** — clickable, opens a `BranchPicker` dropdown with commands (create branch, create from, checkout detached) and a scrollable branch list sorted by last used. Branch name reads from `useGitStore.branch` (stable) → `info.gitBranch` → `project.gitRepo` fallback chain.
 - **Sync status button** — refresh icon + ↓N ↑M (commits behind/ahead). Clicking triggers pull/push as needed. Refresh icon spins during git operations.
 
-**Right side**: `SandboxStatus` indicator + "VS Code" browser IDE button (or "Open in IDE" for Electron).
+**Right side**: `SandboxStatus` indicator + "VS Code" browser IDE button (or "Open in IDE" for the desktop app).
 
 - **Branch resolution**: Primary source is `useGitStore.branch` (updated every 5s from `git_status` polling, never resets mid-session). Falls back to `useProjectInfoSocket` (polls `project_info` every 10s) and `project.gitRepo`.
 - **Branch management**: `listBranches`, `createBranch`, `checkout` actions in `useGitSocket` emit `git_branches` / `git_create_branch` / `git_checkout` events to the gateway.
@@ -296,29 +326,29 @@ When switching projects, all project-specific Zustand stores must be reset to av
 
 - **`resetProjectStores()`** (`lib/reset-project-stores.ts`) clears: terminal, threads, editor, file tree, ports, and panels stores.
 - Called on **`HomePage` mount** — when the user navigates back to the projects list, stale state from the previous project is wiped.
-- NOT called in `openProject()` or `ProjectPage` mount — those open new windows (Electron) or tabs (browser) with naturally fresh stores.
+- NOT called in `openProject()` or `ProjectPage` mount — those open new windows (desktop app) or tabs (browser) with naturally fresh stores.
 
 ## Key Files
 ```
 apps/api/src/modules/agent/agent.gateway.ts    – Socket.io gateway, bridges dashboard↔sandbox + local PTY fallback
 apps/api/src/modules/tasks/tasks.service.ts     – ThreadsService (CRUD for threads + messages)
 apps/api/src/modules/projects/projects.service.ts – Project CRUD + sandbox provisioning
-libs/orchestrator/src/lib/sandbox-manager.ts    – Daytona sandbox lifecycle + bridge WS + terminal methods
-libs/orchestrator/src/lib/bridge-script.ts      – JS code uploaded into sandbox (Claude CLI + PTY terminals + HTTP API)
-libs/orchestrator/src/lib/mcp-terminal-script.ts – MCP server script for Claude-driven terminals
-libs/orchestrator/src/lib/types.ts              – Bridge message types (Claude + terminal)
+libs/orchestrator/src/lib/sandbox-manager.ts    – Sandbox lifecycle + bridge WS + terminal methods
+libs/orchestrator/src/lib/bridge-script.ts      – JS code uploaded into sandbox (OpenCode adapter + PTY terminals + HTTP API)
+libs/orchestrator/src/lib/mcp-terminal-script.ts – MCP server script for agent-driven terminals
+libs/orchestrator/src/lib/types.ts              – Bridge message types (agent + terminal)
 apps/dashboard/src/hooks/use-agent-socket.ts    – Socket.io hook for real-time streaming
 apps/dashboard/src/hooks/use-terminal-socket.ts – Socket.io hook for terminal events + XtermRegistry
 apps/dashboard/src/hooks/use-layout-socket.ts   – Socket.io hook for layout persistence (debounced save/restore + localStorage fallback)
 apps/dashboard/src/lib/reset-project-stores.ts  – Centralized reset of all project-specific Zustand stores
-apps/dashboard/src/lib/open-project.ts           – Opens project in new window (Electron) or tab (browser)
+apps/dashboard/src/lib/open-project.ts           – Opens project in new window (desktop) or tab (browser)
 apps/dashboard/src/hooks/use-project-info-socket.ts – Socket.io hook for git branch polling
 apps/dashboard/src/stores/tasks-store.ts        – Zustand store (useThreadsStore)
 apps/dashboard/src/stores/terminal-store.ts     – Zustand store (useTerminalStore)
 apps/dashboard/src/stores/editor-store.ts        – Zustand store (useEditorStore) — open files, dirty tracking, code selections
 apps/dashboard/src/stores/file-tree-store.ts     – Zustand store (useFileTreeStore) — directory cache, root path
 apps/dashboard/src/stores/plan-store.ts          – Zustand store (usePlanStore) — plan mode state + content extraction
-apps/dashboard/src/stores/agent-settings-store.ts – Zustand store — agent mode/model selection
+apps/dashboard/src/stores/agent-settings-store.ts – Zustand store — agent type (build/plan/sisyphus) + model selection
 apps/dashboard/src/components/agent/agent-thread.tsx – Main thread panel (stats toggle, reasoning toggle)
 apps/dashboard/src/components/agent/message-bubble.tsx – Message grouping + rendering (plan detection, markdown blocks)
 apps/dashboard/src/components/agent/thread-stats-bar.tsx – Aggregated thread stats bar (cost, tokens, context %, MCPs)
@@ -332,7 +362,7 @@ apps/dashboard/src/components/terminal/terminal-panel.tsx  – Resizable bottom 
 apps/dashboard/src/components/terminal/terminal-tab.tsx    – Single xterm.js terminal renderer
 apps/dashboard/src/components/terminal/terminal-tabs.tsx   – Tab bar (names, +, x)
 apps/api/src/modules/preview/preview.routes.ts             – HTTP reverse proxy for Docker/Apple Container sandbox ports
-apps/api/src/modules/preview/port-forwarder.ts             – TCP port forwarding for local sandboxes (Electron)
+apps/api/src/modules/preview/port-forwarder.ts             – TCP port forwarding for local sandboxes (desktop app)
 apps/api/src/modules/secrets/secrets.service.ts            – Secrets CRUD + domain lookup
 apps/api/src/modules/secrets/secrets.routes.ts             – Secrets REST API (/api/secrets)
 apps/api/src/modules/secrets-proxy/secrets-proxy.ts        – MITM HTTPS proxy (port 6001)

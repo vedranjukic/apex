@@ -1,6 +1,6 @@
-# Open in IDE (Electron SSH Remote)
+# Open in IDE (Desktop SSH Remote)
 
-> In the Electron desktop app, the "Open in IDE" button detects locally installed Cursor or VS Code, creates a 24-hour SSH access token via the Daytona SDK, writes a managed SSH config, and launches the IDE with a remote SSH connection to the sandbox. Falls back to code-server in the browser when no local IDE is found (or in the web version).
+> In the desktop app, the "Open in IDE" button detects locally installed Cursor or VS Code, creates a 24-hour SSH access token via the Daytona SDK, writes a managed SSH config, and launches the IDE with a remote SSH connection to the sandbox. Falls back to code-server in the browser when no local IDE is found (or in the web version).
 
 ## Overview
 
@@ -9,9 +9,9 @@ The project status bar has an IDE button that behaves differently depending on t
 | Environment | IDE found? | Behavior |
 |---|---|---|
 | Web (browser) | N/A | Opens code-server (web VS Code) in a new browser tab via signed Daytona preview URL |
-| Electron | No | Same as web -- opens code-server in the system browser |
-| Electron | Cursor detected | Creates SSH access, writes SSH config, launches `cursor --remote ssh-remote+...` |
-| Electron | VS Code detected | Creates SSH access, writes SSH config, launches `code --remote ssh-remote+...` |
+| Desktop app | No | Same as web -- opens code-server in the system browser |
+| Desktop app | Cursor detected | Creates SSH access, writes SSH config, launches `cursor --remote ssh-remote+...` |
+| Desktop app | VS Code detected | Creates SSH access, writes SSH config, launches `code --remote ssh-remote+...` |
 
 Preference order when both are installed: **Cursor > VS Code**.
 

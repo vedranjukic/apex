@@ -242,7 +242,7 @@ switch (type) {
 | `libs/orchestrator/src/lib/types.ts` | `OrchestratorConfig` and bridge message types |
 | `apps/api/src/modules/projects/projects.service.ts` | Per-project provider routing via manager map |
 | `apps/api/src/modules/preview/preview.routes.ts` | HTTP reverse proxy for Docker/Apple Container sandbox ports |
-| `apps/api/src/modules/preview/port-forwarder.ts` | TCP port forwarding for local sandboxes (Electron use) |
+| `apps/api/src/modules/preview/port-forwarder.ts` | TCP port forwarding for local sandboxes (desktop app use) |
 | `apps/api/src/database/schema.ts` | `provider` column on projects table |
 | `libs/shared/src/lib/enums.ts` | `SandboxProvider` enum |
 | `apps/dashboard/src/components/projects/create-project-dialog.tsx` | Provider selector UI |

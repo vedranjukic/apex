@@ -67,13 +67,13 @@ apps/dashboard/src/
 │   ├── file-tree-store.ts          # Zustand store — directory cache for the file explorer
 │   ├── command-store.ts            # Zustand store — command registry, keybindings, palette state
 │   ├── plan-store.ts               # Zustand store — plan mode state (plan text accumulation, completion)
-│   ├── agent-settings-store.ts     # Zustand store — agent mode (agent/plan/ask) and model selection
+│   ├── agent-settings-store.ts     # Zustand store — agent type (build/plan/sisyphus) and model selection
 │   ├── ports-store.ts              # Zustand store — forwarded ports list from sandbox port scanning
 │   └── git-store.ts                # Zustand store — git status, branches, optimistic staging/unstaging
 └── lib/
     ├── cn.ts                       # clsx + tailwind-merge helper
     ├── model-context.ts            # Model context window sizes + token formatting helpers
-    ├── open-project.ts             # Opens project in new window (Electron) or tab (browser)
+    ├── open-project.ts             # Opens project in new window (desktop) or tab (browser)
     └── reset-project-stores.ts     # Centralized reset of all project-specific Zustand stores
 ```
 
@@ -95,25 +95,36 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 ### 3.1 Home Page (`/`)
 
 ```
-┌──────────────────────────────────────────────┐
-│                                              │
-│   ProjectList                                │
-│   ┌────────────────────────────────────────┐ │
-│   │  "Projects" heading  +  [New Project]  │ │
-│   ├────────────────────────────────────────┤ │
-│   │  ProjectCard  (name, status, actions)  │ │
-│   │  ProjectCard                           │ │
-│   │  …                                     │ │
-│   └────────────────────────────────────────┘ │
-│                                              │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                                              │               │
+│   ProjectList                                │ ThreadPreview │
+│   ┌────────────────────────────────────────┐ │   Panel       │
+│   │  "Projects" + [Secrets] [Settings]     │ │   (480px)     │
+│   │              + [New Project]            │ │               │
+│   ├────────────────────────────────────────┤ │  AgentThread  │
+│   │  ProjectCard  (name, status, threads)  │ │  for selected │
+│   │    └─ ThreadList (collapsible)         │ │  thread with  │
+│   │  ProjectCard                           │ │  full prompt  │
+│   │    └─ ThreadList                       │ │  input        │
+│   │  ForkGroupCard                         │ │               │
+│   │    └─ ForkRow + ThreadList             │ │               │
+│   │  …                                     │ │               │
+│   └────────────────────────────────────────┘ │               │
+│                                              │               │
+└──────────────────────────────────────────────┴───────────────┘
 ```
 
 - Wrapped in `AppShell` (no sidebar, no terminal panel, no status bar).
-- No header — the page goes straight to content.
-- `onOpenProject` calls `openProject()` (`lib/open-project.ts`) which opens a new Electron window via IPC or a new browser tab via `window.open`.
+- **Two-column layout**: `ProjectList` on the left (flex-1), optional `ThreadPreviewPanel` on the right (480px, shown when a thread is selected).
+- Header row: "Projects" heading + Secrets button (shield icon) + Settings button + "New Project" button.
+- `onOpenProject` calls `openProject()` (`lib/open-project.ts`) which opens a new desktop window via IPC or a new browser tab via `window.open`.
+- Each `ProjectCard` includes a collapsible `ThreadList` showing all threads with status icons, agent type badges, and timestamps.
+- Clicking a thread in any `ThreadList` opens the `ThreadPreviewPanel` with a full `AgentThread` — users can interact with agents (send prompts, see responses) directly from the project list.
+- The thread preview panel can be expanded to full screen or closed.
+- "New Thread" buttons on each project card create a new thread and open the preview panel.
 - Empty state: folder icon + "No projects yet" message.
 - "New Project" button opens `CreateProjectDialog` (modal).
+- Fork groups: projects forked from the same parent are grouped under a `ForkGroupCard` with collapsible fork rows.
 
 ### 3.2 Project Page (`/projects/:projectId`)
 
@@ -175,21 +186,23 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 
 | Component            | Purpose |
 | -------------------- | ------- |
-| **AgentThread**        | Orchestrates the thread view. Three states: **(1)** No active thread & not composing → `WelcomePrompt` (centered hero with sparkle icon, textarea, suggestion chips). **(2)** Composing new → minimal prompt UI. **(3)** Active thread → header + scrollable message list + `PromptInput` + optional `ThreadStatsBar`. Header includes a **Stats** toggle button (appears when result data exists) that shows/hides the stats bar below the prompt. Input is disabled while thread status is `running`. Provides `ThreadActionsContext` with `sendPrompt`, `sendSilentPrompt`, `sendUserAnswer`. |
+| **AgentThread**        | Orchestrates the thread view. Three states: **(1)** No active thread & not composing → `WelcomePrompt` (centered hero with sparkle icon, textarea, suggestion chips). **(2)** Composing new → minimal prompt UI. **(3)** Active thread → header + scrollable message list + optional prompt queue + `PromptInput` + optional `ThreadStatsBar`. Header includes a **Stats** toggle button (appears when result data exists) that shows/hides the stats bar below the prompt. Input stays editable while agent runs; the Send button becomes a Stop button when running and input is empty. Submitting while agent runs queues the prompt (displayed above input with Play/Delete buttons); when agent finishes, first queued item auto-sends. Provides `ThreadActionsContext` with `sendPrompt`, `sendSilentPrompt`, `sendUserAnswer`. |
 | **MessageBubble**    | Message grouping logic (`groupMessages`) + rendering. Groups flat messages into: **user** (single message), **agent** (consecutive assistant messages merged, with thinking-time indicator), **result** (inline text: cost · tokens · duration), **system** (errors/info). `AgentGroup` detects plan-mode threads and renders `PlanBlock` instead of raw text. `UserBubble` hides build-prompt messages. |
 | **ThreadStatsBar**   | Toggleable bottom bar (below prompt input) showing aggregated stats across all runs in the thread: total cost, input/output token breakdown, context window usage % (with color-coded progress bar), total duration, turns, connected MCP servers, and model name. Uses `threadSessionInfo` from `useThreadsStore` for MCP and model data, and `getContextWindow()` from `lib/model-context.ts` for context window sizes. |
 | **ContentBlockView** | Renders individual content blocks: `text` → `MarkdownBlock` card if the text has headings and is ≥200 chars, otherwise preformatted text with URL linking. `tool_use` → `ToolUseBlock` card. `tool_result` → bordered card with scrollable output. `image` → inline `<img>` rendered from base64 data URL (via `block.source`). |
 | **PlanBlock**        | Collapsible inline card for plan-mode responses. Header with filename (slug + timestamp, e.g. `todo-app-plan_20260224T0700.md`), spinner/READY badge. Body renders markdown via `react-markdown` + `remark-gfm`. Footer has collapse toggle + **Build** button (sends plan to agent in `agent` mode via `sendSilentPrompt`). Build button states: active → building (spinner) → built (grayed checkmark). |
 | **MarkdownBlock**    | Collapsible inline card for structured text (task summaries, overviews). Same markdown rendering as PlanBlock but no Build button. Used automatically for text blocks with headings. |
-| **PromptInput**      | Reusable form: contentEditable div with inline file/snippet tags + toolbar. Toolbar includes `AgentDropdown` (per-thread agent selector), `ModelDropdown` (agent-aware model list), image attach button (`ImagePlus` icon), and purple send button. Supports image attachments via file picker or clipboard paste (PNG/JPEG/GIF/WebP, max 20 MB). Image previews shown as thumbnails above the text input with hover-to-remove buttons. Submit on Enter (Shift+Enter for newline). Exports `ImageAttachment` type. |
+| **PromptInput**      | Reusable form: contentEditable div with inline file/snippet tags + toolbar. Toolbar includes `AgentDropdown` (per-thread agent selector), `ModelDropdown` (agent-aware model list), image attach button (`ImagePlus` icon), and a context-aware action button: Send (purple) when there's content, Stop (red square) when agent is running and input is empty. Supports image attachments via file picker or clipboard paste (PNG/JPEG/GIF/WebP, max 20 MB). Image previews shown as thumbnails above the text input with hover-to-remove buttons. Submit on Enter (Shift+Enter for newline). Accepts `isRunning` and `onStop` props. Exports `ImageAttachment` type. |
 
 ### 4.3 Project Components (`components/projects/`)
 
 | Component                | Purpose |
 | ------------------------ | ------- |
 | **ProjectList**          | Centered card list (max-width 768px). Fetches projects on mount via `useProjectsStore`. Shows loading spinner, empty state, or grid of `ProjectCard`s. "New Project" button toggles `CreateProjectDialog`. Accepts `activeProjectId` prop — when a thread preview panel is open for a project, the `ThreadList` inside that project's card auto-expands. |
-| **ProjectCard**          | Bordered card displaying: project name, color-coded status badge, description, agent type label ("Claude Code" or "OpenCode"), creation date, open (external link) and delete (with confirm) buttons. |
-| **CreateProjectDialog**  | Modal overlay (`fixed inset-0 z-50`). Form fields: **Name** (required), **Description**, **Git Repository** (optional, cloned on create), **Agent** (select: Claude Code / OpenCode). Cancel + Create buttons. |
+| **ProjectCard**          | Bordered card displaying: project name, color-coded status badge, description, agent type label (Build / Plan / Sisyphus), creation date, per-project thread list (`ThreadList`), open (external link), new thread, and delete (with confirm) buttons. When `activeProjectId` matches, the thread list auto-expands. |
+| **ThreadList**           | Collapsible per-project thread sublist. Shows thread count, running/waiting/error badges. Each thread row: status icon, ID prefix, agent type badge, title, timestamp. Clicking a thread opens the `ThreadPreviewPanel` on the home page. |
+| **ThreadPreviewPanel**   | Fixed-width (480px) right panel on the home page. Renders a full `AgentThread` for the selected thread, allowing prompt input and agent interaction without leaving the project list. Expandable to full screen. |
+| **CreateProjectDialog**  | Modal overlay (`fixed inset-0 z-50`). Form fields: **Name** (required), **Sandbox Provider** (Daytona / Docker / Apple Container / Local grid selector with availability status), **Project Folder** (local provider only, with folder browser), **Description**, **Git Repository** (optional, cloned on create). Cancel + Create buttons. |
 
 ### 4.4 Editor Components (`components/editor/`)
 
@@ -277,13 +290,13 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 | Field / Action          | Type / Description |
 | ----------------------- | ------------------ |
 | `agentType`             | `AgentTypeId` — OpenCode agent name: `'build' \| 'plan' \| 'sisyphus'` (default `'build'`) |
-| `mode`                  | `AgentMode` — `'agent' \| 'plan' \| 'ask'` (default `'agent'`) |
-| `model`                 | `AgentModel` — provider/model string (default `'anthropic/claude-sonnet-4'`) |
-| `setAgentType(type)`    | Change agent; also resets `model` to `DEFAULT_MODEL` |
-| `setMode(mode)`         | Change agent mode |
+| `mode`                  | `AgentMode` — **deprecated**, derived from `agentType` (`plan` → `'plan'`, others → `'agent'`) |
+| `model`                 | `AgentModel` — provider/model string (default `''` = auto) |
+| `setAgentType(type)`    | Change agent; derives mode and resets model if incompatible |
+| `setMode(mode)`         | **Deprecated** — use `setAgentType` instead |
 | `setModel(model)`       | Change agent model |
 
-**Constants:** `AGENTS` (agent dropdown options), `AGENT_MODELS` (unified model list across all providers), `DEFAULT_MODEL` (default model for new threads).
+**Constants:** `AGENTS` (Build, Plan, Sisyphus — the agent dropdown options), `AGENT_MODELS` (unified model list across Anthropic, OpenAI, Google, OpenCode Zen providers), `DEFAULT_MODEL` (`''` = let OpenCode auto-select).
 
 When switching to a thread that has a stored `agentType`, `AgentThread` calls `setAgentType()` to restore the dropdowns.
 
@@ -363,8 +376,8 @@ All hooks share **one Socket.io connection** created by `useAgentSocket` (namesp
 
 ### 6.1 `useAgentSocket`
 
-- **Emits**: `subscribe_project`, `send_prompt` (with optional `agentType` and `images`), `execute_thread` (with optional `agentType`)
-- **Listens**: `subscribed`, `prompt_accepted`, `agent_message` (assistant turns & result summaries), `agent_status`, `agent_error`
+- **Emits**: `subscribe_project`, `send_prompt` (with optional `agentType` and `images`), `execute_thread` (with optional `agentType`), `stop_agent` (abort running agent), `user_answer`
+- **Listens**: `subscribed`, `prompt_accepted`, `agent_message` (assistant turns, result summaries, system info/retry), `agent_status`, `agent_error`
 - Pushes received messages into `useThreadsStore` and updates thread statuses.
 - Handles `system`/`init` messages: captures MCP servers, tools, model, permission mode, and agent version into `useThreadsStore.setThreadSessionInfo()`.
 - Result messages include full token data: `inputTokens`, `outputTokens`, `cacheCreationInputTokens`, `cacheReadInputTokens`, `durationApiMs`.

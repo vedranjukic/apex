@@ -1,26 +1,16 @@
-# Agent CLIs in the Sandbox – How It Works
+# Agent in the Sandbox – How It Works
 
 ## Overview
 
-Agent CLIs (Claude Code, OpenCode, or Codex) run inside Daytona sandboxes. The CLI binaries are **pre-installed in the sandbox snapshot image**. At runtime, a Node.js "bridge" layer is uploaded into the sandbox to manage the agent process and relay its output back to the API server over WebSocket. The bridge uses an adapter pattern — each agent type has an adapter that handles spawning, output parsing, and follow-up routing, while normalizing all output into a unified event format.
+OpenCode runs inside sandboxes (Daytona cloud, Docker local, Apple Container, or local host). The OpenCode binary is **pre-installed in the sandbox snapshot image**. At runtime, a Node.js "bridge" layer is uploaded into the sandbox to manage the agent process and relay its output back to the API server over WebSocket.
 
-### Multi-Agent Support
-
-The bridge now supports three agent backends selected by the project's `agentType` field:
-
-| Agent | Binary | Process Model | Follow-ups |
-|---|---|---|---|
-| **Claude Code** (`claude_code`) | `claude` | Long-lived process, JSONL stdin/stdout | Pipe user messages to stdin |
-| **OpenCode** (`open_code`) | `opencode` | Per-prompt process | `--session <id>` flag on new process |
-| **Codex** (`codex`) | `codex app-server` | Long-lived JSON-RPC server | `turn/start` on same thread |
-
-All three produce the same normalized events (`system`/`assistant`/`result`) so the gateway and dashboard remain agent-agnostic.
+Three named agents are available — **Build** (full autonomous coding), **Plan** (read-only analysis), and **Sisyphus** (orchestration) — all running through the same OpenCode runtime.
 
 ---
 
 ## 1. Sandbox Snapshot
 
-Sandboxes are created from a Daytona snapshot that already contains the `claude` CLI on `$PATH`:
+Sandboxes are created from a snapshot that already contains the `opencode` binary on `$PATH`:
 
 ```
 snapshot: config.snapshot || 'daytona-claude-l'
@@ -28,7 +18,7 @@ snapshot: config.snapshot || 'daytona-claude-l'
 
 > **Source:** `libs/orchestrator/src/lib/sandbox-manager.ts`
 
-No `npm install -g @anthropic-ai/claude-code` or similar step happens at runtime — the binary is baked into the image.
+No additional CLI installation happens at runtime — the binary is baked into the image.
 
 ---
 
@@ -42,7 +32,7 @@ A working directory is created to hold the bridge scripts and their dependencies
 
 ### 2.2 Upload bridge scripts
 
-Two scripts are uploaded via the Daytona SDK (`sandbox.fs.uploadFile`):
+Two scripts are uploaded via the sandbox provider's file system API:
 
 | File | Purpose |
 |---|---|
@@ -51,17 +41,11 @@ Two scripts are uploaded via the Daytona SDK (`sandbox.fs.uploadFile`):
 
 Both scripts are generated in-memory from template functions (`getBridgeScript()`, `getMcpTerminalScript()`) in `libs/orchestrator/src/lib/bridge-script.ts`.
 
-### 2.3 Register MCP server with agents
+### 2.3 Register MCP server with OpenCode
 
-Each agent type has its own MCP configuration:
+MCP configuration is written to `opencode.json` in the project directory with `mcp.terminal-server` configured as a stdio MCP server. The config also sets `experimental.mcp_timeout` and per-server `timeout` to 300000ms (5 min) to support the `ask_user` blocking flow.
 
-| Agent | MCP Config |
-|---|---|
-| Claude Code | `~/.claude.json` with `mcpServers.terminal-server` (stdio) |
-| OpenCode | `opencode.json` in project dir with `mcp.terminal-server` |
-| Codex | `codex mcp add terminal-server -- node <bridge-dir>/mcp-terminal-server.js` |
-
-The MCP terminal server provides tools for terminals, preview URLs, plan format, and `ask_user` (blocks until the user responds, triggers `waiting_for_input` status).
+The MCP terminal server provides tools for terminals, preview URLs, plan format, secrets listing, and `ask_user` (blocks until the user responds, triggers `waiting_for_input` status).
 
 ### 2.4 Install Node.js dependencies
 
@@ -72,35 +56,42 @@ npm init -y
 npm install ws node-pty
 ```
 
-### 2.5 Start the bridge process
-
-The bridge is started as a background Daytona session process:
+### 2.5 Pre-warm OpenCode
 
 ```bash
-cd /bridge/dir && ANTHROPIC_API_KEY="sk-..." node bridge.js
+opencode session list
 ```
 
-The bridge opens a WebSocket server on port 8080 (exposed via Daytona's preview URL mechanism). The orchestrator connects to this port from the outside.
+Triggers the one-time DB migration that can take 30+ seconds on first run, so it happens during provisioning rather than on the first prompt.
+
+### 2.6 Start the bridge process
+
+The bridge is started as a background session process:
+
+```bash
+cd /bridge/dir && ANTHROPIC_API_KEY="sk-proxy-placeholder" node bridge.js
+```
+
+The bridge opens a WebSocket server on port 8080 (exposed via the sandbox provider's preview URL mechanism or container networking). The orchestrator connects to this port from the outside.
 
 ---
 
-## 3. How Claude CLI Is Invoked
+## 3. How OpenCode Is Invoked
 
-When a user sends the first prompt in a thread, the bridge spawns the Claude CLI as a long-lived child process with bidirectional JSON streaming:
+When a user sends a prompt in a thread, the bridge spawns OpenCode as a per-prompt PTY child process:
 
 ```bash
-claude --dangerously-skip-permissions --verbose --output-format stream-json --input-format stream-json -p "<prompt>"
+opencode run --format json --agent build -m anthropic/claude-sonnet-4 "prompt"
 ```
 
 | Flag | Purpose |
 |---|---|
-| `--dangerously-skip-permissions` | Auto-approves all tool use (file edits, commands, etc.) without user confirmation |
-| `--verbose` | Enables verbose logging |
-| `--output-format stream-json` | Outputs structured JSON messages, one per line, enabling real-time streaming |
-| `--input-format stream-json` | Accepts structured JSONL input on stdin, enabling follow-up prompts and user answers mid-conversation |
-| `-p <prompt>` | The initial prompt text |
+| `--format json` | Outputs structured JSONL events, enabling real-time streaming |
+| `--agent <name>` | Selects the agent: `build`, `plan`, or `sisyphus` |
+| `-m <model>` | Selects the model (e.g. `anthropic/claude-sonnet-4`, `openai/gpt-5`) |
+| `--session <id>` | Resumes a previous session for context continuity (on follow-up prompts) |
 
-The process is spawned via PTY (`node-pty`) for line-buffered output, and the bridge writes JSONL messages to the PTY's stdin for follow-up prompts and user answers. The `ANTHROPIC_API_KEY` environment variable is set in the bridge process and inherited by the Claude child process.
+The process is spawned via PTY (`node-pty`) because OpenCode (a Go binary) buffers stdout when not connected to a terminal. LLM API keys are set via proxy environment variables (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`) that point to the API server's LLM key proxy — real keys never enter the container.
 
 ---
 
@@ -117,14 +108,13 @@ API Server (AgentGateway)
   ▼
 Bridge (inside sandbox, port 8080 via WSS preview URL)
   │
-  │  spawn("claude", [...]) on first prompt
+  │  pty.spawn("opencode", ["run", ...]) per prompt
   ▼
-Claude CLI Process (long-lived, bidirectional)
+OpenCode Process (per-prompt, session-based context)
   │
-  │  stdout → bridge: stream-json lines
-  │  stdin  ← bridge: follow-up prompts + user answers (JSONL)
+  │  stdout → bridge: JSONL events (step_start, tool_use, text, step_finish)
   ▼
-Bridge parses JSON lines
+Bridge parses JSONL, normalizes events
   │
   │  WebSocket: { type: "claude_message", data: ... }
   ▼
@@ -140,41 +130,37 @@ Dashboard (real-time rendering)
 | Type | Description |
 |---|---|
 | `bridge_ready` | Bridge is up and listening |
-| `claude_message` | Parsed JSON message from Claude's stream-json output |
+| `claude_message` | Normalized agent event (system/assistant/result) |
 | `claude_stdout` | Raw stdout line that couldn't be parsed as JSON |
-| `claude_stderr` | Stderr output from Claude |
-| `claude_exit` | Claude process exited (includes exit code) |
-| `claude_error` | Error spawning or managing Claude |
+| `claude_stderr` | Stderr output from agent |
+| `claude_exit` | Agent process exited (includes exit code) |
+| `claude_error` | Error spawning or managing agent |
 | `ask_user_pending` | Agent asked a question via MCP `ask_user` — thread status → `waiting_for_input` |
 | `ask_user_resolved` | User answered (or timeout) — thread status → `running` |
 | `terminal_output` | PTY terminal output |
 | `terminal_created` | New terminal session created |
 | `terminal_exit` | Terminal session ended |
 
+Wire type names are kept as `claude_*` for backward compatibility.
+
 ### Message types: orchestrator → bridge
 
 | Type | Description |
 |---|---|
-| `start_claude` | Spawn a new Claude process, or pipe a follow-up prompt to an existing one |
-| `claude_user_answer` | Pipe the user's answer to an `AskUserQuestion` tool call to Claude's stdin |
-| `claude_input` | Raw stdin data for a running Claude process |
-| `stop_claude` | Kill the Claude process for a thread |
+| `start_claude` | Spawn a new agent process with `agent` field for agent selection |
+| `claude_user_answer` | Resolve a pending `ask_user` question with the user's answer |
+| `claude_input` | Raw stdin data for a running process |
+| `stop_claude` | Kill the agent process for a thread |
 
 ---
 
 ## 5. Follow-up Prompts & AskUserQuestion
 
-The Claude process stays alive across multiple turns within a thread. When a follow-up message arrives, the bridge pipes it as a JSONL user message to the running process's stdin:
-
-```json
-{"type":"user","message":{"role":"user","content":"follow-up text"}}
-```
-
-A new process is only spawned if the previous one has exited (e.g. after a crash or page reload), in which case `--resume <sessionId>` is used to restore context.
+OpenCode uses a per-prompt process model. For follow-up prompts, the bridge kills the old process and spawns a new one with `--session <sessionId>` to resume context.
 
 ### AskUserQuestion / ask_user
 
-Claude's native `AskUserQuestion` tool is **disallowed** in all modes via `--disallowedTools`. Instead, agents use the MCP `ask_user` tool (`mcp__terminal-server__ask_user`), which routes through the bridge:
+All agents use the MCP `ask_user` tool (`mcp__terminal-server__ask_user`), which routes through the bridge:
 
 1. Agent calls MCP `ask_user` → MCP server POSTs to bridge `/internal/ask-user`
 2. Bridge emits `claude_message` (AskUserQuestion tool_use) + `ask_user_pending` over WebSocket
@@ -184,7 +170,7 @@ Claude's native `AskUserQuestion` tool is **disallowed** in all modes via `--dis
 6. Bridge emits `ask_user_resolved` → status → `running`; MCP returns answer to agent
 7. Pending questions time out after 5 minutes
 
-The sandbox CLAUDE.md / AGENTS.md instructions explicitly tell agents to use `mcp__terminal-server__ask_user` for questions and not ask in plain text.
+The sandbox `AGENTS.md` instructions explicitly tell agents to use `mcp__terminal-server__ask_user` for questions and not ask in plain text.
 
 ---
 
@@ -194,9 +180,9 @@ The sandbox CLAUDE.md / AGENTS.md instructions explicitly tell agents to use `mc
 |---|---|
 | `libs/orchestrator/src/lib/sandbox-manager.ts` | Creates sandboxes, installs bridge, manages WebSocket connections, sends prompts |
 | `libs/orchestrator/src/lib/bridge-script.ts` | Generates the `bridge.js` source code (template function) |
-| `libs/orchestrator/src/lib/mcp-terminal-script.ts` | Generates the MCP terminal server (ask_user, terminals, preview URLs) |
+| `libs/orchestrator/src/lib/mcp-terminal-script.ts` | Generates the MCP terminal server (ask_user, terminals, preview URLs, secrets) |
 | `libs/orchestrator/src/lib/types.ts` | TypeScript types for all bridge protocol messages |
-| `apps/api/src/modules/agent/agent.gateway.ts` | Socket.io gateway that connects the dashboard to the sandbox manager |
+| `apps/api/src/modules/agent/agent.ws.ts` | WebSocket gateway that connects the dashboard to the sandbox manager |
 | `apps/api/src/modules/projects/projects.service.ts` | Triggers sandbox provisioning on project creation |
 | `apps/cli/internal/sandbox/scripts.go` | Go CLI mirror of bridge + MCP scripts |
 | `apps/cli/internal/thread/bridge.go` | Go CLI bridge message processing (handles `ask_user_pending`/`ask_user_resolved`) |

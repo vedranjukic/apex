@@ -1,23 +1,45 @@
-# Apex — AI Coding Agents in Secure Cloud Sandboxes
+# Apex — Agentic Development Environment
 
-Run AI coding agents like Claude Code and Codex inside secure Daytona cloud sandboxes. Two interfaces, one infrastructure: a full IDE for interactive development, and a CLI that makes remote agents feel local.
+An agentic development environment and task manager that allows effortless multitasking across a large number of agentic coding tasks running in parallel. Each task runs in its own secure sandbox — cloud or local — while you oversee, steer, and interact with them all from a single interface. Two clients, one infrastructure: a full IDE for interactive development, and a CLI that makes remote agents feel local.
 
 ---
 
 ## Apex IDE
 
-A desktop and web development environment for building applications interactively with AI agents. Think VS Code meets an AI pair programmer — with everything running safely in a cloud sandbox.
+A next-generation, agent-centric IDE optimized for managing parallel agent sessions without compromising the developer experience. Available as a desktop app and web interface.
+
+### Project List (Home)
+
+The home page serves as a project dashboard with inline thread management:
+
+- **Project cards** — each project shows name, status badge, description, agent type, creation date, and a collapsible thread list
+- **Inline thread list** — per-project collapsible section showing all threads with status icons (running/waiting/completed/error), agent type badges, ID prefix, title, and timestamps
+- **Thread preview panel** — clicking any thread opens a 480px right panel with a full agent thread (prompt input, streamed responses, tool calls) — interact with agents without leaving the project list
+- **Fork groups** — projects forked from the same parent are grouped together with expandable fork rows
+- **Quick access** — Secrets (shield icon) and Settings buttons in the header; "New Thread" button on each project card
+- **New Project** dialog with sandbox provider selection (Daytona, Docker, Apple Container, Local), folder browser for local provider, git repo URL, and description
 
 ### Workspace Layout
 
-A VS Code-inspired workspace with resizable panels and a familiar project-oriented structure:
+An agent-centric workspace that puts threads and agent interaction front and center, while maintaining a full IDE experience with resizable panels and familiar project-oriented structure:
 
 - **Activity Bar** — narrow icon strip on the far left for switching between Explorer, Source Control, Search, and Settings
 - **Side Panel** — wider content area next to the activity bar showing the active category (file tree, git status, search results, settings form)
 - **Thread Panel** — central area where you interact with the AI agent, see streamed responses, and review tool calls and code edits
-- **Terminal Panel** — resizable bottom panel with multiple terminal tabs, full PTY support, and Tokyo Night theme
+- **Editor Panel** — Monaco-based code editor with tabs, save, and dirty-state indicators; toggle between thread and editor views from the top bar
+- **Terminal Panel** — resizable bottom panel with multiple terminal tabs, a ports tab, full PTY support, and Tokyo Night theme
 - **Right Sidebar** — thread list with search, new thread button, and status indicators for each session
-- **Status Bar** — project name, git branch picker, sync status, sandbox health indicator, and IDE launcher button
+- **Status Bar** — project name, git branch picker, sync status, sandbox health indicator, port count, and IDE launcher button
+
+### Agents
+
+Three AI agents powered by OpenCode, selectable per-project or per-thread:
+
+- **Build** — full autonomous coding agent (default)
+- **Plan** — read-only analysis and planning, produces plan documents
+- **Sisyphus** — orchestration agent (Anthropic models only)
+
+Each agent supports models from multiple providers (Anthropic, OpenAI, Google, OpenCode Zen free). The project-level default can be overridden on any individual thread via the agent dropdown in the prompt toolbar.
 
 ### AI Agent Thread
 
@@ -25,26 +47,33 @@ Send prompts and watch the agent work in real time:
 
 - **Streamed responses** — every thought, tool call, code edit, and result from the agent appears live as it happens
 - **Message grouping** — consecutive assistant messages are merged into coherent agent blocks with a "Thought for Xs" timing indicator
+- **Stop button** — while the agent is running the Send button becomes a Stop button (same size, same position); click it to abort the current agent execution immediately
+- **Prompt queue** — type and submit prompts while the agent is working; queued prompts appear above the input with Play (stop current and send this) and Delete buttons; when the agent finishes, the first queued prompt auto-sends
+- **Thread stats bar** — live display of cost, tokens used, context window percentage, active MCP servers, and current model
 - **Multiple concurrent threads** — run several agent sessions in the same sandbox, each with its own conversation context
-- **Session continuity** — follow-up prompts resume the agent's session with full conversational context preserved
-- **AskUserQuestion flow** — when the agent needs input, a multiple-choice UI appears inline; select your answer and the agent continues
-- **@ File References** — type `@` in the prompt to open an autocomplete file picker, inserting file/folder references as inline tags that are sent alongside your prompt
+- **Conversation context** — follow-up prompts include a summary of prior messages so the agent has full conversational awareness
+- **AskUserQuestion flow** — when the agent needs input, a multiple-choice UI appears inline; select your answer and the agent continues (unified via MCP across all agents)
+- **@ File & Folder References** — type `@` in the prompt to open an autocomplete file picker, inserting file or folder references as inline tags sent alongside your prompt
+- **Code snippet references** — copy code from the editor and paste into the prompt to attach line-precise snippet references (coordinates only, no duplicated code)
+- **Image attachments** — attach PNG, JPEG, GIF, or WebP images (up to 20 MB) via the toolbar button or paste; thumbnails appear in the prompt and images render in message bubbles
+- **Markdown blocks** — long structured responses render in collapsible markdown cards
 - **Suggestion chips** — empty-state welcome screen with quick-start prompt suggestions
 
 ### Plan Mode
 
-A dedicated mode for designing before building:
+When using the **Plan** agent, responses render in a dedicated plan format:
 
-- **Plan responses** render in a collapsible inline card with a generated filename, markdown body, and a READY badge on completion
-- **Build button** — one click sends the plan to the agent in execution mode, turning the design into working code
+- **Plan cards** render in a collapsible inline card with a generated filename, markdown body, and a READY badge on completion
+- **Build button** — one click sends the plan to the Build agent in execution mode, turning the design into working code
 - **Persistent** — plan cards reconstruct from message history after page refresh
 
-### Agent Modes & Models
+### Integrated Editor
 
-- **Agent mode** — full autonomous execution (default)
-- **Plan mode** — agent produces a plan document instead of making changes
-- **Ask mode** — agent answers questions without modifying files
-- **Model selection** — switch between Sonnet, Opus, and Haiku on the fly
+A Monaco-based code editor built into the workspace:
+
+- **Tabbed interface** — open multiple files with tab management, dirty-state dot indicators, and save support
+- **Thread ↔ Editor toggle** — switch the center panel between the AI thread and the code editor from the top bar
+- **Snippet copy** — copying code from the editor puts structured snippet data on the clipboard for pasting into prompts as precise references
 
 ### Integrated Terminals
 
@@ -67,6 +96,7 @@ VS Code-style full-text search across the entire project workspace:
 - **Include / Exclude filters** — comma-separated glob patterns to narrow results
 - **Grouped results** — matches grouped by file, each showing line number and highlighted content
 - **Smart defaults** — common directories (`node_modules`, `dist`, `.git`, `__pycache__`, etc.) are excluded automatically
+- **Result limits** — results capped at 2000 lines with a 35-second timeout for large codebases
 - **Click to open** — clicking a match opens the file in the editor
 
 ### Source Control (Git)
@@ -79,15 +109,29 @@ Full git integration built into the left sidebar and status bar:
 - **Push / Pull / Sync** — one-click sync from the status bar with ahead/behind counts
 - **Branch management** — branch picker dropdown from the status bar with create, create from, checkout detached, and a scrollable branch list sorted by last used
 - **Optimistic UI** — staging, unstaging, and discarding update instantly in the UI before the server confirms
+- **Conflict awareness** — conflicted files appear in a dedicated section for resolution
+- **Large changeset guard** — warns when more than 100 files have changed (configurable), with an option to analyze `.gitignore` with the AI agent
 
 ### Port Forwarding
 
 Automatic discovery of processes listening on TCP ports inside the sandbox:
 
-- **Ports tab** — appears in the bottom panel alongside terminals, showing port number, process name, and an "Open Preview" button
-- **Preview URLs** — clicking opens a proxied public URL for the port via the Daytona SDK
+- **Ports tab** — appears in the bottom panel alongside terminals, showing port number, process name, and an "Open Preview" button with a badge for active port count
+- **Preview URLs** — for Daytona sandboxes, opens a signed public URL; for local providers (Docker/Apple Container), routes through a built-in HTTP preview proxy
+- **Desktop TCP forwarding** — in the desktop app, ports can be forwarded to localhost for direct browser access
+- **Agent access** — agents can discover preview URLs via the `get_preview_url` MCP tool
 - **Status bar indicator** — shows the current port count with a broadcast icon; click to jump to the ports tab
 - **Auto-scan** — the bridge scans ports every 3 seconds and pushes updates only when the list changes
+
+### Secrets Management
+
+Manage API secrets (Stripe, Twilio, etc.) that are injected into outbound requests without ever entering sandbox containers:
+
+- **Secrets page** — accessible from the project list header (shield icon) at `/secrets`
+- **CRUD interface** — add, edit, and delete secrets with name, value, target domain, and auth type
+- **Auth types** — Bearer token, API key header, HTTP Basic, or custom header
+- **Values never exposed** — secret values are stored server-side and masked in the UI; agents can discover secret names via the `list_secrets` MCP tool but never see values
+- **Transparent proxy** — a MITM HTTPS proxy intercepts outbound traffic from containers and injects credentials for matching domains; non-secret domains pass through as transparent tunnels
 
 ### Command Palette
 
@@ -96,31 +140,48 @@ Every action is a registered command, accessible via `Ctrl+Shift+P`:
 - **Searchable list** — type to filter all available commands by name
 - **Customizable shortcuts** — user-editable `keybindings.json` for overriding defaults
 - **Scoped commands** — global commands work everywhere; project-scoped commands (terminal, agent slash commands) are available when a project is open
+- **Theme commands** — cycle through themes or jump directly to Midnight Blue, Dark, or Light
+- **Agent commands** — slash commands like `/compact`, `/cost`, `/plan`, `/diff`, and more are accessible from the palette
 
-### Desktop App (Electron)
+### Themes
+
+Three built-in color themes, switchable from the command palette or settings:
+
+- **Midnight Blue** — deep blue tones (default)
+- **Dark** — standard dark theme
+- **Light** — light theme for bright environments
+
+### Desktop App
 
 The IDE is available as a native desktop application for macOS, Linux, and Windows:
 
-- **Standalone packaging** — self-contained app that bundles the API server and dashboard; no browser tab required
+- **Lightweight packaging** — built on Electrobun (Bun + system WebKit) with a ~12 MB bundle; no Chromium overhead
 - **Native window management** — multiple project windows, draggable title bar, macOS dock behavior
-- **Open in IDE** — detects locally installed Cursor or VS Code and launches a native SSH remote connection to the sandbox
+- **Open in IDE** — detects locally installed Cursor or VS Code and launches a native SSH remote connection to the sandbox (managed SSH config with 24-hour tokens)
+- **Code-server fallback** — in the web version, "Open in IDE" launches a code-server URL instead
 - **Settings UI** — configure API keys from a built-in settings page instead of `.env` files
+- **Delta updates** — binary diff (bsdiff) updates for small download sizes
 - **Identical features** — everything that works in the web version works identically in the desktop app
 
 ### Layout Persistence
 
-Your workspace layout saves automatically and restores across sessions and devices:
+Your workspace layout saves automatically and restores across sessions:
 
 - Terminal panel state (open/closed, height)
 - Active terminal tab
 - Active thread session
-- State is stored on the sandbox filesystem, so it follows you to any browser or device
+- Sidebar states (left/right, open/closed)
+- Editor tabs and scroll offsets
+- Dual persistence — instant restore from localStorage, canonical state synced to the sandbox filesystem
+- Full-screen loading overlay during restore to prevent layout flicker
 
 ---
 
 ## Apex CLI
 
-A terminal-first interface that wraps AI coding agents running inside Daytona sandboxes. The agent executes remotely in an isolated environment, but the experience feels like it's running locally — you interact through your existing terminal workflow, and Apex handles provisioning, connection, and session management transparently.
+A terminal-first interface that wraps AI coding agents running inside sandboxes. The agent executes remotely in an isolated environment, but the experience feels like it's running locally — you interact through your existing terminal workflow, and Apex handles provisioning, connection, and session management transparently.
+
+The CLI shares the same WebSocket bridge and SQLite database as the IDE — projects and threads are accessible from either interface.
 
 ### Quick Start
 
@@ -144,8 +205,9 @@ apex open my-app
 
 Interactive wizard to set up API keys and settings:
 
-- Anthropic API Key (for Claude)
-- Daytona API Key (for sandbox provisioning)
+- Anthropic API Key (for Claude models)
+- OpenAI API Key (for GPT models)
+- Daytona API Key (for cloud sandbox provisioning)
 - Daytona API URL and snapshot configuration
 - Values stored in a shared SQLite database
 
@@ -214,6 +276,8 @@ When you `apex open` or `apex create` a project, you enter a rich terminal REPL:
 - **Streamed rendering** — agent thoughts, tool calls, and code edits render in real time
 - **Session commands** — `:new` (new thread), `:threads` (list threads), `:open <id>` (switch thread), `:quit`
 - **Slash commands** — `/help`, `/diff`, `/undo`, `/commit`, `/status`, `/cost`, `/model`, `/history`, `/clear`, `/add <file>`, `/config`, `/mcp`
+- **Multi-thread support** — switch between threads while streaming continues
+- **AskUserQuestion** — agent questions appear inline with a `?` indicator; respond directly in the REPL
 - **Session continuity** — follow-up prompts carry full conversation context
 
 ### Scriptable & Composable
@@ -227,25 +291,69 @@ The CLI is designed for automation:
 
 ---
 
+## Sandbox Providers
+
+Apex supports multiple sandbox providers, selectable per-project at creation time:
+
+| Provider | Environment | Use Case |
+|---|---|---|
+| **Daytona** | Cloud VM | Production use, team collaboration, project forking |
+| **Docker** | Local container | Local development, offline work, fast iteration |
+| **Apple Container** | macOS VM (macOS 26+) | Native macOS sandbox with hardware isolation |
+| **Local** | Host folder | Direct host filesystem access, no container overhead |
+
+All container-based providers use the same default sandbox image with OpenCode and the toolchain pre-installed. The WebSocket bridge is uploaded and started automatically on first connection.
+
+- **Daytona** supports project forking (snapshot and clone a sandbox)
+- **Docker** requires Docker socket access or Docker-in-Docker
+- **Apple Container** requires macOS 26+ and the `container` CLI
+- **Local** provider uses a host folder directly with a local PTY on the API server
+
+---
+
+## Security
+
+### LLM API Key Proxy
+
+LLM provider keys (Anthropic, OpenAI) never enter sandbox containers. The API server runs a streaming reverse proxy that injects real API keys server-side. Containers receive placeholder keys and base URLs pointing at the proxy, so the agent operates normally without ever seeing actual credentials.
+
+### Secrets Proxy (MITM)
+
+User-defined API key secrets (Stripe, Twilio, etc.) are managed via a transparent MITM HTTPS proxy:
+
+- Secret values are stored server-side and never enter containers
+- A forward proxy intercepts outbound HTTPS traffic from containers
+- For domains with configured secrets, TLS is terminated with a dynamic certificate, the real auth header is injected, and the request is forwarded upstream
+- Non-secret domains pass through as transparent tunnels
+- Containers get proxy environment variables, the CA cert in the system trust store, and placeholder env vars so SDKs can initialize
+- Agents can discover secret names (never values) via the `list_secrets` MCP tool
+- Manage secrets from the `/secrets` page in the IDE
+
+---
+
 ## Shared Infrastructure
 
 Both the IDE and CLI are built on the same sandboxing layer:
 
 | Component | Description |
 |---|---|
-| **Daytona SDK** | Sandbox lifecycle management — create, start, stop, destroy, SSH access, port preview URLs |
+| **Sandbox Providers** | Pluggable provider interface — Daytona (cloud), Docker (local), Apple Container (macOS VM), Local (host folder) |
+| **OpenCode Runtime** | Single agent runtime with three named agents (Build, Plan, Sisyphus) and models from any configured provider |
 | **WebSocket Bridge** | Node.js server running inside each sandbox that spawns agents, manages PTY sessions, and streams structured JSON output |
-| **MCP Terminal Server** | Gives agents the ability to open, read, write to, and close terminals inside the sandbox |
-| **Session-per-Thread** | Each thread maintains a long-lived agent process; follow-ups pipe to stdin as JSONL, preserving full context |
+| **MCP Terminal Server** | Gives agents the ability to open, read, write to, and close terminals, discover preview URLs, list secrets, and ask users questions |
+| **LLM API Key Proxy** | Streaming reverse proxy injecting real LLM keys server-side; containers never see credentials |
+| **Secrets Proxy** | MITM HTTPS proxy for user-defined API secrets; values never enter containers |
+| **Session-per-Thread** | Each thread maintains conversational context; follow-up prompts include a conversation history summary built from stored messages |
 | **Multi-thread Concurrency** | Multiple threads can have concurrent agent processes in the same sandbox |
 | **Git-ready Sandboxes** | Every project starts version-controlled — either cloned from a provided repo or initialized with `git init` |
 | **SQLite Database** | Projects, threads, and messages persisted locally (shared between CLI and desktop app) |
+| **Preview Proxy** | HTTP reverse proxy for local providers; signed URLs for Daytona; TCP forwarding for desktop |
 
 ### How It Works
 
-1. **Create a project** — optionally link a Git repository to clone into the sandbox
-2. **Sandbox provisioned** — a Daytona sandbox spins up from a snapshot with the AI agent pre-installed; a Node.js bridge is uploaded and started
-3. **Start a thread** — send a prompt; the bridge spawns the agent process and pipes structured JSON back over WebSocket
+1. **Create a project** — choose a sandbox provider (Daytona, Docker, Apple Container, or Local) and optionally link a Git repository
+2. **Sandbox provisioned** — a sandbox spins up from a snapshot with OpenCode pre-installed; the Node.js bridge is uploaded and started
+3. **Start a thread** — choose an agent (Build, Plan, or Sisyphus) and a model, send a prompt; the bridge spawns the agent process and streams structured JSON back over WebSocket
 4. **Stream in real time** — every tool call, code edit, and thought streams back live
 5. **Interactive terminals** — open terminals alongside the agent; the agent can create its own via MCP tools
 6. **Session continuity** — follow-up prompts resume the agent's session with full context
@@ -258,12 +366,16 @@ Download the latest release from the [Releases](https://github.com/daytonaio/ape
 
 ### Requirements
 
-- A [Daytona](https://www.daytona.io/) account with API access
-- An API key for your coding agent (Anthropic for Claude Code, OpenAI for Codex)
+- An API key for your preferred model provider:
+  - **Anthropic** API key for Claude models
+  - **OpenAI** API key for GPT models
+  - OpenCode Zen offers free models (no key required)
+- For cloud sandboxes: a [Daytona](https://www.daytona.io/) account with API access
+- For local sandboxes: Docker installed, or macOS 26+ for Apple Container
 
 ### IDE
 
-Download the Electron app for your platform and launch it. Configure your API keys from the Settings page.
+Download the desktop app for your platform and launch it. Configure your API keys from the Settings page.
 
 ### CLI
 

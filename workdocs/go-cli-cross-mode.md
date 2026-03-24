@@ -5,7 +5,7 @@ The project has two independent clients that interact with sandboxes:
 - `apps/cli` -- Go CLI for terminal-based usage (Cobra, Gorilla WebSocket, Daytona Go SDK)
 - `apps/api` -- NestJS backend for the web dashboard
 
-They **never communicate directly**. Both connect to the same bridge (`bridge.js`) running inside each Daytona sandbox over WebSocket (port 8080, exposed via Daytona preview URL).
+They **never communicate directly**. Both connect to the same bridge (`bridge.js`) running inside each sandbox over WebSocket (port 8080, exposed via the sandbox provider's preview URL mechanism).
 
 ## Bridge Protocol
 
@@ -14,9 +14,9 @@ JSON messages over WebSocket. Canonical types live in two places that **must sta
 - **TypeScript (source of truth):** `libs/orchestrator/src/lib/types.ts` -- `BridgeMessage` union, `ClaudeMessage`, `ContentBlock`, terminal/file/layout messages
 - **Go (mirror):** `apps/cli/internal/types/types.go` -- `ClaudeOutput`, `ContentBlock`, `BridgeMessage` in `apps/cli/internal/sandbox/bridge.go`
 
-Key message types: `bridge_ready`, `start_claude` (includes optional `agentType` field), `claude_message`, `claude_exit`, `claude_user_answer`, `ask_user_pending`, `ask_user_resolved`, `terminal_create`, `terminal_output`, `file_changed`.
+Key message types: `bridge_ready`, `start_claude` (includes `agent` field), `claude_message`, `claude_exit`, `claude_user_answer`, `ask_user_pending`, `ask_user_resolved`, `terminal_create`, `terminal_output`, `file_changed`.
 
-The `start_claude` message now carries an `agentType` field (`claude_code`, `open_code`, or `codex`) that the bridge uses to select the appropriate agent adapter. The wire type name is kept as `start_claude` for backward compatibility.
+The `start_claude` message carries an `agent` field (`build`, `plan`, or `sisyphus`) that selects the OpenCode agent. Wire type names are kept as `start_claude` / `claude_*` for backward compatibility.
 
 ## Bridge Script Duplication
 

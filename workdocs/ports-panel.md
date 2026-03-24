@@ -42,7 +42,7 @@ Preview Proxy (Docker / Apple Container only):
 | `libs/orchestrator/src/lib/sandbox-manager.ts` | `ports_update` event in `SandboxManagerEvents`, handler in WS message block, `getPortPreviewUrl()` method, `registerProjectId()` for proxy URL generation |
 | `apps/api/src/modules/agent/agent.ws.ts` | `ports_update` forwarding, `port_preview_url` handler (returns proxy path for local providers), `forward_port`/`unforward_port` TCP forwarding |
 | `apps/api/src/modules/preview/preview.routes.ts` | HTTP reverse proxy: `/preview/:projectId/:port/*` → container IP |
-| `apps/api/src/modules/preview/port-forwarder.ts` | TCP port forwarding for Docker/Apple Container sandboxes (used by Electron) |
+| `apps/api/src/modules/preview/port-forwarder.ts` | TCP port forwarding for Docker/Apple Container sandboxes (used by the desktop app) |
 | `apps/dashboard/src/stores/ports-store.ts` | Zustand store: `ports` array, `setPorts`, `reset` |
 | `apps/dashboard/src/hooks/use-ports-socket.ts` | Socket hook: listens for `ports_update`, exposes `requestPreviewUrl(port)` with promise-based one-shot listener |
 | `apps/dashboard/src/stores/terminal-store.ts` | Extended with `activeBottomTab: 'terminals' \| 'ports'` and `setActiveBottomTab` action |
@@ -95,7 +95,7 @@ The URL returned depends on the project's provider:
 
 ### TCP Port Forwarding (Docker / Apple Container only)
 
-For local sandboxes, the frontend can request a TCP tunnel via the `forward_port` event. The API binds a local port and pipes TCP connections to the container IP. This is primarily used by the Electron app where `localhost` URLs are needed.
+For local sandboxes, the frontend can request a TCP tunnel via the `forward_port` event. The API binds a local port and pipes TCP connections to the container IP. This is primarily used by the desktop app where `localhost` URLs are needed.
 
 **Client → Server**: `forward_port`
 ```typescript

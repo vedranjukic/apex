@@ -1,6 +1,6 @@
 # Apex CLI
 
-A command-line interface for Apex that provides a Claude Code-like experience running in Daytona cloud sandboxes.
+A command-line interface for Apex — run AI coding agents in secure sandboxes from your terminal.
 
 ## Installation
 
@@ -56,8 +56,9 @@ Interactive wizard to set or update API keys and settings. Values are stored in 
 
 Prompts for:
 
-- **Anthropic API Key** — required for Claude
-- **Daytona API Key** — required for sandbox provisioning
+- **Anthropic API Key** — for Claude models
+- **OpenAI API Key** — for GPT models
+- **Daytona API Key** — for cloud sandbox provisioning
 - **Daytona API URL** — API endpoint (default `https://app.daytona.io/api`)
 - **Daytona Snapshot** — base sandbox snapshot
 
@@ -136,7 +137,7 @@ The `<project>` argument accepts a project ID, exact name, or unambiguous name p
 
 **Behavior:**
 
-- **Interactive mode** (no flags) — opens a REPL where you type prompts and receive streamed responses. Supports session commands (`:new`, `:threads`, `:open <id>`, `:quit`) and Claude-style slash commands (`/help`, `/diff`, `/undo`, `/commit`, `/status`, `/cost`, `/model`, `/history`, `/clear`, `/add <file>`, `/config`, `/mcp`).
+- **Interactive mode** (no flags) — opens a REPL where you type prompts and receive streamed responses. Supports session commands (`:new`, `:threads`, `:open <id>`, `:quit`) and slash commands (`/help`, `/diff`, `/undo`, `/commit`, `/status`, `/cost`, `/model`, `/history`, `/clear`, `/add <file>`, `/config`, `/mcp`).
 - **Prompt mode** (`-p`) — creates a new thread session, sends the prompt, streams the full response, and exits. If the named project doesn't exist, it is created and a sandbox is provisioned automatically.
 - **Stream mode** (`-s`) — sends progress output (spinner, tool calls, cost summary) to stderr so that stdout contains only the assistant's text. Useful for piping results into other commands or capturing clean output.
 

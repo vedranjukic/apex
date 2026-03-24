@@ -27,10 +27,8 @@ All UI state is in Zustand stores under `apps/dashboard/src/stores/`:
 - `file-tree-store.ts` -- directory cache for the file explorer
 - `projects-store.ts` -- project list
 - `plan-store.ts` -- plan mode state: plan text accumulation, completion, content-based detection
-- `agent-settings-store.ts` -- agent mode (agent/plan/ask) and model selection
+- `agent-settings-store.ts` -- agent type (build/plan/sisyphus) and model selection
 - `theme-store.ts` -- color theme selection (midnight-blue, dark, light), persisted to localStorage
-- `plan-store.ts` -- plan mode state: plan text accumulation, completion, content-based detection
-
 Access store actions outside React components with `useXxxStore.getState().action()`.
 
 ## Conventions
@@ -43,7 +41,7 @@ Access store actions outside React components with `useXxxStore.getState().actio
 
 ## Go CLI ↔ Node.js App Cross-Mode
 
-The Go CLI (`apps/cli`) and NestJS API (`apps/api`) are independent clients that both connect to a shared bridge inside Daytona sandboxes via WebSocket. Types and bridge scripts must stay in sync across Go and TypeScript.
+The Go CLI (`apps/cli`) and NestJS API (`apps/api`) are independent clients that both connect to a shared bridge inside sandboxes via WebSocket. Types and bridge scripts must stay in sync across Go and TypeScript.
 
 When adding, modifying, or debugging the bridge protocol, sandbox interaction, or cross-language types, read `workdocs/go-cli-cross-mode.md` for the full protocol spec, file map, build commands, and sync checklist.
 
@@ -58,12 +56,12 @@ Additional docs live in `workdocs/`. Read these only when working on the relevan
 - `workdocs/prompt-file-references.md` -- prompt input, @ file references, code snippet references, image attachments, FilePicker, tag system
 - `workdocs/claude-sandbox-installation.md` -- sandbox provisioning and bridge setup
 - `workdocs/sandbox-providers.md` -- sandbox provider interface, Daytona/Docker implementations, per-project selection, how to add providers
-- `workdocs/multi-agent-bridge.md` -- multi-agent adapter pattern (Claude Code, OpenCode, Codex), protocols, testing
-- `workdocs/multi-agent-bridge.md` -- multi-agent adapter pattern (Claude Code, OpenCode, Codex), protocols, testing
+- `workdocs/multi-agent-bridge.md` -- OpenCode bridge architecture, agent types (Build/Plan/Sisyphus), protocols, testing
 - `workdocs/search-in-files.md` -- search panel, grep backend, socket protocol, default excludes
 - `workdocs/source-control.md` -- git source control panel, staging, committing, optimistic UI, AI commit messages
 - `workdocs/ports-panel.md` -- port scanning, preview URLs, bottom panel ports tab, status bar indicator
-- `workdocs/electron-desktop.md` -- Electron desktop app, settings system, native modules, packaging
+- `workdocs/electron-desktop.md` -- Electrobun desktop app, settings system, packaging
+- `workdocs/secrets.md` -- secrets management UI, CRUD API, MITM proxy integration
 - `workdocs/open-in-ide.md` -- Open in IDE button, SSH remote connection, IDE detection, SSH config management
 
 ## LLM API Key Proxy

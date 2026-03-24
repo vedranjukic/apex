@@ -4,7 +4,7 @@
 
 ## Overview
 
-The Search panel lets users search file contents inside the Daytona sandbox. It supports match case, whole word, regex, and file include/exclude filters. Results are grouped by file with highlighted matches; clicking a result opens the file in the editor.
+The Search panel lets users search file contents inside the sandbox. It supports match case, whole word, regex, and file include/exclude filters. Results are grouped by file with highlighted matches; clicking a result opens the file in the editor.
 
 ## Architecture
 
@@ -13,7 +13,7 @@ SearchPanel (UI)
   → useSearchSocket (hook) emits "file_search" via Socket.io
     → AgentGateway.handleFileSearch (NestJS)
       → SandboxManager.searchFiles (orchestrator)
-        → grep executed inside Daytona sandbox
+        → grep executed inside sandbox
       ← parsed SearchResult[]
     ← emits "file_search_result" back to client
   → useSearchStore.setResults (Zustand)
