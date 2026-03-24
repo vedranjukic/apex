@@ -6,7 +6,7 @@ import {
   forwardRef,
   useCallback,
 } from 'react';
-import { Send, ImagePlus, X } from 'lucide-react';
+import { Send, ImagePlus, X, Square } from 'lucide-react';
 import { FilePicker } from './file-picker';
 import { AgentDropdown, ModelDropdown } from './mode-model-dropdowns';
 import { useAgentSettingsStore } from '../../stores/agent-settings-store';
@@ -26,6 +26,8 @@ export interface PromptInputHandle {
 interface Props {
   onSend: (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string, images?: ImageAttachment[]) => void;
   disabled?: boolean;
+  isRunning?: boolean;
+  onStop?: () => void;
   placeholder?: string;
   autoFocus?: boolean;
   requestListing?: (path: string) => void;
@@ -108,6 +110,8 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
     {
       onSend,
       disabled,
+      isRunning,
+      onStop,
       placeholder = 'Send a message to the agent…',
       autoFocus,
       requestListing,
@@ -197,6 +201,14 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
       setEmpty(true);
       setImages([]);
     }, [onSend, disabled, images]);
+
+    const handleStopOrSubmit = useCallback(() => {
+      if (isRunning && empty && images.length === 0 && onStop) {
+        onStop();
+      } else {
+        handleSubmit();
+      }
+    }, [isRunning, empty, images, onStop, handleSubmit]);
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -418,7 +430,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
               aria-placeholder={placeholder}
               aria-disabled={disabled}
               data-placeholder={placeholder}
-              className={`prompt-editor px-4 py-3 bg-surface-thread border border-border text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50 max-h-32 overflow-y-auto whitespace-pre-wrap break-words ${images.length > 0 ? '' : 'rounded-t-xl'}`}
+              className={`prompt-editor px-4 py-3 bg-surface-thread border border-border text-sm focus:outline-none focus:ring-2 focus:ring-primary max-h-32 overflow-y-auto whitespace-pre-wrap break-words ${images.length > 0 ? '' : 'rounded-t-xl'}`}
               style={{ minHeight: '44px' }}
               suppressContentEditableWarning
               onClick={() => {
@@ -464,14 +476,25 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
             >
               <ImagePlus className="w-3.5 h-3.5" />
             </button>
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={disabled || !hasContent}
-              className="p-1.5 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50"
-            >
-              <Send className="w-3.5 h-3.5" />
-            </button>
+            {isRunning && !hasContent && onStop ? (
+              <button
+                type="button"
+                onClick={onStop}
+                title="Stop generating"
+                className="p-1.5 bg-red-500/80 text-white rounded-lg hover:bg-red-500 transition-colors"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={disabled || !hasContent}
+                className="p-1.5 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50"
+              >
+                <Send className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         </div>
       </div>

@@ -39,6 +39,10 @@ export interface CreateSandboxParams {
   localDir?: string;
   /** Called by the provider to signal status changes (e.g. 'pulling_image'). */
   onStatusChange?: (status: string) => void;
+  /** Memory allocation in MB (Docker / Apple Container providers). */
+  memoryMB?: number;
+  /** Number of CPU cores (Docker / Apple Container providers). */
+  cpus?: number;
 }
 
 // ── File system sub-interface ────────────────────────

@@ -28,7 +28,7 @@ export function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
-  const { sendPrompt, executeThread, sendUserAnswer, socket } = useAgentSocket(projectId);
+  const { sendPrompt, executeThread, sendUserAnswer, stopAgent, socket } = useAgentSocket(projectId);
   const terminal = useTerminalSocket(projectId, socket);
   const { layoutReady } = useLayoutSocket(projectId, socket);
   const projectInfo = useProjectInfoSocket(projectId, socket);
@@ -155,6 +155,18 @@ export function ProjectPage() {
     return () => { s.off('agent_status', handler); };
   }, [socket, projectId]);
 
+  useEffect(() => {
+    const s = socket.current;
+    if (!s || !projectId) return;
+    const handler = (data: { payload?: Project }) => {
+      if (data.payload?.id === projectId) {
+        setProject(data.payload);
+      }
+    };
+    s.on('project_updated', handler);
+    return () => { s.off('project_updated', handler); };
+  }, [socket, projectId]);
+
   const handleExecuteThread = useCallback(
     (threadId: string, mode?: string, model?: string, agentType?: string) => {
       executeThread(threadId, mode, model, agentType);
@@ -257,6 +269,7 @@ export function ProjectPage() {
         onSendSilentPrompt={sendPrompt}
         onExecuteThread={handleExecuteThread}
         onSendUserAnswer={sendUserAnswer}
+        onStopAgent={stopAgent}
         readFile={fileActions.readFile}
         writeFile={fileActions.writeFile}
         requestListing={fileActions.requestListing}
@@ -272,6 +285,7 @@ function CentralPanel({
   onSendSilentPrompt,
   onExecuteThread,
   onSendUserAnswer,
+  onStopAgent,
   readFile,
   writeFile,
   requestListing,
@@ -282,6 +296,7 @@ function CentralPanel({
   onSendSilentPrompt: (threadId: string, prompt: string, mode?: string, model?: string, agentType?: string) => void;
   onExecuteThread: (threadId: string, mode?: string, model?: string, agentType?: string) => void;
   onSendUserAnswer: (threadId: string, toolUseId: string, answer: string) => void;
+  onStopAgent: (threadId: string) => void;
   readFile: (path: string) => void;
   writeFile: (path: string, content: string) => void;
   requestListing: (path: string) => void;
@@ -314,6 +329,7 @@ function CentralPanel({
       onSendSilentPrompt={onSendSilentPrompt}
       onExecuteThread={onExecuteThread}
       onSendUserAnswer={onSendUserAnswer}
+      onStopAgent={onStopAgent}
       requestListing={requestListing}
     />
   );

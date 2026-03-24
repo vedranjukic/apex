@@ -301,9 +301,10 @@ function groupConsecutiveBash(
       if (consumedResultIds.has(block.tool_use_id)) continue;
       const toolUse = toolUseById.get(block.tool_use_id);
       if (toolUse?.name === 'Bash') {
-        const receivedAt = blockReceivedAt.get(block.tool_use_id) ?? 0;
-        consumedResultIds.add(block.tool_use_id);
-        out.push({ kind: 'bash_group', items: [{ toolUse, toolResult: block }], receivedAt });
+        // Skip orphaned tool_results whose tool_use is still in blocks
+        // (the tool_use iteration will pair them via resultByToolUseId).
+        // This prevents duplicates from streaming updates that dedup
+        // away earlier tool_use blocks but leave their tool_results.
         continue;
       }
     }

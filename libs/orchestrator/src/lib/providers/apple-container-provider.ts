@@ -30,6 +30,7 @@ const DEFAULT_IMAGE = "docker.io/daytonaio/apex-default:0.1.0";
 const LABEL_SANDBOX = "apex.sandbox";
 const CONTAINER_USER = "daytona";
 const CONTAINER_BIN = "container";
+const DEFAULT_MEMORY_MB = 3072;
 
 // ── JSON shapes returned by the `container` CLI ──────
 
@@ -370,13 +371,19 @@ export class AppleContainerProvider implements SandboxProvider {
       ? `apex-${params.name.replace(/[^a-zA-Z0-9_.-]/g, "-")}-${shortId}`
       : `apex-sandbox-${shortId}`;
 
+    const memoryMB = params.memoryMB ?? DEFAULT_MEMORY_MB;
     const args = [
       "run", "-d",
       "--name", containerName,
       "--init",
+      "-m", `${memoryMB}M`,
       "-l", `${LABEL_SANDBOX}=true`,
       "-u", CONTAINER_USER,
     ];
+
+    if (params.cpus) {
+      args.push("-c", String(params.cpus));
+    }
 
     for (const [k, v] of Object.entries(params.envVars ?? {})) {
       args.push("-e", `${k}=${v}`);
@@ -388,7 +395,7 @@ export class AppleContainerProvider implements SandboxProvider {
 
     args.push(image);
 
-    const { stdout, exitCode, stderr } = await runContainerCmd(args);
+    const { stdout, exitCode, stderr } = await runContainerCmd(args, { timeout: 120_000 });
     if (exitCode !== 0) {
       throw new Error(
         `Failed to create Apple container: ${stderr.trim() || stdout.trim()}`,

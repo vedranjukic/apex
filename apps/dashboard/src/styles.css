@@ -503,3 +503,9 @@ body {
 .inline-markdown a {
   word-break: break-all;
 }
+
+/* Bash streaming progress shimmer */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}

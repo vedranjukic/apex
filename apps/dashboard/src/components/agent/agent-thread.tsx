@@ -1,5 +1,5 @@
 import { useEffect, useRef, useMemo, useCallback, useState } from 'react';
-import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo, RotateCcw, MessageCircleQuestion, CirclePause, Send, Brain, BarChart3 } from 'lucide-react';
+import { MessageSquare, Loader2, Sparkles, AlertCircle, ListTodo, RotateCcw, MessageCircleQuestion, CirclePause, Send, Brain, BarChart3, X, Play } from 'lucide-react';
 import { useThreadsStore } from '../../stores/tasks-store';
 import { groupMessages, MessageGroupView, PlanShownProvider, ReasoningToggleProvider, useReasoningToggle } from './message-bubble';
 import { PromptInput, type PromptInputHandle, type ImageAttachment } from './prompt-input';
@@ -16,13 +16,14 @@ interface Props {
   onSendSilentPrompt: (threadId: string, prompt: string, mode?: string, model?: string, agentType?: string) => void;
   onExecuteThread: (threadId: string, mode?: string, model?: string, agentType?: string) => void;
   onSendUserAnswer?: (threadId: string, toolUseId: string, answer: string) => void;
+  onStopAgent?: (threadId: string) => void;
   requestListing?: (path: string) => void;
 }
 
 const SCROLL_SAVE_DEBOUNCE_MS = 300;
 const SCROLL_FOLLOW_THRESHOLD = 150;
 
-export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendSilentPrompt, onExecuteThread, onSendUserAnswer, requestListing }: Props) {
+export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendSilentPrompt, onExecuteThread, onSendUserAnswer, onStopAgent, requestListing }: Props) {
   const { activeThreadId, composingNew, messages, threads, createThread, threadScrollOffsets, setThreadScrollOffset } =
     useThreadsStore();
   const threadScrollOffset = activeThreadId ? (threadScrollOffsets[activeThreadId] ?? 0) : 0;
@@ -34,6 +35,8 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
   const isFollowingRef = useRef(true);
 
   const [showStats, setShowStats] = useState(false);
+  const [promptQueue, setPromptQueue] = useState<{ id: string; text: string; files?: string[]; mode?: string; model?: string; snippets?: CodeSelection[]; agentType?: string; images?: ImageAttachment[] }[]>([]);
+  const pendingSendRef = useRef<{ id: string; text: string; files?: string[]; mode?: string; model?: string; snippets?: CodeSelection[]; agentType?: string; images?: ImageAttachment[] } | null>(null);
 
   const fillPrompt = useCallback((text: string) => {
     promptRef.current?.fill(text);
@@ -67,6 +70,67 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
   }, [activeThreadId, onSendUserAnswer]);
 
   const activeThread = threads.find((c) => c.id === activeThreadId);
+  const isRunning = activeThread?.status === 'running';
+  const prevRunningRef = useRef(false);
+
+  useEffect(() => {
+    if (prevRunningRef.current && !isRunning) {
+      if (pendingSendRef.current) {
+        const item = pendingSendRef.current;
+        pendingSendRef.current = null;
+        setPromptQueue((q) => q.filter((p) => p.id !== item.id));
+        if (activeThreadId) onSendPrompt(activeThreadId, item.text, item.files, item.mode, item.model, item.snippets, item.agentType, item.images);
+      } else {
+        setPromptQueue((prev) => {
+          if (prev.length === 0) return prev;
+          const [first, ...rest] = prev;
+          if (activeThreadId) onSendPrompt(activeThreadId, first.text, first.files, first.mode, first.model, first.snippets, first.agentType, first.images);
+          return rest;
+        });
+      }
+    }
+    prevRunningRef.current = !!isRunning;
+  }, [isRunning, activeThreadId, onSendPrompt]);
+
+  useEffect(() => {
+    setPromptQueue([]);
+    pendingSendRef.current = null;
+  }, [activeThreadId]);
+
+  const handlePromptSubmit = useCallback(
+    (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string, images?: ImageAttachment[]) => {
+      if (!activeThreadId) return;
+      if (isRunning) {
+        setPromptQueue((q) => [...q, { id: crypto.randomUUID(), text: prompt, files, mode, model, snippets, agentType, images }]);
+      } else {
+        onSendPrompt(activeThreadId, prompt, files, mode, model, snippets, agentType, images);
+      }
+    },
+    [activeThreadId, isRunning, onSendPrompt],
+  );
+
+  const handleSendFromQueue = useCallback(
+    (item: typeof promptQueue[number]) => {
+      if (!activeThreadId) return;
+      if (isRunning && onStopAgent) {
+        pendingSendRef.current = item;
+        onStopAgent(activeThreadId);
+      } else {
+        setPromptQueue((q) => q.filter((p) => p.id !== item.id));
+        onSendPrompt(activeThreadId, item.text, item.files, item.mode, item.model, item.snippets, item.agentType, item.images);
+      }
+    },
+    [activeThreadId, isRunning, onStopAgent, onSendPrompt],
+  );
+
+  const handleRemoveFromQueue = useCallback((id: string) => {
+    setPromptQueue((q) => q.filter((p) => p.id !== id));
+    if (pendingSendRef.current?.id === id) pendingSendRef.current = null;
+  }, []);
+
+  const handleStop = useCallback(() => {
+    if (activeThreadId && onStopAgent) onStopAgent(activeThreadId);
+  }, [activeThreadId, onStopAgent]);
 
   useEffect(() => {
     const store = useAgentSettingsStore.getState();
@@ -235,7 +299,6 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
 
   if (!activeThread) return null;
 
-  const isRunning = activeThread.status === 'running';
   const isError = activeThread.status === 'error';
   const isWaitingForInput = activeThread.status === 'waiting_for_input';
   const isWaitingForAction = activeThread.status === 'waiting_for_user_action';
@@ -325,7 +388,7 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
             <span className="text-xs text-text-secondary flex-1">The agent has pending tasks to complete.</span>
             <button
               type="button"
-              onClick={() => onSendSilentPrompt(activeThreadId!, 'Continue. Execute the pending tasks.')}
+              onClick={() => sendSilentPrompt('Continue. Execute the pending tasks.')}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-primary text-white hover:bg-primary-hover transition-colors font-medium shrink-0"
             >
               <Send className="w-3 h-3" />
@@ -334,11 +397,42 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
           </div>
         )}
 
+        {/* Queued prompts */}
+        {promptQueue.length > 0 && (
+          <div className="border-t border-border bg-sidebar/50">
+            <div className="max-w-3xl mx-auto px-4 py-2 space-y-1.5">
+              <span className="text-[10px] font-medium text-text-muted uppercase tracking-wider">Queued</span>
+              {promptQueue.map((item) => (
+                <div key={item.id} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-thread border border-border">
+                  <span className="flex-1 text-xs text-text-secondary truncate">{item.text}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleSendFromQueue(item)}
+                    title="Stop current and send this"
+                    className="shrink-0 p-1 rounded text-primary hover:bg-primary/10 transition-colors"
+                  >
+                    <Play className="w-3 h-3" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveFromQueue(item.id)}
+                    title="Remove from queue"
+                    className="shrink-0 p-1 rounded text-text-muted hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Input */}
         <PromptInput
           ref={promptRef}
-          onSend={(prompt, files, mode, model, snippets, agentType, images) => onSendPrompt(activeThreadId!, prompt, files, mode, model, snippets, agentType, images)}
-          disabled={isRunning}
+          onSend={handlePromptSubmit}
+          isRunning={isRunning}
+          onStop={handleStop}
           requestListing={requestListing}
         />
 

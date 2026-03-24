@@ -326,6 +326,8 @@ export class SandboxManager extends EventEmitter {
       envVars,
       onStatusChange,
       localDir,
+      memoryMB: this.config.memoryMB,
+      cpus: this.config.cpus,
     });
 
     if (projectName) this.projectNames.set(sandbox.id, projectName);
@@ -615,6 +617,12 @@ export class SandboxManager extends EventEmitter {
     );
   }
 
+
+  /** Check if the bridge WebSocket for a sandbox is currently connected */
+  isBridgeConnected(sandboxId: string): boolean {
+    const session = this.sessions.get(sandboxId);
+    return !!session?.ws && session.ws.readyState === WebSocket.OPEN;
+  }
 
   /** Get session info for a sandbox */
   getSession(sandboxId: string): SandboxSession | undefined {
@@ -1500,8 +1508,10 @@ export class SandboxManager extends EventEmitter {
         );
         const output = (check.result ?? "").trim();
         if (output.includes("bridge-ok")) return;
-      } catch {
-        // executeCommand itself failed — sandbox might be slow, keep polling
+      } catch (err) {
+        if (this.isContainerNotRunning(err)) {
+          throw new Error(`Container is not running (sandbox ${sandboxId})`);
+        }
       }
       if (i < maxAttempts - 1) {
         await new Promise((r) => setTimeout(r, intervalMs));
@@ -1648,14 +1658,29 @@ export class SandboxManager extends EventEmitter {
     }
   }
 
+  private isContainerNotRunning(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    return msg.includes("container is not running") || msg.includes("is not running");
+  }
+
   /** Restart the bridge process inside the sandbox and refresh preview URL */
   private async restartBridge(session: InternalSession): Promise<void> {
     const { sandbox, projectDir, bridgeDir } = session;
     const sid = session.sandboxId.slice(0, 8);
 
-    await sandbox.process.executeCommand(
-      'pkill -f "node bridge.cjs" 2>/dev/null; pkill -f "node bridge.js" 2>/dev/null; pkill -f "opencode serve" 2>/dev/null; sleep 0.3',
-    );
+    try {
+      await sandbox.process.executeCommand(
+        'pkill -f "node bridge.cjs" 2>/dev/null; pkill -f "node bridge.js" 2>/dev/null; pkill -f "opencode serve" 2>/dev/null; sleep 0.3',
+      );
+    } catch (err) {
+      if (this.isContainerNotRunning(err)) {
+        console.log(`[bridge:${sid}] container not running, restarting sandbox`);
+        this.startedAt.delete(sandbox.id);
+        await this.ensureSandboxStarted(sandbox);
+        return;
+      }
+      throw err;
+    }
     if (this.config.provider === "local") {
       await sandbox.process.executeCommand(
         `lsof -ti:${BRIDGE_PORT} | xargs kill -9 2>/dev/null || true`,
@@ -1791,11 +1816,12 @@ export class SandboxManager extends EventEmitter {
     for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
       envParts.push(`${name}="${placeholder}"`);
     }
-    if (this.config.provider === "local") {
+    {
       const checkModules = await sandbox.process.executeCommand(
         `test -d '${bridgeDir}/node_modules/ws' && echo exists || echo missing`,
       );
       if ((checkModules.result ?? "").includes("missing")) {
+        console.log(`[bridge:${sid}] bridge deps missing, installing ws + node-pty`);
         const bridgePkg = JSON.stringify({
           name: "apex-bridge",
           private: true,
@@ -2098,13 +2124,14 @@ export class SandboxManager extends EventEmitter {
       envParts.push(`${name}="${placeholder}"`);
     }
 
-    // For local provider, install bridge dependencies (ws, node-pty) if missing
-    if (this.config.provider === "local") {
-      // Kill any old bridge holding port 8080 (local sandboxes share the host network)
+    if (isLocalProvider) {
       await sandbox.process.executeCommand(
         `lsof -ti:${BRIDGE_PORT} | xargs kill -9 2>/dev/null || true`,
       );
+    }
 
+    // Install bridge dependencies (ws, node-pty) if missing
+    {
       const checkModules = await sandbox.process.executeCommand(
         `test -d '${bridgeDir}/node_modules/ws' && echo exists || echo missing`,
       );

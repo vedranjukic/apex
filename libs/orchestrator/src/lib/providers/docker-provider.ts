@@ -30,6 +30,7 @@ import type {
 const DEFAULT_IMAGE = "docker.io/daytonaio/apex-default:0.1.0";
 const LABEL_SANDBOX = "apex.sandbox";
 const CONTAINER_USER = "daytona";
+const DEFAULT_MEMORY_MB = 3072;
 
 // ── Helpers ──────────────────────────────────────────
 
@@ -309,6 +310,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       ([k, v]) => `${k}=${v}`,
     );
 
+    const memoryMB = params.memoryMB ?? DEFAULT_MEMORY_MB;
     const container = await this.docker.createContainer({
       Image: image,
       name: containerName,
@@ -320,6 +322,8 @@ export class DockerSandboxProvider implements SandboxProvider {
       User: CONTAINER_USER,
       HostConfig: {
         Init: true,
+        Memory: memoryMB * 1024 * 1024,
+        ...(params.cpus ? { NanoCpus: params.cpus * 1e9 } : {}),
       },
     });
 

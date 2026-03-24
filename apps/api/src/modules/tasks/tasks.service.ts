@@ -1,17 +1,36 @@
-import { eq, desc, asc } from 'drizzle-orm';
+import { eq, desc, asc, inArray } from 'drizzle-orm';
 import { db } from '../../database/db';
 import { tasks, messages } from '../../database/schema';
 
 export type Task = typeof tasks.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 
+const STALE_ACTIVE_STATUSES = ['idle', 'running', 'waiting_for_input'];
+
 class ThreadsService {
   async init() {
-    await db.update(tasks).set({ status: 'completed' }).where(eq(tasks.status, 'idle'));
+    await db
+      .update(tasks)
+      .set({ status: 'completed', claudeSessionId: null, updatedAt: new Date().toISOString() })
+      .where(inArray(tasks.status, STALE_ACTIVE_STATUSES));
   }
 
   async findByProject(projectId: string): Promise<Task[]> {
     return db.select().from(tasks).where(eq(tasks.projectId, projectId)).orderBy(desc(tasks.createdAt));
+  }
+
+  async reconcileStaleThreads(projectId: string, activeThreadIds: Set<string>): Promise<string[]> {
+    const projectThreads = await this.findByProject(projectId);
+    const stale = projectThreads.filter(
+      (t) => STALE_ACTIVE_STATUSES.includes(t.status) && !activeThreadIds.has(t.id),
+    );
+    for (const t of stale) {
+      await db
+        .update(tasks)
+        .set({ status: 'completed', claudeSessionId: null, updatedAt: new Date().toISOString() })
+        .where(eq(tasks.id, t.id));
+    }
+    return stale.map((t) => t.id);
   }
 
   async findById(id: string): Promise<Task & { messages?: Message[] }> {
@@ -49,7 +68,7 @@ class ThreadsService {
     return this.findById(id);
   }
 
-  async updateClaudeSessionId(threadId: string, sessionId: string): Promise<void> {
+  async updateClaudeSessionId(threadId: string, sessionId: string | null): Promise<void> {
     await db.update(tasks).set({ claudeSessionId: sessionId, updatedAt: new Date().toISOString() }).where(eq(tasks.id, threadId));
   }
 

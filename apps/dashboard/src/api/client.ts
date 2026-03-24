@@ -126,6 +126,7 @@ export interface ContentBlock {
   tool_use_id?: string;
   content?: string;
   source?: ImageSource;
+  _streaming?: boolean;
 }
 
 // ── Config ────────────────────────────────────────────

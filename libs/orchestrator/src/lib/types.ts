@@ -117,6 +117,12 @@ export interface BridgeClaudeError {
   error: string;
 }
 
+export interface BridgeCatchup {
+  type: 'claude_catchup';
+  threadId: string;
+  blocks: Array<{ type: string; [key: string]: unknown }>;
+}
+
 export interface BridgeClaudeUserAnswer {
   type: 'claude_user_answer';
   threadId: string;
@@ -276,6 +282,7 @@ export type BridgeMessage =
   | BridgeClaudeStderr
   | BridgeClaudeExit
   | BridgeClaudeError
+  | BridgeCatchup
   | BridgeClaudeUserAnswer
   | BridgeAskUserPending
   | BridgeAskUserResolved
@@ -335,4 +342,8 @@ export interface OrchestratorConfig {
   /** Secret env var names to write as placeholders in the container .env.
    *  SDKs can initialize with the placeholder; the proxy replaces it at HTTP level. */
   secretPlaceholders?: Record<string, string>;
+  /** Memory allocation in MB for container sandboxes. Defaults to 4096 (4 GB). */
+  memoryMB?: number;
+  /** Number of CPU cores for container sandboxes. */
+  cpus?: number;
 }

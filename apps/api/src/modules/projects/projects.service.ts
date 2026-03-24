@@ -317,7 +317,7 @@ class ProjectsService {
     return saved;
   }
 
-  async update(id: string, data: Partial<Pick<typeof projects.$inferSelect, 'name' | 'description' | 'status' | 'agentConfig'>>): Promise<Project> {
+  async update(id: string, data: Partial<Pick<typeof projects.$inferSelect, 'name' | 'description' | 'status' | 'statusError' | 'agentConfig'>>): Promise<Project> {
     await db.update(projects).set({ ...data, updatedAt: new Date().toISOString() } as any).where(eq(projects.id, id));
     const updated = await this.findById(id);
     projectsWsBroadcast('project_updated', updated);

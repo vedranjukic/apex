@@ -14,6 +14,7 @@ interface Props {
   onSendSilentPrompt: (threadId: string, prompt: string, mode?: string, model?: string, agentType?: string) => void;
   onExecuteThread: (threadId: string, mode?: string, model?: string) => void;
   onSendUserAnswer: (threadId: string, toolUseId: string, answer: string) => void;
+  onStopAgent?: (threadId: string) => void;
 }
 
 export function ThreadPreviewPanel({
@@ -25,6 +26,7 @@ export function ThreadPreviewPanel({
   onSendSilentPrompt,
   onExecuteThread,
   onSendUserAnswer,
+  onStopAgent,
 }: Props) {
   const fetchThreads = useThreadsStore((s) => s.fetchThreads);
   const setActiveThread = useThreadsStore((s) => s.setActiveThread);
@@ -84,6 +86,7 @@ export function ThreadPreviewPanel({
           onSendSilentPrompt={onSendSilentPrompt}
           onExecuteThread={onExecuteThread}
           onSendUserAnswer={onSendUserAnswer}
+          onStopAgent={onStopAgent}
         />
       </div>
     </div>

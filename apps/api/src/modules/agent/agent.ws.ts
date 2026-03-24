@@ -33,12 +33,15 @@ const activeHandlers = new Map<string, (sandboxId: string, msg: BridgeMessage) =
 const terminalListenersBySandbox = new Set<string>();
 const lastPortsBySandbox = new Map<string, { ports: unknown[] }>();
 const activeTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+const activeHealthChecks = new Map<string, ReturnType<typeof setInterval>>();
 
 let lastAttachedManager: WeakRef<any> | null = null;
 
 const AGENT_INITIAL_TIMEOUT_MS = process.env.APEX_TEST_AGENT_TIMEOUT_MS
   ? parseInt(process.env.APEX_TEST_AGENT_TIMEOUT_MS, 10) : 90_000;
 const AGENT_ACTIVITY_TIMEOUT_MS = 300_000;
+const HEALTH_CHECK_INTERVAL_MS = 10_000;
+const SEND_TIMEOUT_MS = 30_000;
 
 function subscribeTo(sandboxId: string, clientId: string) {
   if (!sandboxSubscribers.has(sandboxId)) sandboxSubscribers.set(sandboxId, new Set());
@@ -150,6 +153,41 @@ function attachTerminalListeners(sandboxId: string, provider?: string) {
   });
 }
 
+const CONTEXT_MAX_CHARS = 4_000;
+
+function buildConversationContext(threadMessages: { role: string; content: any; metadata?: any }[]): string {
+  const parts: string[] = [];
+  let totalLen = 0;
+  for (let i = threadMessages.length - 1; i >= 0; i--) {
+    const msg = threadMessages[i];
+    if (msg.role === 'system') continue;
+    if (!Array.isArray(msg.content)) continue;
+    const role = msg.role === 'user' ? 'User' : 'Assistant';
+    const textBlocks: string[] = [];
+    const toolNames: string[] = [];
+    for (const block of msg.content) {
+      if (block.type === 'text' && block.text) {
+        textBlocks.push(block.text);
+      } else if (block.type === 'tool_use' && block.name) {
+        toolNames.push(block.name);
+      } else if (block.type === 'tool_result') {
+        continue;
+      }
+    }
+    if (textBlocks.length === 0 && toolNames.length === 0) continue;
+    let line = `[${role}]: `;
+    if (textBlocks.length > 0) line += textBlocks.join('\n');
+    if (toolNames.length > 0) line += `\n(Used tools: ${toolNames.join(', ')})`;
+    if (totalLen + line.length > CONTEXT_MAX_CHARS) {
+      parts.push('[... earlier messages truncated ...]');
+      break;
+    }
+    parts.push(line);
+    totalLen += line.length;
+  }
+  return parts.reverse().join('\n\n');
+}
+
 async function executeAgainstSandbox(
   client: WsClient, threadId: string, prompt: string, mode?: string, model?: string,
   images?: { type: 'base64'; media_type: string; data: string }[],
@@ -157,6 +195,8 @@ async function executeAgainstSandbox(
   const thread = await threadsService.findById(threadId);
   const project = await projectsService.findById(thread.projectId);
   const effectiveAgentType = thread.agentType ?? project.agentType;
+  mode = mode ?? thread.mode ?? undefined;
+  model = model ?? thread.model ?? undefined;
 
   if (!process.env.ANTHROPIC_API_KEY) {
     emitTo(client, 'agent_error', {
@@ -198,6 +238,8 @@ async function executeAgainstSandbox(
     activeHandlers.delete(threadId);
     const t = activeTimeouts.get(threadId);
     if (t) { clearTimeout(t); activeTimeouts.delete(threadId); }
+    const hc = activeHealthChecks.get(threadId);
+    if (hc) { clearInterval(hc); activeHealthChecks.delete(threadId); }
   };
 
   const resetTimeout = (timeoutMs: number) => {
@@ -208,16 +250,17 @@ async function executeAgainstSandbox(
         retryCount++;
         emitToSubscribers(project.sandboxId!, 'agent_status', { threadId, status: 'retrying' });
         emitToSubscribers(project.sandboxId!, 'agent_message', {
-          threadId, message: { type: 'system', subtype: 'retry', text: 'Agent stopped responding. Restarting…' },
+          threadId, message: { type: 'system', subtype: 'retry', text: 'Agent stopped responding. Restarting with fresh session…' },
         });
         try {
-          const freshThread = await threadsService.findById(threadId);
+          await threadsService.updateClaudeSessionId(threadId, null);
           const resumePrompt = receivedFirstMessage
             ? 'Continue from where you left off. You had stopped responding after a long pause.'
             : prompt;
           await manager.sendPrompt(project.sandboxId!, resumePrompt, threadId,
-            freshThread.claudeSessionId ?? thread.claudeSessionId, mode, model, effectiveAgentType, true);
-          resetTimeout(AGENT_ACTIVITY_TIMEOUT_MS);
+            null, mode, model, effectiveAgentType, true);
+          receivedFirstMessage = false;
+          resetTimeout(AGENT_INITIAL_TIMEOUT_MS);
           return;
         } catch { /* retry failed */ }
       }
@@ -233,6 +276,52 @@ async function executeAgainstSandbox(
   };
 
   resetTimeout(AGENT_INITIAL_TIMEOUT_MS);
+
+  const prevHealthCheck = activeHealthChecks.get(threadId);
+  if (prevHealthCheck) clearInterval(prevHealthCheck);
+
+  const startHealthCheck = () => {
+    const hc = activeHealthChecks.get(threadId);
+    if (hc) clearInterval(hc);
+    const interval = setInterval(async () => {
+      if (!project.sandboxId || !manager.isBridgeConnected(project.sandboxId)) {
+        console.log(`[agent-ws] Bridge disconnected for thread ${threadId.slice(0, 8)}, triggering reconnect + retry`);
+        clearInterval(interval);
+        activeHealthChecks.delete(threadId);
+        const prev = activeTimeouts.get(threadId);
+        if (prev) { clearTimeout(prev); activeTimeouts.delete(threadId); }
+
+        if (retryCount < 1) {
+          retryCount++;
+          emitToSubscribers(project.sandboxId!, 'agent_status', { threadId, status: 'retrying' });
+          emitToSubscribers(project.sandboxId!, 'agent_message', {
+            threadId, message: { type: 'system', subtype: 'retry', text: 'Lost connection to sandbox. Reconnecting with fresh session…' },
+          });
+          try {
+            await threadsService.updateClaudeSessionId(threadId, null);
+            const resumePrompt = receivedFirstMessage
+              ? 'Continue from where you left off. The sandbox connection was lost and restored.'
+              : prompt;
+            await manager.sendPrompt(project.sandboxId!, resumePrompt, threadId,
+              null, mode, model, effectiveAgentType, true);
+            receivedFirstMessage = false;
+            resetTimeout(AGENT_INITIAL_TIMEOUT_MS);
+            startHealthCheck();
+            return;
+          } catch (err) {
+            console.error(`[agent-ws] Reconnect retry failed for ${threadId.slice(0, 8)}:`, err);
+          }
+        }
+        cleanupHandler();
+        await updateThreadStatusAndNotify(threadId, 'error');
+        emitToSubscribers(project.sandboxId!, 'agent_error', {
+          threadId, error: 'Lost connection to sandbox and could not recover.',
+        });
+      }
+    }, HEALTH_CHECK_INTERVAL_MS);
+    activeHealthChecks.set(threadId, interval);
+  };
+  startHealthCheck();
 
   const messageHandler = async (sandboxId: string, msg: BridgeMessage) => {
     if (sandboxId !== project.sandboxId) return;
@@ -299,16 +388,17 @@ async function executeAgainstSandbox(
         retryCount++;
         emitToSubscribers(project.sandboxId!, 'agent_status', { threadId, status: 'retrying' });
         emitToSubscribers(project.sandboxId!, 'agent_message', {
-          threadId, message: { type: 'system', subtype: 'retry', text: 'Agent crashed. Restarting…' },
+          threadId, message: { type: 'system', subtype: 'retry', text: 'Agent crashed. Restarting with fresh session…' },
         });
         try {
-          const freshThread = await threadsService.findById(threadId);
+          await threadsService.updateClaudeSessionId(threadId, null);
           const resumePrompt = receivedFirstMessage
             ? 'Continue from where you left off. You had crashed and were restarted.'
             : prompt;
           await manager.sendPrompt(project.sandboxId!, resumePrompt, threadId,
-            freshThread.claudeSessionId ?? thread.claudeSessionId, mode, model, effectiveAgentType, true);
-          resetTimeout(AGENT_ACTIVITY_TIMEOUT_MS);
+            null, mode, model, effectiveAgentType, true);
+          receivedFirstMessage = false;
+          resetTimeout(AGENT_INITIAL_TIMEOUT_MS);
           return;
         } catch { /* retry failed */ }
       }
@@ -329,6 +419,24 @@ async function executeAgainstSandbox(
     } else if (msg.type === 'ask_user_resolved') {
       await updateThreadStatusAndNotify(threadId, 'running');
       emitToSubscribers(project.sandboxId!, 'agent_status', { threadId, status: 'running' });
+    } else if (msg.type === 'claude_catchup') {
+      const blocks = (msg as any).blocks;
+      if (Array.isArray(blocks) && blocks.length > 0) {
+        try {
+          const currentMessages = await threadsService.getMessages(threadId);
+          const lastMsg = currentMessages[currentMessages.length - 1];
+          const hasGap = lastMsg && (lastMsg.role === 'user' || (lastMsg.role === 'system' && currentMessages.length > 1 && currentMessages[currentMessages.length - 2]?.role === 'user'));
+          if (hasGap) {
+            await threadsService.addMessage(threadId, { role: 'assistant', content: blocks, metadata: { catchup: true } });
+            console.log(`[agent-ws] Saved ${blocks.length} catch-up blocks for thread ${threadId.slice(0, 8)}`);
+          }
+          emitToSubscribers(project.sandboxId!, 'agent_message', {
+            threadId, message: { type: 'assistant', message: { role: 'assistant', model: '', content: blocks, stop_reason: 'end_turn' }, _catchup: true },
+          });
+        } catch (err) {
+          console.warn(`[agent-ws] Catch-up failed for ${threadId.slice(0, 8)}:`, err);
+        }
+      }
     } else if (msg.type === 'claude_error') {
       await updateThreadStatusAndNotify(threadId, 'error');
       emitToSubscribers(project.sandboxId!, 'agent_error', { threadId, error: msg.error });
@@ -339,13 +447,30 @@ async function executeAgainstSandbox(
   activeHandlers.set(threadId, messageHandler);
   manager.on('message', messageHandler);
 
+  let effectivePrompt = prompt;
+  const priorMessages = (thread.messages || []).slice(0, -1);
+  if (priorMessages.length > 0) {
+    const context = buildConversationContext(priorMessages as any);
+    if (context) {
+      effectivePrompt = `<conversation_history>\n${context}\n</conversation_history>\n\n${prompt}`;
+    }
+  }
+
   try {
-    await manager.sendPrompt(project.sandboxId, prompt, threadId, thread.claudeSessionId, mode, model, effectiveAgentType as string, undefined, images);
+    if (!manager.isBridgeConnected(project.sandboxId)) {
+      emitToSubscribers(project.sandboxId, 'agent_message', {
+        threadId, message: { type: 'system', subtype: 'info', text: 'Reconnecting to sandbox…' },
+      });
+    }
+    await Promise.race([
+      manager.sendPrompt(project.sandboxId, effectivePrompt, threadId, thread.claudeSessionId, mode, model, effectiveAgentType as string, undefined, images),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timed out connecting to sandbox')), SEND_TIMEOUT_MS)),
+    ]);
     emitTo(client, 'prompt_accepted', { threadId });
   } catch (err) {
     cleanupHandler();
     await updateThreadStatusAndNotify(threadId, 'error');
-    emitTo(client, 'agent_error', { threadId, error: `Failed to send to sandbox: ${err}` });
+    emitTo(client, 'agent_error', { threadId, error: `Failed to send to sandbox: ${err instanceof Error ? err.message : String(err)}` });
   }
 }
 
@@ -372,17 +497,9 @@ async function handleMessage(client: WsClient, message: unknown) {
         if (project.sandboxId) {
           subscribeTo(project.sandboxId, client.id);
           attachTerminalListeners(project.sandboxId, project.provider);
-          if (project.status === 'stopped' || project.status === 'error') {
-            reconcileAndStart(payload.projectId).catch(() => {});
-          } else {
-            const manager = projectsService.getSandboxManager(project.provider);
-            if (manager) {
-              resolveDirName(project).then((dirName) => {
-                manager.reconnectSandbox(project.sandboxId!, dirName, project.localDir || undefined).catch(() => {});
-              });
-            }
-            projectsService.reconcileSandboxStatus(payload.projectId).catch(() => {});
-          }
+          reconcileAndReconnect(payload.projectId, project, client).catch((err) => {
+            console.warn(`[agent-ws] reconcileAndReconnect failed for ${payload.projectId}:`, err);
+          });
         } else if (project.status === 'stopped' || project.status === 'error') {
           emitTo(client, 'agent_status', {
             projectId: payload.projectId, status: 'provisioning',
@@ -395,6 +512,12 @@ async function handleMessage(client: WsClient, message: unknown) {
             });
           });
         }
+        try {
+          const staleIds = await threadsService.reconcileStaleThreads(payload.projectId, new Set(activeHandlers.keys()));
+          for (const id of staleIds) {
+            emitTo(client, 'agent_status', { threadId: id, status: 'completed' });
+          }
+        } catch { /* ignore reconciliation errors */ }
         emitTo(client, 'subscribed', { projectId: payload.projectId, sandboxId: project.sandboxId });
         break;
       }
@@ -452,6 +575,24 @@ async function handleMessage(client: WsClient, message: unknown) {
         await threadsService.addMessage(threadId, {
           role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: answer }], metadata: null,
         });
+        break;
+      }
+      case 'stop_agent': {
+        const { threadId } = payload;
+        const thread = await threadsService.findById(threadId);
+        const project = await projectsService.findById(thread.projectId);
+        if (!project.sandboxId) { emitTo(client, 'agent_error', { threadId, error: 'No sandbox' }); break; }
+        const manager = projectsService.getSandboxManager(project.provider);
+        if (!manager) { emitTo(client, 'agent_error', { threadId, error: 'Sandbox manager not available' }); break; }
+        const handler = activeHandlers.get(threadId);
+        if (handler) { manager.removeListener('message', handler); activeHandlers.delete(threadId); }
+        const timeout = activeTimeouts.get(threadId);
+        if (timeout) { clearTimeout(timeout); activeTimeouts.delete(threadId); }
+        const hc = activeHealthChecks.get(threadId);
+        if (hc) { clearInterval(hc); activeHealthChecks.delete(threadId); }
+        await manager.stopClaude(project.sandboxId, threadId);
+        await updateThreadStatusAndNotify(threadId, 'completed');
+        emitToSubscribers(project.sandboxId, 'agent_status', { threadId, status: 'completed' });
         break;
       }
       case 'crash_agent': {
@@ -576,11 +717,15 @@ async function handleMessage(client: WsClient, message: unknown) {
       case 'file_list': {
         const resolved = await tryResolveProject(payload.projectId);
         if (!resolved) { emitTo(client, 'file_list_result', { path: payload.path, entries: [], error: 'Sandbox not ready' }); break; }
-        const entries = await Promise.race([
-          resolved.manager.listFiles(resolved.sandboxId, payload.path),
-          new Promise<FileEntry[]>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 30_000)),
-        ]);
-        emitTo(client, 'file_list_result', { path: payload.path, entries });
+        try {
+          const entries = await Promise.race([
+            resolved.manager.listFiles(resolved.sandboxId, payload.path),
+            new Promise<FileEntry[]>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 30_000)),
+          ]);
+          emitTo(client, 'file_list_result', { path: payload.path, entries });
+        } catch (err) {
+          emitTo(client, 'file_list_result', { path: payload.path, entries: [], error: err instanceof Error ? err.message : String(err) });
+        }
         break;
       }
       case 'file_create': {
@@ -608,11 +753,15 @@ async function handleMessage(client: WsClient, message: unknown) {
       case 'file_read': {
         const resolved = await tryResolveProject(payload.projectId);
         if (!resolved) { emitTo(client, 'file_read_result', { path: payload.path, content: '', error: 'Sandbox not ready' }); break; }
-        const content = await Promise.race([
-          resolved.manager.readFile(resolved.sandboxId, payload.path),
-          new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 30_000)),
-        ]);
-        emitTo(client, 'file_read_result', { path: payload.path, content });
+        try {
+          const content = await Promise.race([
+            resolved.manager.readFile(resolved.sandboxId, payload.path),
+            new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 30_000)),
+          ]);
+          emitTo(client, 'file_read_result', { path: payload.path, content });
+        } catch (err) {
+          emitTo(client, 'file_read_result', { path: payload.path, content: '', error: err instanceof Error ? err.message : String(err) });
+        }
         break;
       }
       case 'file_write': {
@@ -625,17 +774,21 @@ async function handleMessage(client: WsClient, message: unknown) {
       case 'file_search': {
         const resolved = await tryResolveProject(payload.projectId);
         if (!resolved) { emitTo(client, 'file_search_result', { query: payload.query, results: [], error: 'Sandbox not ready' }); break; }
-        const project = await projectsService.findById(payload.projectId);
-        const searchDirName = await resolveDirName(project);
-        const searchDir = resolved.manager.getProjectDir(resolved.sandboxId, searchDirName);
-        const results = await Promise.race([
-          resolved.manager.searchFiles(resolved.sandboxId, payload.query, searchDir, {
-            matchCase: payload.matchCase, wholeWord: payload.wholeWord, useRegex: payload.useRegex,
-            includePattern: payload.includePattern, excludePattern: payload.excludePattern,
-          }),
-          new Promise<SearchResult[]>((_, reject) => setTimeout(() => reject(new Error('Search timeout')), 30_000)),
-        ]);
-        emitTo(client, 'file_search_result', { query: payload.query, results });
+        try {
+          const project = await projectsService.findById(payload.projectId);
+          const searchDirName = await resolveDirName(project);
+          const searchDir = resolved.manager.getProjectDir(resolved.sandboxId, searchDirName);
+          const results = await Promise.race([
+            resolved.manager.searchFiles(resolved.sandboxId, payload.query, searchDir, {
+              matchCase: payload.matchCase, wholeWord: payload.wholeWord, useRegex: payload.useRegex,
+              includePattern: payload.includePattern, excludePattern: payload.excludePattern,
+            }),
+            new Promise<SearchResult[]>((_, reject) => setTimeout(() => reject(new Error('Search timeout')), 30_000)),
+          ]);
+          emitTo(client, 'file_search_result', { query: payload.query, results });
+        } catch (err) {
+          emitTo(client, 'file_search_result', { query: payload.query, results: [], error: err instanceof Error ? err.message : String(err) });
+        }
         break;
       }
       case 'file_move': {
@@ -744,7 +897,16 @@ async function handleMessage(client: WsClient, message: unknown) {
     }
   } catch (err) {
     console.error(`[agent-ws] Error handling ${type}:`, err);
-    if (type.startsWith('git_')) emitTo(client, 'git_op_result', { ok: false, error: String(err) });
+    if (type === 'send_prompt' || type === 'execute_thread') {
+      const threadId = payload?.threadId;
+      if (threadId) {
+        try { await updateThreadStatusAndNotify(threadId, 'error'); } catch { /* ignore */ }
+        emitTo(client, 'agent_error', { threadId, error: `Error: ${err instanceof Error ? err.message : String(err)}` });
+      }
+    } else if (type === 'stop_agent') {
+      const threadId = payload?.threadId;
+      if (threadId) emitTo(client, 'agent_error', { threadId, error: `Failed to stop: ${err instanceof Error ? err.message : String(err)}` });
+    } else if (type.startsWith('git_')) emitTo(client, 'git_op_result', { ok: false, error: String(err) });
     else if (type.startsWith('file_')) emitTo(client, 'file_op_result', { ok: false, error: String(err) });
     else if (type.startsWith('terminal_')) emitTo(client, 'terminal_error', { error: String(err) });
   }
@@ -755,6 +917,43 @@ async function reconcileAndStart(projectId: string) {
   if (project.status === 'stopped' || project.status === 'error') {
     await projectsService.startOrProvisionSandbox(projectId);
   }
+}
+
+async function reconcileAndReconnect(
+  projectId: string,
+  _project: Awaited<ReturnType<typeof projectsService.findById>>,
+  client: WsClient,
+) {
+  try {
+    const reconciled = await projectsService.reconcileSandboxStatus(projectId);
+    if (reconciled.status === 'stopped' || reconciled.status === 'error') {
+      await projectsService.startOrProvisionSandbox(projectId);
+    } else {
+      const manager = projectsService.getSandboxManager(reconciled.provider);
+      if (manager) {
+        const dirName = await resolveDirName(reconciled);
+        try {
+          await manager.reconnectSandbox(reconciled.sandboxId!, dirName, reconciled.localDir || undefined);
+        } catch (reconnectErr) {
+          console.warn(`[agent-ws] reconnect failed for ${projectId}, marking as error:`, reconnectErr);
+          const message = reconnectErr instanceof Error ? reconnectErr.message : String(reconnectErr);
+          await projectsService.update(projectId, { status: 'error', statusError: message.slice(0, 500) });
+          emitTo(client, 'project_updated', await projectsService.findById(projectId));
+          emitTo(client, 'agent_status', {
+            projectId, status: 'error',
+            message: `Sandbox unreachable: ${message.slice(0, 300)}`,
+          });
+          return;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[agent-ws] subscribe reconcile/reconnect error for ${projectId}:`, err);
+  }
+  try {
+    const latest = await projectsService.findById(projectId);
+    emitTo(client, 'project_updated', latest);
+  } catch { /* ignore */ }
 }
 
 export const agentWs = new Elysia()

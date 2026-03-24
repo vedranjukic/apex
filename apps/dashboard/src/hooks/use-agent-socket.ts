@@ -49,7 +49,7 @@ export function useAgentSocket(projectId: string | undefined) {
         return;
       }
 
-      if (msg.type === 'system' && msg.subtype === 'retry') {
+      if (msg.type === 'system' && (msg.subtype === 'retry' || msg.subtype === 'info')) {
         addMessage({
           id: crypto.randomUUID(),
           taskId: threadId,
@@ -202,5 +202,12 @@ export function useAgentSocket(projectId: string | undefined) {
     [addMessage],
   );
 
-  return { sendPrompt, executeThread, sendUserAnswer, socket: wsRef };
+  const stopAgent = useCallback(
+    (threadId: string) => {
+      wsRef.current?.send('stop_agent', { threadId });
+    },
+    [],
+  );
+
+  return { sendPrompt, executeThread, sendUserAnswer, stopAgent, socket: wsRef };
 }

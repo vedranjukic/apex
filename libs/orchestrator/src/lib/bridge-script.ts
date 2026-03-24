@@ -38,9 +38,12 @@ const activeThreads = new Set();
 const sessionCosts = new Map();
 let ocServeProc = null;
 let sseReq = null;
+let lastOcExitCode = null;
+let lastOcStderr = "";
 const terminals = new Map();
 const pendingAskUser = new Map();
 const sessionEmittedParts = new Map();
+const suppressedAborts = new Set();
 
 // ── Shell detection ──────────────────────────────────
 const fs = require("fs");
@@ -55,6 +58,12 @@ function detectShell() {
   return "/bin/sh";
 }
 const DEFAULT_SHELL = detectShell();
+
+// ── Detect stdbuf for line-buffered stdout in agent bash commands ──
+var STDBUF_LIB = "";
+["/usr/libexec/coreutils/libstdbuf.so", "/usr/lib/coreutils/libstdbuf.so", "/usr/lib/x86_64-linux-gnu/coreutils/libstdbuf.so", "/usr/lib/aarch64-linux-gnu/coreutils/libstdbuf.so"].some(function(p) {
+  try { fs.accessSync(p); STDBUF_LIB = p; return true; } catch { return false; }
+});
 
 // ── Logging ──────────────────────────────────────────
 function log(emoji, msg) {
@@ -123,28 +132,92 @@ function loadDotEnv(dir) {
 
 function startOpenCodeServe() {
   if (ocServeProc) return;
+  lastOcExitCode = null;
+  lastOcStderr = "";
   log("\\u{1F680}", "Starting opencode serve on port " + OC_PORT);
   let ocBin = "opencode";
   try { ocBin = execSync("which opencode 2>/dev/null || echo opencode").toString().trim(); } catch {};
   const dotEnvVars = loadDotEnv(PROJECT_DIR);
-  const serveEnv = { ...process.env, ...dotEnvVars, HOME: process.env.HOME || "/home/daytona", NODE_TLS_REJECT_UNAUTHORIZED: "0" };
+  const serveEnv = { ...process.env, ...dotEnvVars, HOME: process.env.HOME || "/home/daytona", NODE_TLS_REJECT_UNAUTHORIZED: "0", PYTHONUNBUFFERED: "1" };
+  if (STDBUF_LIB) {
+    serveEnv._STDBUF_O = "L";
+    serveEnv.LD_PRELOAD = (serveEnv.LD_PRELOAD ? serveEnv.LD_PRELOAD + ":" : "") + STDBUF_LIB;
+    log("\\u{2699}", "stdbuf enabled: " + STDBUF_LIB);
+  }
   ocServeProc = spawn(ocBin, ["serve", "--port", String(OC_PORT), "--hostname", "127.0.0.1"], {
     cwd: PROJECT_DIR,
     env: serveEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
   ocServeProc.stdout.on("data", (d) => log("\\u{1F916}", "oc-serve: " + d.toString().trim()));
-  ocServeProc.stderr.on("data", (d) => log("\\u{1F916}", "oc-serve err: " + d.toString().trim()));
+  ocServeProc.stderr.on("data", (d) => {
+    const msg = d.toString().trim();
+    log("\\u{1F916}", "oc-serve err: " + msg);
+    lastOcStderr = (lastOcStderr + "\\n" + msg).slice(-2000);
+  });
   ocServeProc.on("exit", (code) => {
     log("\\u{26A0}", "opencode serve exited code=" + code);
+    lastOcExitCode = code;
     ocServeProc = null;
-    setTimeout(() => { if (!ocServeProc) startOpenCodeServe(); }, 3000);
+    setTimeout(() => {
+      if (ocServeProc) return;
+      checkHealthOnce().then(function(ok) {
+        if (ok) {
+          log("\\u{2705}", "opencode serve already healthy on port " + OC_PORT + ", reconnecting SSE only");
+          connectSSE();
+        } else if (!ocServeProc) {
+          startOpenCodeServe();
+        }
+      });
+    }, 3000);
   });
   ocServeProc.on("error", (err) => {
     log("\\u{274C}", "opencode serve spawn error: " + err.message);
+    lastOcStderr = (lastOcStderr + "\\nspawn error: " + err.message).slice(-2000);
     ocServeProc = null;
   });
   pollHealth(0);
+}
+
+function getOcDiagnostics() {
+  const parts = [];
+  if (lastOcExitCode !== null) parts.push("exit_code=" + lastOcExitCode);
+  if (!ocServeProc) parts.push("process=dead");
+  else parts.push("process=alive");
+  if (lastOcStderr) parts.push("stderr: " + lastOcStderr.trim().slice(-500));
+  return parts.join(", ") || "no diagnostics";
+}
+
+function restartOpenCodeServe() {
+  log("\\u{1F504}", "Force-restarting opencode serve");
+  if (ocServeProc) {
+    try { ocServeProc.kill("SIGKILL"); } catch {}
+    ocServeProc = null;
+  }
+  startOpenCodeServe();
+}
+
+function checkHealthOnce() {
+  return ocFetch("GET", "/global/health", null, 5000)
+    .then(function(res) { return !!(res && res.healthy); })
+    .catch(function() { return false; });
+}
+
+function waitForHealthy(maxAttempts) {
+  return new Promise(function(resolve) {
+    var attempt = 0;
+    function check() {
+      if (attempt >= maxAttempts) { resolve(false); return; }
+      attempt++;
+      setTimeout(function() {
+        checkHealthOnce().then(function(ok) {
+          if (ok) resolve(true);
+          else check();
+        });
+      }, attempt === 1 ? 500 : 1000);
+    }
+    check();
+  });
 }
 
 function pollHealth(attempt) {
@@ -161,7 +234,9 @@ function pollHealth(attempt) {
   }, attempt === 0 ? 500 : 1000);
 }
 
+let sseReconnectTimer = null;
 function connectSSE() {
+  if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer = null; }
   if (sseReq) { try { sseReq.kill(); } catch {} sseReq = null; }
   log("\\u{1F4E1}", "Connecting SSE /event via curl");
   const proc = spawn("curl", ["-s", "-N", "http://127.0.0.1:" + OC_PORT + "/event"], { stdio: ["ignore", "pipe", "pipe"] });
@@ -190,8 +265,12 @@ function connectSSE() {
     }
   });
   proc.stderr.on("data", (d) => { const m = d.toString().trim(); if (m) log("\\u{26A0}", "SSE curl stderr: " + m); });
-  proc.on("exit", (code) => { sseReq = null; log("\\u{26A0}", "SSE curl exited code=" + code + ", reconnecting..."); setTimeout(connectSSE, 2000); });
-  proc.on("error", (e) => { sseReq = null; log("\\u{26A0}", "SSE curl error: " + e.message); setTimeout(connectSSE, 3000); });
+  function scheduleReconnect(delay) {
+    if (sseReq === proc) sseReq = null;
+    if (!sseReconnectTimer) { sseReconnectTimer = setTimeout(connectSSE, delay); }
+  }
+  proc.on("exit", (code) => { log("\\u{26A0}", "SSE curl exited code=" + code + ", reconnecting..."); scheduleReconnect(2000); });
+  proc.on("error", (e) => { log("\\u{26A0}", "SSE curl error: " + e.message); scheduleReconnect(3000); });
 }
 
 function handleSSEEvent(evType, data) {
@@ -207,12 +286,46 @@ function handleSSEEvent(evType, data) {
     }
   } else if (evType === "session.error") {
     const sessionId = props.sessionID || props.id;
+    if (suppressedAborts.has(sessionId)) {
+      suppressedAborts.delete(sessionId);
+      log("\\u{26A0}", "Suppressed abort error for session " + sessionId);
+      return;
+    }
     const threadId = sessionToThread.get(sessionId);
     if (!threadId) return;
     activeThreads.delete(threadId);
     const errMsg = (props.error && props.error.data && props.error.data.message) || (props.error && props.error.message) || (props.e || "OpenCode session error");
     log("\\u{274C}", "Session error for thread " + threadId + ": " + errMsg);
     emitAgentError(threadId, errMsg);
+  } else if (evType === "message.part.updated") {
+    const part = props.part || props;
+    if (part && part.type === "tool" && part.sessionID) {
+      const threadId = sessionToThread.get(part.sessionID);
+      if (!threadId || !activeThreads.has(threadId)) return;
+      const s = part.state || {};
+      const tn = part.tool || "unknown";
+      const nn = TOOL_NAME_MAP[tn] || tn;
+      const toolId = part.callID || part.id;
+      if (tn === "bash" && s.status === "running") {
+        var metaOut = (s.metadata && s.metadata.output) || (part.metadata && part.metadata.output) || "";
+        if (metaOut) {
+          var outputStr = typeof metaOut === "string" ? metaOut : JSON.stringify(metaOut);
+          var emittedParts = sessionEmittedParts.get(part.sessionID);
+          if (emittedParts && !emittedParts.has(part.id)) {
+            if (!emittedParts.has(part.id + ":running")) {
+              emittedParts.add(part.id + ":running");
+              emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
+                { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
+              ], stop_reason: "tool_use" } });
+            }
+            emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
+              { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
+              { type: "tool_result", tool_use_id: toolId, content: outputStr, _streaming: true },
+            ], stop_reason: "tool_use" } });
+          }
+        }
+      }
+    }
   }
 }
 
@@ -220,11 +333,59 @@ function handleSSEEvent(evType, data) {
 async function sendPrompt(threadId, prompt, agent, model, sessionId, images) {
   const ocAgent = agent || "build";
   const ocModel = model || "";
-  log("\\u{1F916}", "Sending prompt thread=" + threadId + " agent=" + ocAgent + " model=" + (ocModel || "default"));
+  log("\\u{1F916}", "Sending prompt thread=" + threadId + " agent=" + ocAgent + " model=" + (ocModel || "default") + " storedSession=" + (sessionId || "none"));
 
   let ocSessionId = threadToSession.get(threadId);
+  if (!ocSessionId && sessionId) {
+    try {
+      const checkMsgs = await ocFetch("GET", "/session/" + sessionId + "/message?limit=50", null, 10000);
+      ocSessionId = sessionId;
+      log("\\u{1F504}", "Reusing stored session " + ocSessionId + " for thread " + threadId);
+      if (!sessionEmittedParts.has(ocSessionId) && Array.isArray(checkMsgs)) {
+        var priorParts = new Set();
+        for (var mi = 0; mi < checkMsgs.length; mi++) {
+          var cm = checkMsgs[mi];
+          if (!cm.parts) continue;
+          for (var pi = 0; pi < cm.parts.length; pi++) {
+            var pp = cm.parts[pi];
+            if (pp.id) { priorParts.add(pp.id); priorParts.add(pp.id + ":running"); priorParts.add(pp.id + ":r"); }
+          }
+        }
+        sessionEmittedParts.set(ocSessionId, priorParts);
+        log("\\u{1F504}", "Pre-populated " + priorParts.size + " prior part IDs for session " + ocSessionId);
+        var catchupBlocks = [];
+        for (var ci = checkMsgs.length - 1; ci >= 0; ci--) {
+          var lastMsg = checkMsgs[ci];
+          if (!lastMsg.info || lastMsg.info.role !== "assistant" || !lastMsg.parts) continue;
+          for (var cpi = 0; cpi < lastMsg.parts.length; cpi++) {
+            var lp = lastMsg.parts[cpi];
+            if (lp.type === "text" && lp.text) {
+              catchupBlocks.push({ type: "text", text: lp.text });
+            } else if (lp.type === "tool" && lp.state) {
+              var ls = lp.state;
+              var ltn = TOOL_NAME_MAP[lp.tool] || lp.tool || "unknown";
+              var ltid = lp.callID || lp.id;
+              if (ls.status === "completed") {
+                catchupBlocks.push({ type: "tool_use", id: ltid, name: ltn, input: ls.input || {} });
+                catchupBlocks.push({ type: "tool_result", tool_use_id: ltid, content: typeof ls.output === "string" ? ls.output : JSON.stringify(ls.output || "") });
+              }
+            }
+          }
+          break;
+        }
+        if (catchupBlocks.length > 0) {
+          log("\\u{1F504}", "Emitting " + catchupBlocks.length + " catch-up blocks from last assistant turn");
+          if (state.ws && state.ws.readyState === 1) {
+            state.ws.send(JSON.stringify({ type: "claude_catchup", threadId: threadId, blocks: catchupBlocks }));
+          }
+        }
+      }
+    } catch (e) {
+      log("\\u{26A0}", "Stored session " + sessionId + " not found in OpenCode, will create new: " + e.message);
+    }
+  }
   if (!ocSessionId) {
-    const sess = await ocFetch("POST", "/session", { title: threadId });
+    const sess = await ocFetch("POST", "/session", { title: threadId }, 60000);
     ocSessionId = sess.id;
     log("\\u{1F4DD}", "Created session " + ocSessionId + " for thread " + threadId);
   }
@@ -259,7 +420,7 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images) {
     parts: parts,
     agent: ocAgent,
     model: modelObj,
-  });
+  }, 60000);
   log("\\u{1F916}", "Prompt dispatched to session " + ocSessionId);
   pollSession(threadId, ocSessionId);
 }
@@ -267,52 +428,121 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images) {
 function pollSession(threadId, sessionId) {
   if (!sessionEmittedParts.has(sessionId)) sessionEmittedParts.set(sessionId, new Set());
   const emittedParts = sessionEmittedParts.get(sessionId);
+  const pendingText = new Map();
   const taskChildren = new Map();
+  const toolOutputLen = new Map();
   let lastCost = 0;
   let seenBusy = false;
+  let seenBusyFromStatus = false;
   let idleCount = 0;
+  const pollStartedAt = Date.now();
+  const MIN_POLL_BEFORE_IDLE_EXIT_MS = 5000;
+  let lastProgressAt = Date.now();
+  const STUCK_NO_OUTPUT_MS = 120000;
+  const STUCK_NO_PROGRESS_MS = 300000;
+  let pollErrorCount = 0;
+  const MAX_CONSECUTIVE_ERRORS = 20;
+
+  function flushPendingText() {
+    for (const [pid, entry] of pendingText) {
+      emittedParts.add(pid);
+      if (entry.kind === "text") {
+        emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [{ type: "text", text: entry.text }], stop_reason: "end_turn" } });
+      } else {
+        emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [{ type: "thinking", thinking: entry.text }], stop_reason: null } });
+      }
+    }
+    pendingText.clear();
+  }
+
+  function abortStuck(reason) {
+    log("\\u{274C}", "Stuck session " + sessionId + " for thread " + threadId + ": " + reason);
+    activeThreads.delete(threadId);
+    ocFetch("POST", "/session/" + sessionId + "/abort", {}, 10000).catch(function() {});
+    emitAgentError(threadId, reason);
+  }
+
   const poll = () => {
-    if (!activeThreads.has(threadId)) { log("\\u{26A0}", "Poll skipped: thread " + threadId + " not in activeThreads"); return; }
+    if (!activeThreads.has(threadId)) { log("\\u{26A0}", "Poll skipped: thread " + threadId + " not in activeThreads"); flushPendingText(); return; }
+    var now = Date.now();
+    if (seenBusy && emittedParts.size === 0 && now - pollStartedAt > STUCK_NO_OUTPUT_MS) {
+      abortStuck("Agent session stuck: busy for " + Math.round((now - pollStartedAt) / 1000) + "s with no output");
+      return;
+    }
+    if (seenBusy && emittedParts.size > 0 && now - lastProgressAt > STUCK_NO_PROGRESS_MS) {
+      abortStuck("Agent session stuck: no new output for " + Math.round((now - lastProgressAt) / 1000) + "s");
+      return;
+    }
     log("\\u{1F504}", "Polling session " + sessionId + " (seenBusy=" + seenBusy + " idle=" + idleCount + " parts=" + emittedParts.size + ")");
-    ocFetch("GET", "/session/" + sessionId + "/message?limit=20", null)
+    ocFetch("GET", "/session/" + sessionId + "/message?limit=20", null, 10000)
       .then((msgs) => {
         if (!Array.isArray(msgs)) { setTimeout(poll, 1500); return; }
+        var newPartsThisPoll = false;
         for (const msg of msgs) {
           if (!msg.parts || !msg.info || msg.info.role !== "assistant") continue;
           seenBusy = true;
           for (const part of msg.parts) {
             const pid = part.id;
             if (!pid || emittedParts.has(pid)) continue;
+            newPartsThisPoll = true;
             if (part.type === "text" && part.text) {
-              emittedParts.add(pid);
-              emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [{ type: "text", text: part.text }], stop_reason: "end_turn" } });
+              const prev = pendingText.get(pid);
+              if (!prev) {
+                pendingText.set(pid, { kind: "text", text: part.text });
+              } else if (part.text.length > prev.text.length) {
+                prev.text = part.text;
+              } else {
+                flushPendingText();
+              }
             } else if (part.type === "reasoning" && part.text) {
-              emittedParts.add(pid);
-              emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [{ type: "thinking", thinking: part.text }], stop_reason: null } });
-            } else if (part.type === "tool") {
+              const rkey = pid + ":r";
+              const prev = pendingText.get(rkey);
+              if (!prev) {
+                pendingText.set(rkey, { kind: "reasoning", text: part.text });
+              } else if (part.text.length > prev.text.length) {
+                prev.text = part.text;
+              } else {
+                flushPendingText();
+              }
+            } else if (part.type === "tool" && !emittedParts.has(pid)) {
               const s = part.state || {};
               const tn = part.tool || "unknown";
               const nn = TOOL_NAME_MAP[tn] || tn;
               const toolId = part.callID || part.id;
               if (s.status === "completed") {
+                flushPendingText();
                 emittedParts.add(pid);
                 taskChildren.delete(pid);
+                toolOutputLen.delete(pid);
                 emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
                   { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
                   { type: "tool_result", tool_use_id: toolId, content: typeof s.output === "string" ? s.output : JSON.stringify(s.output || "") },
                 ], stop_reason: "tool_use" } });
               } else if (s.status === "running") {
+                flushPendingText();
                 if (!emittedParts.has(pid + ":running")) {
                   emittedParts.add(pid + ":running");
                   emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
                     { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
                   ], stop_reason: "tool_use" } });
                 }
+                if (tn === "bash") {
+                  var metaOutput = (s.metadata && s.metadata.output) || (part.metadata && part.metadata.output) || "";
+                  var partialOutput = typeof metaOutput === "string" ? metaOutput : JSON.stringify(metaOutput);
+                  if (partialOutput.length > (toolOutputLen.get(pid) || 0)) {
+                    toolOutputLen.set(pid, partialOutput.length);
+                    emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
+                      { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
+                      { type: "tool_result", tool_use_id: toolId, content: partialOutput, _streaming: true },
+                    ], stop_reason: "tool_use" } });
+                  }
+                }
                 if (tn === "task" && s.metadata && s.metadata.sessionId && !taskChildren.has(pid)) {
                   taskChildren.set(pid, { childSid: s.metadata.sessionId, toolId: toolId, input: s.input || {}, lastHash: "" });
                 }
               }
-            } else if (part.type === "step-finish") {
+            } else if (part.type === "step-finish" && !emittedParts.has(pid)) {
+              flushPendingText();
               emittedParts.add(pid);
               lastCost += part.cost || 0;
               if (part.reason === "stop") {
@@ -322,6 +552,7 @@ function pollSession(threadId, sessionId) {
             }
           }
         }
+        if (newPartsThisPoll) { lastProgressAt = Date.now(); pollErrorCount = 0; }
         var childPolls = [];
         for (const [pid, ci] of taskChildren) {
           childPolls.push(
@@ -352,16 +583,18 @@ function pollSession(threadId, sessionId) {
               .catch(function() {})
           );
         }
-        return (childPolls.length > 0 ? Promise.all(childPolls) : Promise.resolve()).then(function() { return ocFetch("GET", "/session/status", null); });
+        return (childPolls.length > 0 ? Promise.all(childPolls) : Promise.resolve()).then(function() { return ocFetch("GET", "/session/status", null, 10000); });
       })
       .then((statuses) => {
         if (!statuses) return;
         const st = statuses[sessionId];
-        if (st && st.type === "busy") { seenBusy = true; idleCount = 0; }
+        if (st && st.type === "busy") { seenBusy = true; seenBusyFromStatus = true; idleCount = 0; }
         if (!st || st.type === "idle") {
           idleCount++;
-          if (seenBusy || idleCount >= 5) {
-            log("\\u{1F916}", "Session " + sessionId + " idle (seenBusy=" + seenBusy + " idleCount=" + idleCount + "), emitting exit");
+          var pollAge = Date.now() - pollStartedAt;
+          if ((seenBusyFromStatus || idleCount >= 5) && pollAge > MIN_POLL_BEFORE_IDLE_EXIT_MS) {
+            flushPendingText();
+            log("\\u{1F916}", "Session " + sessionId + " idle (seenBusy=" + seenBusy + " idleCount=" + idleCount + " age=" + Math.round(pollAge/1000) + "s), emitting exit");
             activeThreads.delete(threadId);
             emitAgentExit(threadId, 0);
             return;
@@ -370,11 +603,29 @@ function pollSession(threadId, sessionId) {
         setTimeout(poll, 1500);
       })
       .catch((e) => {
-        log("\\u{26A0}", "Poll error: " + (e.message || String(e)));
+        pollErrorCount++;
+        log("\\u{26A0}", "Poll error (" + pollErrorCount + "/" + MAX_CONSECUTIVE_ERRORS + "): " + (e.message || String(e)));
+        if (pollErrorCount >= MAX_CONSECUTIVE_ERRORS) {
+          abortStuck("Agent session unreachable: " + pollErrorCount + " consecutive poll errors");
+          return;
+        }
         setTimeout(poll, 3000);
       });
   };
   setTimeout(poll, 2000);
+}
+
+async function ensureOpenCodeHealthy() {
+  var healthy = await checkHealthOnce();
+  if (healthy) return;
+  log("\\u{26A0}", "OpenCode serve unhealthy, restarting...");
+  restartOpenCodeServe();
+  healthy = await waitForHealthy(60);
+  if (!healthy) {
+    const diag = getOcDiagnostics();
+    log("\\u{274C}", "OpenCode serve failed to become healthy after restart: " + diag);
+    throw new Error("OpenCode serve not healthy after restart (" + diag + ")");
+  }
 }
 
 async function handleStartAgent(msg) {
@@ -382,12 +633,29 @@ async function handleStartAgent(msg) {
   const existingSession = threadToSession.get(threadId);
   if (existingSession && activeThreads.has(threadId)) {
     log("\\u{1F916}", "Aborting running session for thread " + threadId);
-    try { await ocFetch("POST", "/session/" + existingSession + "/abort", {}); } catch {}
+    suppressedAborts.add(existingSession);
+    setTimeout(function() { suppressedAborts.delete(existingSession); }, 10000);
+    try { await ocFetch("POST", "/session/" + existingSession + "/abort", {}, 10000); } catch {}
     activeThreads.delete(threadId);
   }
   try {
+    await ensureOpenCodeHealthy();
     await sendPrompt(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId, msg.images);
-  } catch (e) { emitAgentError(threadId, e.message || String(e)); }
+  } catch (e) {
+    log("\\u{26A0}", "First attempt failed: " + (e.message || String(e)) + ", retrying after restart...");
+    try {
+      restartOpenCodeServe();
+      var ready = await waitForHealthy(60);
+      if (!ready) {
+        const diag = getOcDiagnostics();
+        throw new Error("OpenCode serve not healthy after restart (" + diag + ")");
+      }
+      threadToSession.delete(threadId);
+      await sendPrompt(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId, msg.images);
+    } catch (retryErr) {
+      emitAgentError(threadId, retryErr.message || String(retryErr));
+    }
+  }
 }
 
 function handleUserAnswer(msg) {

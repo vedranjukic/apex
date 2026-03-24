@@ -27,7 +27,7 @@ export function HomePage() {
     }
   }, [projects, previewProjectId]);
 
-  const { sendPrompt, executeThread, sendUserAnswer } = useAgentSocket(
+  const { sendPrompt, executeThread, sendUserAnswer, stopAgent } = useAgentSocket(
     previewProjectId ?? undefined,
   );
 
@@ -139,6 +139,7 @@ export function HomePage() {
             onSendSilentPrompt={sendPrompt}
             onExecuteThread={handleExecuteThread}
             onSendUserAnswer={sendUserAnswer}
+            onStopAgent={stopAgent}
           />
         )}
         <span className="absolute bottom-2 right-3 text-[10px] text-panel-text-muted/50 select-none pointer-events-none">
