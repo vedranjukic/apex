@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Plus, FolderOpen, Trash2, ExternalLink, Loader2, CheckCircle2,
   CircleHelp, CirclePause, XCircle, Circle, GitBranch, ChevronDown, ChevronRight, Settings, Shield,
-  Play, Square, RotateCw,
+  Play, Square, RotateCw, MoreHorizontal,
 } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { useProjectsStore } from '../../stores/projects-store';
@@ -17,6 +17,7 @@ const STATUS_LABELS: Record<string, string> = {
   pulling_image: 'pulling image',
   starting: 'starting',
   stopping: 'stopping',
+  deleting: 'deleting',
   running: 'running',
   stopped: 'stopped',
   error: 'error',
@@ -52,38 +53,37 @@ function timeAgo(dateStr: string): string {
 }
 
 function SandboxControls({ project, className }: { project: Project; className?: string }) {
-  const [loading, setLoading] = useState(false);
-  const { fetchProjects } = useProjectsStore();
+  const { fetchProjects, setProjectStatus } = useProjectsStore();
   const iconSize = className ?? 'w-4 h-4';
 
   const isRunning = project.status === 'running';
   const isStopped = project.status === 'stopped' || project.status === 'error';
-  const isTransitioning = project.status === 'starting' || project.status === 'stopping' || project.status === 'creating' || project.status === 'pulling_image';
+  const isTransitioning = project.status === 'starting' || project.status === 'stopping' || project.status === 'creating' || project.status === 'pulling_image' || project.status === 'deleting';
 
   const handleStop = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    setLoading(true);
+    setProjectStatus(project.id, 'stopping');
     try { await projectsApi.stop(project.id); } catch { /* ignore */ }
-    finally { setLoading(false); fetchProjects(); }
+    finally { fetchProjects(); }
   };
 
   const handleStart = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    setLoading(true);
+    setProjectStatus(project.id, 'starting');
     try { await projectsApi.start(project.id); } catch { /* ignore */ }
-    finally { setLoading(false); fetchProjects(); }
+    finally { fetchProjects(); }
   };
 
   const handleRestart = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    setLoading(true);
+    setProjectStatus(project.id, 'stopping');
     try { await projectsApi.restart(project.id); } catch { /* ignore */ }
-    finally { setLoading(false); fetchProjects(); }
+    finally { fetchProjects(); }
   };
 
-  if (loading || isTransitioning) {
+  if (isTransitioning) {
     return (
-      <span className="p-1.5" title={loading ? 'Working…' : project.status}>
+      <span className="p-1.5" title={project.status}>
         <Loader2 className={cn(iconSize, 'animate-spin text-text-muted')} />
       </span>
     );
@@ -432,6 +432,7 @@ function ForkRow({
     pulling_image: 'text-yellow-400 bg-yellow-400/10',
     starting: 'text-yellow-400 bg-yellow-400/10',
     stopping: 'text-yellow-400 bg-yellow-400/10',
+    deleting: 'text-red-400 bg-red-400/10',
     running: 'text-green-400 bg-green-400/10',
     stopped: 'text-gray-400 bg-gray-400/10',
     error: 'text-red-400 bg-red-400/10',
@@ -529,11 +530,15 @@ function ProjectCard({
   noBorder?: boolean;
   activeProjectId?: string | null;
 }) {
+  const [showMore, setShowMore] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
   const statusColors: Record<string, string> = {
     creating: 'text-yellow-400 bg-yellow-400/10',
     pulling_image: 'text-yellow-400 bg-yellow-400/10',
     starting: 'text-yellow-400 bg-yellow-400/10',
     stopping: 'text-yellow-400 bg-yellow-400/10',
+    deleting: 'text-red-400 bg-red-400/10',
     running: 'text-green-400 bg-green-400/10',
     stopped: 'text-gray-400 bg-gray-400/10',
     error: 'text-red-400 bg-red-400/10',
@@ -549,7 +554,7 @@ function ProjectCard({
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h3 className="font-semibold text-sm truncate">{project.name}</h3>
+            <h3 className="font-semibold text-sm truncate hover:text-primary transition-colors cursor-pointer" onClick={onOpen}>{project.name}</h3>
             <span
               className={cn(
                 'text-xs px-2 py-0.5 rounded-full font-medium',
@@ -580,7 +585,6 @@ function ProjectCard({
           )}
         </div>
         <div className="flex items-center gap-1 ml-4">
-          <SandboxControls project={project} className="w-4 h-4" />
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -601,15 +605,58 @@ function ProjectCard({
           <button
             onClick={(e) => {
               e.stopPropagation();
-              if (confirm('Delete this project and its sandbox?')) onDelete();
+              setShowMore((v) => !v);
             }}
-            className="p-1.5 rounded-lg hover:bg-red-400/10 text-text-secondary hover:text-danger transition-colors"
-            title="Delete project"
+            className={cn(
+              'p-1.5 rounded-lg hover:bg-surface-secondary text-text-secondary hover:text-primary transition-colors',
+              showMore && 'bg-surface-secondary text-primary',
+            )}
+            title="More actions"
           >
-            <Trash2 className="w-4 h-4" />
+            <MoreHorizontal className="w-4 h-4" />
           </button>
+          {showMore && (
+            <>
+              <SandboxControls project={project} className="w-4 h-4" />
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmDelete(true);
+                }}
+                className="p-1.5 rounded-lg hover:bg-red-400/10 text-text-secondary hover:text-danger transition-colors"
+                title="Delete project"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </>
+          )}
         </div>
       </div>
+
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setConfirmDelete(false)}>
+          <div className="bg-surface rounded-xl shadow-xl w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold mb-1">Delete project</h3>
+            <p className="text-xs text-text-secondary mb-4">
+              Are you sure you want to delete <span className="font-medium text-text-primary">{project.name}</span> and its sandbox? This action cannot be undone.
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => setConfirmDelete(false)}
+                className="px-3 py-1.5 text-xs rounded-lg border border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { setConfirmDelete(false); onDelete(); }}
+                className="px-3 py-1.5 text-xs rounded-lg bg-red-600 text-white hover:bg-red-500 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

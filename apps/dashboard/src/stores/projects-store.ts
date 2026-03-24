@@ -17,6 +17,7 @@ interface ProjectsState {
     localDir?: string;
   }) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
+  setProjectStatus: (id: string, status: string) => void;
   fetchForks: (projectId: string) => Promise<void>;
   forkProject: (id: string, branchName: string) => Promise<Project>;
 }
@@ -45,13 +46,21 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   deleteProject: async (id) => {
+    get().setProjectStatus(id, 'deleting');
     try {
       await projectsApi.delete(id);
     } catch {
-      // Remove from local state even if the backend call fails
-      // (e.g. project already deleted from DB)
+      // ignore – project may already be gone
     }
     set({ projects: get().projects.filter((p) => p.id !== id) });
+  },
+
+  setProjectStatus: (id, status) => {
+    set({
+      projects: get().projects.map((p) =>
+        p.id === id ? { ...p, status } : p,
+      ),
+    });
   },
 
   fetchForks: async (projectId: string) => {
