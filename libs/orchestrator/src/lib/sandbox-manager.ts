@@ -216,9 +216,9 @@ export class SandboxManager extends EventEmitter {
       githubToken:
         config.githubToken || process.env["GITHUB_TOKEN"] || "",
       snapshot:
-        config.snapshot || process.env["DAYTONA_SNAPSHOT"] || "daytona-apex-3",
+        config.snapshot || process.env["DAYTONA_SNAPSHOT"] || "apex-default-0.1.1",
       image:
-        config.image || process.env["SANDBOX_IMAGE"] || "docker.io/daytonaio/apex-default:0.1.0",
+        config.image || process.env["SANDBOX_IMAGE"] || "daytonaio/apex-default:0.1.1",
       timeoutMs: config.timeoutMs || 600000,
       provider:
         (config.provider as SandboxProviderType) ||
@@ -1708,12 +1708,23 @@ export class SandboxManager extends EventEmitter {
       const openCodeConfig: Record<string, unknown> = {
         $schema: "https://opencode.ai/config.json",
         default_agent: "build",
-        ...(useProxy ? {
-          provider: {
+        provider: {
+          ...(useProxy ? {
             anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
-            openai: { options: { baseURL: "{env:OPENAI_BASE_URL}" } },
-          },
-        } : {}),
+            openai: {
+              options: { baseURL: "{env:OPENAI_BASE_URL}" },
+              models: {
+                "gpt-5.2": { options: { reasoningEffort: "medium" } },
+              },
+            },
+          } : {
+            openai: {
+              models: {
+                "gpt-5.2": { options: { reasoningEffort: "medium" } },
+              },
+            },
+          }),
+        },
         agent: {
           build: {
             description: "Full development agent with all tools enabled",
@@ -1957,12 +1968,23 @@ export class SandboxManager extends EventEmitter {
     const openCodeConfig: Record<string, unknown> = {
       $schema: "https://opencode.ai/config.json",
       default_agent: "build",
-      ...(useProxyI ? {
-        provider: {
+      provider: {
+        ...(useProxyI ? {
           anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
-          openai: { options: { baseURL: "{env:OPENAI_BASE_URL}" } },
-        },
-      } : {}),
+          openai: {
+            options: { baseURL: "{env:OPENAI_BASE_URL}" },
+            models: {
+              "gpt-5.2": { options: { reasoningEffort: "medium" } },
+            },
+          },
+        } : {
+          openai: {
+            models: {
+              "gpt-5.2": { options: { reasoningEffort: "medium" } },
+            },
+          },
+        }),
+      },
       agent: {
         build: {
           description: "Full development agent with all tools enabled",

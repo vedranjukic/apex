@@ -110,8 +110,15 @@ const FIELDS: FieldDef[] = [
     key: "DAYTONA_SNAPSHOT",
     label: "Daytona Snapshot",
     type: "text",
-    placeholder: "daytona-apex-3",
-    help: "Sandbox snapshot image name. Leave empty to use the default.",
+    placeholder: "apex-default-0.1.1",
+    help: "Daytona provider snapshot name. Leave empty to use the default.",
+  },
+  {
+    key: "SANDBOX_IMAGE",
+    label: "Container Image",
+    type: "text",
+    placeholder: "docker.io/daytonaio/apex-default:0.1.1",
+    help: "Container image for Docker and Apple Container providers. Leave empty to use the default.",
   },
   {
     key: "GITHUB_TOKEN",
@@ -120,13 +127,6 @@ const FIELDS: FieldDef[] = [
     placeholder: "ghp_...",
     help: "Enables cloning, pushing, and pulling private repositories.",
     helpExtra: GITHUB_TOKEN_HELP,
-  },
-  {
-    key: 'DAYTONA_SNAPSHOT',
-    label: 'Daytona Snapshot',
-    type: 'text' as const,
-    placeholder: 'daytona-apex-1',
-    help: 'Sandbox snapshot image name. Leave empty to use the default.',
   },
 ];
 
@@ -187,7 +187,7 @@ export function SettingsPage() {
       setValues(vals);
       setSources(srcs);
       setStatus("saved");
-      setTimeout(() => setStatus("idle"), 2000);
+      setTimeout(() => navigate("/"), 1500);
     } catch (err) {
       setStatus("error");
       setErrorMsg(

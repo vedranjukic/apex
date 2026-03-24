@@ -27,7 +27,7 @@ import type {
   SessionCommandOpts,
 } from "./types.js";
 
-const DEFAULT_IMAGE = "docker.io/daytonaio/apex-default:0.1.0";
+const DEFAULT_IMAGE = "daytonaio/apex-default:0.1.1";
 const LABEL_SANDBOX = "apex.sandbox";
 const CONTAINER_USER = "daytona";
 const DEFAULT_MEMORY_MB = 3072;
