@@ -40,6 +40,8 @@ const SNIPPET_TAG_ATTR = 'data-snippet';
 const GITHUB_TAG_ATTR = 'data-github-context';
 const SNIPPET_MIME = 'application/x-codeany-snippet';
 
+type PickerMode = 'categories' | 'files';
+
 function getCaretRect(): { top: number; left: number } | null {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0) return null;
@@ -129,11 +131,13 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
   ) {
     const editorRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const [showPicker, setShowPicker] = useState(false);
+    const [pickerMode, setPickerMode] = useState<PickerMode | null>(null);
     const [pickerAnchor, setPickerAnchor] = useState<{ top: number; left: number } | null>(null);
     const [empty, setEmpty] = useState(true);
     const [images, setImages] = useState<ImageAttachment[]>([]);
     const triggerRangeRef = useRef<Range | null>(null);
+
+    const showPicker = pickerMode !== null;
 
     useImperativeHandle(ref, () => ({
       fill(text: string) {
@@ -167,7 +171,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
 
     const addImageFiles = useCallback((fileList: File[]) => {
       const ACCEPTED = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-      const MAX_SIZE = 20 * 1024 * 1024; // 20 MB
+      const MAX_SIZE = 20 * 1024 * 1024;
       for (const file of fileList) {
         if (!ACCEPTED.includes(file.type)) continue;
         if (file.size > MAX_SIZE) continue;
@@ -225,6 +229,68 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
         handleSubmit();
       }
     }, [isRunning, empty, images, onStop, handleSubmit]);
+
+    const closePicker = useCallback(() => {
+      setPickerMode(null);
+      triggerRangeRef.current = null;
+      editorRef.current?.focus();
+    }, []);
+
+    const replaceAtTrigger = useCallback((tag: HTMLSpanElement) => {
+      const el = editorRef.current;
+      if (!el) return;
+      if (triggerRangeRef.current) {
+        const sel = window.getSelection();
+        if (sel) {
+          const tRange = triggerRangeRef.current;
+          const textNode = tRange.startContainer;
+          if (textNode.nodeType === Node.TEXT_NODE) {
+            const fullText = textNode.textContent ?? '';
+            const atStart = tRange.startOffset;
+            const currentSel = sel.getRangeAt(0);
+            const atEnd = currentSel.startContainer === textNode
+              ? currentSel.startOffset
+              : atStart + 1;
+            const before = fullText.slice(0, atStart);
+            const after = fullText.slice(atEnd);
+            textNode.textContent = before;
+
+            const afterNode = document.createTextNode(after || '\u00a0');
+            textNode.parentNode?.insertBefore(afterNode, textNode.nextSibling);
+            textNode.parentNode?.insertBefore(tag, afterNode);
+
+            const newRange = document.createRange();
+            newRange.setStart(afterNode, after ? 0 : 1);
+            newRange.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(newRange);
+          }
+        }
+        triggerRangeRef.current = null;
+      }
+      updateEmpty();
+      el.focus();
+    }, [updateEmpty]);
+
+    const handleCategorySelect = useCallback((category: string) => {
+      if (category === 'files') {
+        setPickerMode('files');
+        return;
+      }
+      if (category === 'issue' && githubContext?.type === 'issue') {
+        setPickerMode(null);
+        const tag = createGitHubContextTag(githubContext);
+        replaceAtTrigger(tag);
+        return;
+      }
+      if (category === 'pr' && githubContext?.type === 'pull') {
+        setPickerMode(null);
+        const tag = createGitHubContextTag(githubContext);
+        replaceAtTrigger(tag);
+        return;
+      }
+      closePicker();
+    }, [githubContext, replaceAtTrigger, closePicker]);
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -289,38 +355,18 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
       const charBeforeAt = atIdx > 0 ? textBefore[atIdx - 1] : undefined;
       if (charBeforeAt && charBeforeAt !== ' ' && charBeforeAt !== '\n') return;
 
-      const typed = textBefore.slice(atIdx + 1).toLowerCase();
-      if (githubContext && (typed === 'issue' || typed === 'pr')) {
-        const matchesType = (typed === 'issue' && githubContext.type === 'issue') ||
-          (typed === 'pr' && githubContext.type === 'pull');
-        if (matchesType) {
-          const fullText = node.textContent ?? '';
-          const before = fullText.slice(0, atIdx);
-          const after = fullText.slice(range.startOffset);
-          node.textContent = before;
-
-          const tag = createGitHubContextTag(githubContext);
-          const afterNode = document.createTextNode(after || '\u00a0');
-          node.parentNode?.insertBefore(afterNode, node.nextSibling);
-          node.parentNode?.insertBefore(tag, afterNode);
-
-          const newRange = document.createRange();
-          newRange.setStart(afterNode, after ? 0 : 1);
-          newRange.collapse(true);
-          sel.removeAllRanges();
-          sel.addRange(newRange);
-          updateEmpty();
-          return;
-        }
-      }
-
-      if (!showPicker && requestListing) {
+      if (!showPicker) {
         const savedRange = range.cloneRange();
         savedRange.setStart(node, atIdx);
         triggerRangeRef.current = savedRange;
         const rect = getCaretRect();
         setPickerAnchor(rect);
-        setShowPicker(true);
+
+        const hasGhIssue = githubContext?.type === 'issue';
+        const hasGhPr = githubContext?.type === 'pull';
+        if (hasGhIssue || hasGhPr || requestListing) {
+          setPickerMode('categories');
+        }
       }
     }, [showPicker, requestListing, updateEmpty, githubContext]);
 
@@ -370,55 +416,13 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
 
     const handleFileSelect = useCallback(
       (filePath: string, isDirectory: boolean) => {
-        setShowPicker(false);
-        const el = editorRef.current;
-        if (!el) return;
-
+        setPickerMode(null);
         const fileName = filePath.split('/').pop() ?? filePath;
-
-        if (triggerRangeRef.current) {
-          const sel = window.getSelection();
-          if (sel) {
-            const tRange = triggerRangeRef.current;
-            const textNode = tRange.startContainer;
-            if (textNode.nodeType === Node.TEXT_NODE) {
-              const fullText = textNode.textContent ?? '';
-              const atStart = tRange.startOffset;
-              const currentSel = sel.getRangeAt(0);
-              const atEnd = currentSel.startContainer === textNode
-                ? currentSel.startOffset
-                : atStart + 1;
-              const before = fullText.slice(0, atStart);
-              const after = fullText.slice(atEnd);
-              textNode.textContent = before;
-
-              const tag = createFileTag(filePath, fileName, isDirectory);
-              const afterNode = document.createTextNode(after || '\u00a0');
-
-              textNode.parentNode?.insertBefore(afterNode, textNode.nextSibling);
-              textNode.parentNode?.insertBefore(tag, afterNode);
-
-              const newRange = document.createRange();
-              newRange.setStart(afterNode, after ? 0 : 1);
-              newRange.collapse(true);
-              sel.removeAllRanges();
-              sel.addRange(newRange);
-            }
-          }
-          triggerRangeRef.current = null;
-        }
-
-        updateEmpty();
-        el.focus();
+        const tag = createFileTag(filePath, fileName, isDirectory);
+        replaceAtTrigger(tag);
       },
-      [updateEmpty],
+      [replaceAtTrigger],
     );
-
-    const handleClosePicker = useCallback(() => {
-      setShowPicker(false);
-      triggerRangeRef.current = null;
-      editorRef.current?.focus();
-    }, []);
 
     const handleTagRemove = useCallback(
       (filePath: string) => {
@@ -480,11 +484,23 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
                 }
               }}
             />
-            {showPicker && requestListing && (
+            {pickerMode === 'categories' && (
+              <div className="absolute bottom-full left-0 mb-2">
+                <CategoryPicker
+                  onSelect={handleCategorySelect}
+                  onClose={closePicker}
+                  hasFiles={!!requestListing}
+                  hasIssue={githubContext?.type === 'issue'}
+                  hasPr={githubContext?.type === 'pull'}
+                  anchorRect={pickerAnchor ?? undefined}
+                />
+              </div>
+            )}
+            {pickerMode === 'files' && requestListing && (
               <div className="absolute bottom-full left-0 mb-2">
                 <FilePicker
                   onSelect={handleFileSelect}
-                  onClose={handleClosePicker}
+                  onClose={closePicker}
                   requestListing={requestListing}
                   anchorRect={pickerAnchor ?? undefined}
                 />
@@ -543,12 +559,112 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
   },
 );
 
-const ISSUE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1"/></svg>`;
-const PR_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/></svg>`;
-const FILE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>`;
+// ── Category Picker ──────────────────────────────────
+
+interface CategoryPickerProps {
+  onSelect: (category: string) => void;
+  onClose: () => void;
+  hasFiles: boolean;
+  hasIssue?: boolean;
+  hasPr?: boolean;
+  anchorRect?: { top: number; left: number };
+}
+
+function CategoryPicker({ onSelect, onClose, hasFiles, hasIssue, hasPr, anchorRect }: CategoryPickerProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [highlightIdx, setHighlightIdx] = useState(0);
+
+  const items: { id: string; label: string; icon: string; sublabel: string }[] = [];
+  if (hasFiles) items.push({ id: 'files', label: 'Files', icon: FILE_ICON_SVG, sublabel: 'Browse project files' });
+  if (hasIssue) items.push({ id: 'issue', label: 'Issue', icon: ISSUE_ICON_SVG, sublabel: 'Attach GitHub issue context' });
+  if (hasPr) items.push({ id: 'pr', label: 'PR', icon: PR_ICON_SVG, sublabel: 'Attach pull request context' });
+
+  // If only files and no GitHub context, skip category picker and go straight to files
+  useEffect(() => {
+    if (items.length === 1 && items[0].id === 'files') {
+      onSelect('files');
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [onClose]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setHighlightIdx((i) => (i + 1) % items.length);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setHighlightIdx((i) => (i - 1 + items.length) % items.length);
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        if (items[highlightIdx]) onSelect(items[highlightIdx].id);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose, onSelect, items, highlightIdx]);
+
+  if (items.length <= 1) return null;
+
+  return (
+    <div
+      ref={panelRef}
+      className="bg-surface border border-border rounded-lg shadow-xl overflow-hidden w-64"
+    >
+      <div className="px-3 py-1.5 border-b border-border">
+        <span className="text-[10px] font-medium text-text-muted uppercase tracking-wider">Insert reference</span>
+      </div>
+      <div className="py-1">
+        {items.map((item, idx) => (
+          <button
+            key={item.id}
+            type="button"
+            onMouseEnter={() => setHighlightIdx(idx)}
+            onClick={() => onSelect(item.id)}
+            className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${
+              idx === highlightIdx ? 'bg-primary/10 text-text-primary' : 'text-text-secondary hover:bg-surface-secondary'
+            }`}
+          >
+            <span
+              className="flex items-center shrink-0 text-text-muted"
+              dangerouslySetInnerHTML={{ __html: item.icon }}
+            />
+            <div className="min-w-0">
+              <div className="text-sm font-medium">{item.label}</div>
+              <div className="text-[11px] text-text-muted truncate">{item.sublabel}</div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── SVG Icons ────────────────────────────────────────
+
+const ISSUE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1"/></svg>`;
+const PR_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/></svg>`;
+const FILE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>`;
+const ISSUE_ICON_SVG_SM = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1"/></svg>`;
+const PR_ICON_SVG_SM = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/></svg>`;
+const FILE_ICON_SVG_SM = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>`;
 const FOLDER_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`;
 const CODE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>`;
 const CLOSE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`;
+
+// ── Tag Factories ────────────────────────────────────
 
 function createFileTag(filePath: string, fileName: string, isDirectory = false): HTMLSpanElement {
   const tag = document.createElement('span');
@@ -560,7 +676,7 @@ function createFileTag(filePath: string, fileName: string, isDirectory = false):
   tag.title = filePath;
 
   const icon = document.createElement('span');
-  icon.innerHTML = isDirectory ? FOLDER_ICON_SVG : FILE_ICON_SVG;
+  icon.innerHTML = isDirectory ? FOLDER_ICON_SVG : FILE_ICON_SVG_SM;
   icon.className = 'flex items-center';
   tag.appendChild(icon);
 
@@ -631,7 +747,7 @@ function createGitHubContextTag(ctx: GitHubContextData): HTMLSpanElement {
   tag.title = `${labelText}: ${ctx.title}`;
 
   const icon = document.createElement('span');
-  icon.innerHTML = isIssue ? ISSUE_ICON_SVG : PR_ICON_SVG;
+  icon.innerHTML = isIssue ? ISSUE_ICON_SVG_SM : PR_ICON_SVG_SM;
   icon.className = 'flex items-center';
   tag.appendChild(icon);
 

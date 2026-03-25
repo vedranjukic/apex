@@ -1,19 +1,24 @@
 # Prompt Input, File References, Code Snippets & Image Attachments
 
-The thread prompt uses a `contentEditable` div instead of a plain `<textarea>` so that inline reference tags can be mixed with text. Three input types are supported:
+The thread prompt uses a `contentEditable` div instead of a plain `<textarea>` so that inline reference tags can be mixed with text. Four input types are supported:
 
-1. **File/folder references** -- triggered by typing `@`, selecting from a file picker popup
-2. **Code snippet references** -- created by copying text in the code editor and pasting into the prompt
-3. **Image attachments** -- added via the toolbar image button or by pasting/dropping images from the clipboard
+1. **File/folder references** -- triggered by typing `@` and selecting "Files" from the category picker
+2. **GitHub issue/PR references** -- triggered by typing `@` and selecting "Issue" or "PR" from the category picker (only available when the project has `githubContext`)
+3. **Code snippet references** -- created by copying text in the code editor and pasting into the prompt
+4. **Image attachments** -- added via the toolbar image button or by pasting/dropping images from the clipboard
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `apps/dashboard/src/components/agent/prompt-input.tsx` | `PromptInput` component: contentEditable editor, `@` detection, tag insertion/removal, paste interception, submit serialization |
+| `apps/dashboard/src/components/agent/prompt-input.tsx` | `PromptInput` + `CategoryPicker` components: contentEditable editor, `@` detection, category picker (Files/Issue/PR), tag insertion/removal, paste interception, submit serialization with GitHub context injection |
 | `apps/dashboard/src/components/agent/file-picker.tsx` | `FilePicker` popup: filter input, directory navigation, file/folder selection |
-| `apps/dashboard/src/components/agent/agent-thread.tsx` | `AgentThread` + `WelcomePrompt`: wire `requestListing` and `onSend` to `PromptInput` |
-| `apps/dashboard/src/pages/project-page.tsx` | Threads `fileActions.requestListing` to thread; formats files and snippets into the WebSocket prompt |
+| `apps/dashboard/src/components/agent/agent-thread.tsx` | `AgentThread` + `WelcomePrompt`: wire `requestListing`, `githubContext`, and `onSend` to `PromptInput` |
+| `apps/dashboard/src/pages/project-page.tsx` | Threads `fileActions.requestListing` and `project.githubContext` to thread; formats files and snippets into the WebSocket prompt; re-subscribes agent socket when sandbox becomes available |
+| `apps/dashboard/src/api/client.ts` | `GitHubContextData` type, `githubApi.resolve()`, `projectsApi.create()` with `gitBranch`/`githubContext` fields |
+| `apps/api/src/modules/github/github.service.ts` | GitHub API service: fetch issues/PRs, resolve URLs |
+| `apps/api/src/modules/github/github.routes.ts` | `GET /api/github/resolve?url=` endpoint |
+| `libs/shared/src/lib/github-url.ts` | `parseGitHubUrl()` — shared URL parser for repo/issue/PR/branch/commit URLs |
 | `apps/dashboard/src/stores/file-tree-store.ts` | Zustand store caching `FileEntry[]` per directory; `getAllCachedFiles()` flattens all cached files |
 | `apps/dashboard/src/stores/editor-store.ts` | `CodeSelection` interface; `codeSelection` state set on copy in the code editor |
 | `apps/dashboard/src/components/editor/code-viewer.tsx` | `onCopy` handler captures selection metadata + writes custom clipboard MIME type |
@@ -25,12 +30,13 @@ The thread prompt uses a `contentEditable` div instead of a plain `<textarea>` s
 ProjectPage
   └─ CentralPanel
       ├─ CodeViewer  (onCopy → editorStore.codeSelection + clipboard)
-      └─ AgentThread  (receives requestListing prop)
+      └─ AgentThread  (receives requestListing + githubContext props)
           ├─ WelcomePrompt  (uses PromptInput)
           └─ PromptInput
               ├─ Image preview strip  (thumbnails with remove buttons)
-              ├─ contentEditable div  (text + inline file/snippet tags)
-              ├─ FilePicker popup     (shown on @ trigger)
+              ├─ contentEditable div  (text + inline file/snippet/github tags)
+              ├─ CategoryPicker popup (shown on @ trigger — Files, Issue, PR)
+              ├─ FilePicker popup     (shown after selecting "Files" category)
               └─ Toolbar (agent dropdown + model dropdown + image button + send button)
 ```
 
@@ -42,17 +48,23 @@ ProjectPage
 1. User types "@" in the contentEditable div
 2. handleInput() detects "@" preceded by whitespace or start-of-content
 3. Saves a Range marking the "@" position (triggerRangeRef)
-4. Opens FilePicker popup above the cursor
+4. Opens CategoryPicker popup above the cursor
+   - Shows "Files" (if requestListing is available)
+   - Shows "Issue" (if project has githubContext with type 'issue')
+   - Shows "PR" (if project has githubContext with type 'pull')
+   - If only "Files" is available (no GitHub context), skips directly to FilePicker
 
-5. FilePicker reads useFileTreeStore.cache for the current directory
-6. If directory is not cached, calls requestListing(path) via WebSocket
-7. User filters with the text input, navigates directories by clicking
-8. User selects a file (click/Enter) or folder (Shift+Click / Shift+Enter)
+5a. [Files path] User selects "Files" → CategoryPicker transitions to FilePicker
+    FilePicker reads useFileTreeStore.cache for the current directory
+    If directory is not cached, calls requestListing(path) via WebSocket
+    User filters with the text input, navigates directories by clicking
+    User selects a file (click/Enter) or folder (Shift+Click / Shift+Enter)
+    handleFileSelect() removes the "@" trigger text, inserts a file tag
 
-9. handleFileSelect() receives (filePath, isDirectory)
-10. Removes the "@" trigger text from the DOM
-11. Inserts a <span contentEditable="false" data-file-path="..."> tag
-12. Places the cursor after the tag
+5b. [Issue/PR path] User selects "Issue" or "PR"
+    handleCategorySelect() removes the "@" trigger text from the DOM
+    Inserts a <span contentEditable="false" data-github-context="..."> tag
+    On submit, the full issue/PR content (title, body, URL) is prepended to the prompt
 ```
 
 ### File tag DOM structure
@@ -74,6 +86,35 @@ ProjectPage
 - `data-file-path`: Full absolute path, used during serialization.
 - `data-file-name`: Basename, used for display text in serialized output.
 - File references get a file icon; folder references get a folder icon.
+
+### GitHub context tag DOM structure
+
+```html
+<span
+  contenteditable="false"
+  data-github-context="issue"
+  data-github-label="@issue"
+  title="Issue #4134: Add network blocklist support for sandboxes"
+  class="... bg-green-500/10 text-green-400 ..."
+>
+  <span><!-- issue or PR SVG icon --></span>
+  <span>Issue #4134</span>
+  <span><!-- X close icon --></span>
+</span>
+```
+
+- `data-github-context`: `"issue"` or `"pull"` — used by `extractContent()` to detect GitHub tags.
+- `data-github-label`: Display text (`@issue` or `@pr`) used in serialized output.
+- On submit, if a GitHub tag is present and `githubContext` prop is set, `handleSubmit()` prepends the full issue/PR content (type, number, title, URL, body) to the prompt text before sending.
+- GitHub context data (`GitHubContextData`) is stored on the project row and passed down through `ProjectPage → CentralPanel → AgentThread → PromptInput` as the `githubContext` prop.
+
+### CategoryPicker keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| Arrow Up / Down | Move highlight |
+| Enter / Tab | Select category |
+| Escape | Close picker |
 
 ### FilePicker keyboard shortcuts
 
@@ -247,10 +288,11 @@ interface Props {
   autoFocus?: boolean;
   requestListing?: (path: string) => void;
   hideAgentDropdown?: boolean;
+  githubContext?: GitHubContextData | null;
 }
 ```
 
-When `requestListing` is not provided, the `@` trigger is inert (no picker opens).
+When `requestListing` is not provided and no `githubContext` exists, the `@` trigger is inert (no picker opens). When only files are available (no GitHub context), `@` opens the file browser directly, skipping the category picker.
 
 ### Imperative handle
 
@@ -271,8 +313,8 @@ interface PromptInputHandle {
 
 ### Tag removal
 
-Both file and snippet tags can be removed by:
-1. **Backspace key** at the tag boundary (checks for `FILE_TAG_ATTR` or `SNIPPET_TAG_ATTR`).
+File, snippet, and GitHub context tags can be removed by:
+1. **Backspace key** at the tag boundary (checks for `FILE_TAG_ATTR`, `SNIPPET_TAG_ATTR`, or `GITHUB_TAG_ATTR`).
 2. **X button click** via `mousedown` listener on the close span.
 
 ### Submit serialization
@@ -280,13 +322,26 @@ Both file and snippet tags can be removed by:
 `extractContent(el)` returns:
 
 ```typescript
-{ text: string; files: string[]; snippets: CodeSelection[] }
+{ text: string; files: string[]; snippets: CodeSelection[]; hasGithubContext: boolean }
 ```
 
 - Text nodes concatenated as-is.
 - File tag spans contribute `@filename` to text, path to `files[]`.
 - Snippet tag spans contribute `[snippet: path:line:char-line:char]` to text, parsed `CodeSelection` to `snippets[]`.
+- GitHub context tag spans set `hasGithubContext = true` and contribute `@issue` or `@pr` to text.
 - `<br>` elements become `\n`.
+
+When `hasGithubContext` is true and the `githubContext` prop is set, `handleSubmit()` prepends the full GitHub content to the prompt:
+```
+GitHub Issue #123: <title>
+<url>
+
+<body>
+
+---
+
+<user's prompt text>
+```
 
 ## How References and Images Are Sent to the Backend
 
@@ -312,15 +367,15 @@ When the user submits a prompt with references and/or images:
 
 ### Adding a new reference type
 
-1. Define a new `data-*` attribute constant (like `FILE_TAG_ATTR`, `SNIPPET_TAG_ATTR`).
+1. Define a new `data-*` attribute constant (like `FILE_TAG_ATTR`, `SNIPPET_TAG_ATTR`, `GITHUB_TAG_ATTR`).
 2. Create a `createXxxTag()` function following the same pattern.
-3. Add detection logic (trigger character in `handleInput`, or paste interception in `handlePaste`).
+3. Add a new entry to the `CategoryPicker` items array (or add detection logic in `handleInput` / `handlePaste`).
 4. Extend `extractContent()` to recognize the new tag type.
 5. Update the `onSend` signature and `handleSendPrompt` formatting.
 
 ### Changing tag appearance
 
-Edit the `className` string and SVG icon constants (`FILE_ICON_SVG`, `FOLDER_ICON_SVG`, `CODE_ICON_SVG`, `CLOSE_ICON_SVG`). Tags are created imperatively (not JSX) because they are inserted into the contentEditable DOM directly.
+Edit the `className` string and SVG icon constants (`FILE_ICON_SVG`, `FOLDER_ICON_SVG`, `CODE_ICON_SVG`, `ISSUE_ICON_SVG`, `PR_ICON_SVG`, `CLOSE_ICON_SVG`). Tags are created imperatively (not JSX) because they are inserted into the contentEditable DOM directly.
 
 ### Changing how references are sent to the backend
 

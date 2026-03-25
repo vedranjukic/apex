@@ -4,6 +4,7 @@ import { db } from '../../database/db';
 import { projects, tasks } from '../../database/schema';
 import { SandboxManager } from '@apex/orchestrator';
 import { parseGitHubUrl } from '@apex/shared';
+import { githubService } from '../github/github.service';
 import { projectsWsBroadcast } from './projects.ws';
 import { getCACertPem } from '../secrets-proxy/ca-manager';
 import { getSecretsProxyPort } from '../secrets-proxy/secrets-proxy';
@@ -299,14 +300,29 @@ class ProjectsService {
     const provider = data.provider || process.env['SANDBOX_PROVIDER'] || 'daytona';
 
     // Normalize GitHub URLs: extract clone URL and branch from issue/PR/branch/commit URLs
+    // Auto-fetch issue/PR content if the frontend didn't provide it
     let gitRepo = data.gitRepo || null;
     let gitBranch = data.gitBranch;
+    let githubContext = data.githubContext || null;
     if (gitRepo) {
       const parsed = parseGitHubUrl(gitRepo);
       if (parsed) {
         gitRepo = parsed.cloneUrl;
         if (!gitBranch && parsed.ref) {
           gitBranch = parsed.ref;
+        }
+        if (!githubContext && (parsed.type === 'issue' || parsed.type === 'pull') && parsed.number) {
+          try {
+            const resolved = await githubService.resolve(data.gitRepo!);
+            if (resolved.content) {
+              githubContext = resolved.content as unknown as Record<string, unknown>;
+              if (!gitBranch && resolved.parsed.ref) {
+                gitBranch = resolved.parsed.ref;
+              }
+            }
+          } catch (err) {
+            console.warn(`[projects] Failed to fetch GitHub context: ${err}`);
+          }
         }
       }
     }
@@ -322,7 +338,7 @@ class ProjectsService {
       gitRepo,
       localDir: data.localDir || null,
       agentConfig: data.agentConfig || null,
-      githubContext: (data.githubContext as any) || null,
+      githubContext: (githubContext as any) || null,
       status: 'creating',
     });
     const saved = await this.findById(id);

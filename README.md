@@ -65,7 +65,7 @@ graph TB
 
 Both the CLI and IDE follow the same core flow — provision a sandbox, connect to the agent, stream results:
 
-1. **Create a project** — choose a sandbox provider (Daytona cloud, Docker local, Apple Container, or Local host) and optionally link a Git repository.
+1. **Create a project** — choose a sandbox provider (Daytona cloud, Docker local, Apple Container, or Local host) and optionally link a Git repository. Supports GitHub issue, PR, branch, and commit URLs — the repo is cloned with the correct branch and issue/PR context is stored for `@issue`/`@pr` prompt references.
 2. **Sandbox provisioned** — a sandbox spins up from a snapshot with OpenCode pre-installed. A Node.js bridge is uploaded and started inside it.
 3. **Start a thread** — choose an agent (Build, Plan, or Sisyphus) and send a prompt. The bridge spawns the agent process, streams structured JSON output back over WebSocket.
 4. **Stream in real time** — every tool call, code edit, and thought from the agent streams back live. Multiple threads can run concurrently in the same sandbox.
@@ -94,7 +94,7 @@ A desktop (Electrobun) and web development environment for building applications
 - **Full IDE experience** — VS Code–inspired layout with resizable panels, file explorer, Monaco code editor, search, and Git source control
 - **Task dashboard** — home page shows all projects with inline thread lists; click any thread to interact with it in a side panel without leaving the overview
 - **Three agents** — Build (autonomous coding), Plan (read-only analysis), Sisyphus (orchestration) — selectable per-thread with models from multiple providers
-- **Live agent thread** — send prompts and watch the agent work in real time with grouped message rendering, image attachments, and code snippet references
+- **Live agent thread** — send prompts and watch the agent work in real time with grouped message rendering, image attachments, code snippet references, and `@issue`/`@pr` GitHub context injection
 - **Integrated terminals** — multiple terminal tabs with full PTY support (xterm.js); the agent can also create its own terminals via MCP tools
 - **Multiple concurrent threads** — run several agent sessions in the same sandbox, each with its own context
 - **Secrets management** — manage API secrets that are injected into outbound requests without ever entering containers

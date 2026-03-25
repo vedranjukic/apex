@@ -17,7 +17,7 @@ The home page serves as a project dashboard with inline thread management:
 - **Thread preview panel** — clicking any thread opens a 480px right panel with a full agent thread (prompt input, streamed responses, tool calls) — interact with agents without leaving the project list
 - **Fork groups** — projects forked from the same parent are grouped together with expandable fork rows
 - **Quick access** — Secrets (shield icon) and Settings buttons in the header; "New Thread" button on each project card
-- **New Project** dialog with sandbox provider selection (Daytona, Docker, Apple Container, Local), folder browser for local provider, git repo URL, and description
+- **New Project** dialog with sandbox provider selection (Daytona, Docker, Apple Container, Local), folder browser for local provider, git repo URL (supports GitHub issue, PR, branch, and commit URLs with auto-detection), and description
 
 ### Workspace Layout
 
@@ -53,7 +53,7 @@ Send prompts and watch the agent work in real time:
 - **Multiple concurrent threads** — run several agent sessions in the same sandbox, each with its own conversation context
 - **Conversation context** — follow-up prompts include a summary of prior messages so the agent has full conversational awareness
 - **AskUserQuestion flow** — when the agent needs input, a multiple-choice UI appears inline; select your answer and the agent continues (unified via MCP across all agents)
-- **@ File & Folder References** — type `@` in the prompt to open an autocomplete file picker, inserting file or folder references as inline tags sent alongside your prompt
+- **@ References** — type `@` in the prompt to open a category picker: **Files** (browse project files), **Issue** (attach GitHub issue context), or **PR** (attach pull request context). File/folder references insert as inline tags; issue/PR tags inject the full GitHub content (title, body, labels) into the prompt when submitted. When no GitHub context exists, `@` opens the file browser directly.
 - **Code snippet references** — copy code from the editor and paste into the prompt to attach line-precise snippet references (coordinates only, no duplicated code)
 - **Image attachments** — attach PNG, JPEG, GIF, or WebP images (up to 20 MB) via the toolbar button or paste; thumbnails appear in the prompt and images render in message bubbles
 - **Markdown blocks** — long structured responses render in collapsible markdown cards
@@ -351,7 +351,7 @@ Both the IDE and CLI are built on the same sandboxing layer:
 
 ### How It Works
 
-1. **Create a project** — choose a sandbox provider (Daytona, Docker, Apple Container, or Local) and optionally link a Git repository
+1. **Create a project** — choose a sandbox provider (Daytona, Docker, Apple Container, or Local) and optionally link a Git repository. Paste a GitHub issue, PR, branch, or commit URL — the repo is cloned automatically (with the correct branch for PRs/branches), and issue/PR content is stored for use as `@issue`/`@pr` context in prompts
 2. **Sandbox provisioned** — a sandbox spins up from a snapshot with OpenCode pre-installed; the Node.js bridge is uploaded and started
 3. **Start a thread** — choose an agent (Build, Plan, or Sisyphus) and a model, send a prompt; the bridge spawns the agent process and streams structured JSON back over WebSocket
 4. **Stream in real time** — every tool call, code edit, and thought streams back live

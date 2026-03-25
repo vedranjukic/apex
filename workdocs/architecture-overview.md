@@ -11,16 +11,16 @@
   All agents are invoked via `opencode run --agent <name> --format json` as per-prompt PTY processes with `--session` for context continuity. Output is normalized into a unified event format (`system`/`assistant`/`result` with content blocks). Terminal PTY sessions are shared across all agent types.
 
 ## Data Model
-- **Project** → has a sandbox (provisioned async on creation). Each project stores a `provider` field (`daytona`, `docker`, `apple-container`, or `local`) that selects the sandbox backend. Optional `gitRepo` URL for cloning a repository. Stores `agentType` as the project-level default agent (`build`, `plan`, `sisyphus`; defaults to `build`).
+- **Project** → has a sandbox (provisioned async on creation). Each project stores a `provider` field (`daytona`, `docker`, `apple-container`, or `local`) that selects the sandbox backend. Optional `gitRepo` URL for cloning a repository (supports GitHub issue/PR/branch/commit URLs — normalized to clone URL server-side). Optional `githubContext` JSON stores fetched issue/PR content (title, body, labels, branch) for `@issue`/`@pr` prompt references. Stores `agentType` as the project-level default agent (`build`, `plan`, `sisyphus`; defaults to `build`).
 - **Thread** (DB table: `tasks`) → belongs to a project, has messages. Title auto-generated from first prompt. Stores `claudeSessionId` for session context continuity across follow-up prompts. Optional `agentType` overrides the project default, allowing different threads within one project to use different agents (e.g., one with Build, another with Plan).
 - **Message** → belongs to a thread. Roles: `user`, `assistant`, `system`. Content is JSON array of blocks (text, tool_use, tool_result, image). Image blocks carry a `source` field with base64-encoded data.
 
 ## Key Flows
 
 ### Project Creation
-1. `POST /api/projects` → creates project with `status: creating`. Accepts optional `gitRepo` URL and `provider` (default `daytona`).
+1. `POST /api/projects` → creates project with `status: creating`. Accepts optional `gitRepo` URL (plain repo, GitHub issue/PR/branch/commit URL), `gitBranch`, `githubContext`, and `provider` (default `daytona`). The backend normalizes GitHub URLs via `parseGitHubUrl()` — extracting the clone URL, branch ref, and auto-fetching issue/PR content from the GitHub API when the frontend doesn't provide it.
 2. `ProjectsService.provisionSandbox()` runs async → routes to the correct `SandboxManager` based on the project's `provider` field, creates sandbox, installs bridge + MCP terminal server, connects via preview URL → sets `status: running` + stores `sandboxId`
-3. During sandbox provisioning: if `gitRepo` is set, clones the repo into the project directory (`git clone <url> .`); otherwise runs `git init` so every project starts version-controlled
+3. During sandbox provisioning: if `gitRepo` is set, creates the project directory, then clones the repo (`git clone --branch <ref> <url> .` for branches; `git clone` + `git checkout <sha>` for commits; plain `git clone` for repos/issues); otherwise runs `git init` so every project starts version-controlled
 4. Dashboard polls project status while `creating`, shows sandbox status indicator (green/yellow/red) in top bar
 
 ### Thread + Agent Execution (Session-per-Thread)
