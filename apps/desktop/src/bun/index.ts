@@ -241,6 +241,7 @@ async function startApi(port: number): Promise<void> {
       DASHBOARD_DIR: dashboardDir,
       SETTINGS_VISIBLE: 'true',
     },
+    stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -454,5 +455,9 @@ Electrobun.events.on('close', () => {
     killApi();
   }
 });
+
+process.on('exit', killApi);
+process.on('SIGINT', () => { killApi(); process.exit(0); });
+process.on('SIGTERM', () => { killApi(); process.exit(0); });
 
 main();

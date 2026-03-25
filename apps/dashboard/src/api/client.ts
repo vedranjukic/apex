@@ -18,6 +18,16 @@ export const usersApi = {
 };
 
 // ── Projects ──────────────────────────────────────────
+export interface GitHubContextData {
+  type: 'issue' | 'pull';
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  branch?: string;
+  labels?: string[];
+}
+
 export interface Project {
   id: string;
   userId: string;
@@ -31,6 +41,7 @@ export interface Project {
   agentType: string;
   gitRepo: string | null;
   agentConfig: Record<string, unknown> | null;
+  githubContext: GitHubContextData | null;
   forkedFromId: string | null;
   branchName: string | null;
   threads?: Thread[];
@@ -41,7 +52,7 @@ export interface Project {
 export const projectsApi = {
   list: () => request<Project[]>('/projects'),
   get: (id: string) => request<Project>(`/projects/${id}`),
-  create: (data: { name: string; description?: string; agentType?: string; provider?: string; gitRepo?: string; localDir?: string }) =>
+  create: (data: { name: string; description?: string; agentType?: string; provider?: string; gitRepo?: string; gitBranch?: string; localDir?: string; githubContext?: GitHubContextData }) =>
     request<Project>('/projects', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -195,6 +206,24 @@ export const secretsApi = {
     }),
   delete: (id: string) =>
     request<{ ok: boolean }>(`/secrets/${id}`, { method: 'DELETE' }),
+};
+
+// ── GitHub ───────────────────────────────────────────
+export interface GitHubResolveResult {
+  parsed: {
+    type: 'repo' | 'issue' | 'pull' | 'branch' | 'commit';
+    owner: string;
+    repo: string;
+    cloneUrl: string;
+    number?: number;
+    ref?: string;
+  };
+  content?: GitHubContextData;
+}
+
+export const githubApi = {
+  resolve: (url: string) =>
+    request<GitHubResolveResult>(`/github/resolve?url=${encodeURIComponent(url)}`),
 };
 
 // ── Threads ──────────────────────────────────────────

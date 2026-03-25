@@ -1,7 +1,7 @@
-import { useState, useEffect, FormEvent } from 'react';
-import { X, Cloud, Container, Laptop, FolderOpen, FolderSearch } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, FormEvent } from 'react';
+import { X, Cloud, Container, Laptop, FolderOpen, FolderSearch, GitBranch, CircleDot, GitPullRequest, Loader2 } from 'lucide-react';
 import { useProjectsStore } from '../../stores/projects-store';
-import { configApi, type ProviderStatus } from '../../api/client';
+import { configApi, githubApi, type ProviderStatus, type GitHubResolveResult, type GitHubContextData } from '../../api/client';
 import { cn } from '../../lib/cn';
 import { FolderBrowser } from './folder-browser';
 
@@ -20,6 +20,8 @@ const PROVIDER_META: Record<string, { label: string; sublabel: string; icon: typ
 
 const PROVIDER_ORDER = ['daytona', 'docker', 'apple-container', 'local'];
 
+const GITHUB_URL_RE = /^https?:\/\/(?:www\.)?github\.com\/[\w.-]+\/[\w.-]+/;
+
 export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   const createProject = useProjectsStore((s) => s.createProject);
   const [name, setName] = useState('');
@@ -30,6 +32,12 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   const [browsing, setBrowsing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[]>([]);
+
+  const [resolving, setResolving] = useState(false);
+  const [resolved, setResolved] = useState<GitHubResolveResult | null>(null);
+  const [resolveError, setResolveError] = useState<string | null>(null);
+  const resolveTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const lastResolvedUrl = useRef('');
 
   useEffect(() => {
     if (!open) return;
@@ -46,6 +54,53 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
     });
   }, [open]);
 
+  const resolveGitHubUrl = useCallback((url: string) => {
+    if (resolveTimerRef.current) clearTimeout(resolveTimerRef.current);
+
+    const trimmed = url.trim();
+    if (!GITHUB_URL_RE.test(trimmed)) {
+      setResolved(null);
+      setResolveError(null);
+      setResolving(false);
+      lastResolvedUrl.current = '';
+      return;
+    }
+
+    if (trimmed === lastResolvedUrl.current) return;
+
+    setResolving(true);
+    setResolveError(null);
+
+    resolveTimerRef.current = setTimeout(async () => {
+      try {
+        const result = await githubApi.resolve(trimmed);
+        lastResolvedUrl.current = trimmed;
+        setResolved(result);
+        setResolveError(null);
+
+        if (!name.trim()) {
+          setName(`${result.parsed.owner}/${result.parsed.repo}`);
+        }
+      } catch (err) {
+        setResolveError(err instanceof Error ? err.message : String(err));
+        setResolved(null);
+      } finally {
+        setResolving(false);
+      }
+    }, 400);
+  }, [name]);
+
+  const handleGitRepoChange = useCallback((value: string) => {
+    setGitRepo(value);
+    resolveGitHubUrl(value);
+  }, [resolveGitHubUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (resolveTimerRef.current) clearTimeout(resolveTimerRef.current);
+    };
+  }, []);
+
   const orderedStatuses = PROVIDER_ORDER
     .map((type) => providerStatuses.find((s) => s.type === type))
     .filter((s): s is ProviderStatus => !!s);
@@ -53,6 +108,10 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   if (!open) return null;
 
   const isLocal = provider === 'local';
+
+  const gitBranch = resolved?.parsed.ref ?? (resolved?.content?.type === 'pull' ? resolved.content.branch : undefined);
+  const cloneUrl = resolved?.parsed.cloneUrl;
+  const githubContext: GitHubContextData | undefined = resolved?.content ?? undefined;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -64,8 +123,10 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
         name: name.trim(),
         description: description.trim(),
         provider,
-        gitRepo: gitRepo.trim() || undefined,
+        gitRepo: cloneUrl || gitRepo.trim() || undefined,
+        gitBranch: gitBranch || undefined,
         localDir: isLocal ? localDir.trim() : undefined,
+        githubContext,
       });
       onCreated(project.id);
       setName('');
@@ -73,6 +134,9 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
       setProvider(providerStatuses.find((p) => p.available)?.type ?? '');
       setGitRepo('');
       setLocalDir('');
+      setResolved(null);
+      setResolveError(null);
+      lastResolvedUrl.current = '';
       onClose();
     } finally {
       setSubmitting(false);
@@ -181,11 +245,29 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
             <label className="block text-sm font-medium mb-1">Git Repository</label>
             <input
               value={gitRepo}
-              onChange={(e) => setGitRepo(e.target.value)}
-              placeholder="https://github.com/user/repo.git"
+              onChange={(e) => handleGitRepoChange(e.target.value)}
+              placeholder="https://github.com/user/repo or issue/PR/branch URL"
               className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
             />
-            <p className="text-xs text-text-muted mt-1">Optional. The repo will be cloned into the project folder. For private repos, add a GitHub token in <a href="/settings" className="underline hover:text-text-primary">Settings</a>.</p>
+
+            {resolving && (
+              <div className="flex items-center gap-1.5 mt-1.5 text-xs text-text-muted">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                <span>Resolving GitHub URL…</span>
+              </div>
+            )}
+
+            {resolveError && (
+              <p className="text-xs text-red-400 mt-1.5">{resolveError}</p>
+            )}
+
+            {resolved && !resolving && (
+              <GitHubResolvePreview result={resolved} />
+            )}
+
+            {!resolved && !resolving && !resolveError && (
+              <p className="text-xs text-text-muted mt-1">Optional. Paste a repo, issue, PR, or branch URL. For private repos, add a GitHub token in <a href="/settings" className="underline hover:text-text-primary">Settings</a>.</p>
+            )}
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
@@ -206,6 +288,70 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
           </div>
         </form>
       </div>
+    </div>
+  );
+}
+
+function GitHubResolvePreview({ result }: { result: GitHubResolveResult }) {
+  const { parsed, content } = result;
+  const repo = `${parsed.owner}/${parsed.repo}`;
+
+  let Icon = GitBranch;
+  let label = '';
+
+  switch (parsed.type) {
+    case 'issue':
+      Icon = CircleDot;
+      label = content
+        ? `Issue #${parsed.number}: ${content.title}`
+        : `Issue #${parsed.number}`;
+      break;
+    case 'pull':
+      Icon = GitPullRequest;
+      label = content
+        ? `PR #${parsed.number}: ${content.title}`
+        : `PR #${parsed.number}`;
+      break;
+    case 'branch':
+      Icon = GitBranch;
+      label = `Branch: ${parsed.ref}`;
+      break;
+    case 'commit':
+      Icon = GitBranch;
+      label = `Commit: ${parsed.ref?.slice(0, 8)}`;
+      break;
+    default:
+      label = 'Default branch';
+  }
+
+  const branchInfo = parsed.type === 'pull' && content?.type === 'pull'
+    ? content.branch
+    : parsed.type === 'branch'
+      ? parsed.ref
+      : parsed.type === 'commit'
+        ? parsed.ref?.slice(0, 8)
+        : null;
+
+  return (
+    <div className="mt-1.5 p-2 rounded-lg bg-surface-secondary border border-border text-xs space-y-1">
+      <div className="flex items-center gap-1.5 text-text-primary font-medium">
+        <Icon className="w-3.5 h-3.5 shrink-0" />
+        <span className="truncate">{label}</span>
+      </div>
+      <div className="text-text-muted">
+        Clone <span className="font-mono">{repo}</span>
+        {branchInfo && (
+          <span> &rarr; checkout <span className="font-mono">{branchInfo}</span></span>
+        )}
+        {parsed.type === 'issue' && <span> (default branch)</span>}
+      </div>
+      {content?.type === 'issue' && (content.labels?.length ?? 0) > 0 && (
+        <div className="flex flex-wrap gap-1 pt-0.5">
+          {content.labels?.map((l) => (
+            <span key={l} className="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[10px]">{l}</span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

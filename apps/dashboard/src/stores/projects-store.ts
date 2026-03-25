@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { projectsApi, type Project } from '../api/client';
+import { projectsApi, type Project, type GitHubContextData } from '../api/client';
 
 interface ProjectsState {
   projects: Project[];
@@ -14,7 +14,9 @@ interface ProjectsState {
     agentType?: string;
     provider?: string;
     gitRepo?: string;
+    gitBranch?: string;
     localDir?: string;
+    githubContext?: GitHubContextData;
   }) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
   setProjectStatus: (id: string, status: string) => void;

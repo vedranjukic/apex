@@ -8,6 +8,7 @@ import { ThreadStatsBar } from './thread-stats-bar';
 import { useAgentSettingsStore, AGENT_TYPES, DEFAULT_MODEL_BY_TYPE, type AgentTypeId } from '../../stores/agent-settings-store';
 import { usePlanStore } from '../../stores/plan-store';
 import type { CodeSelection } from '../../stores/editor-store';
+import type { GitHubContextData } from '../../api/client';
 
 interface Props {
   projectId: string;
@@ -18,12 +19,13 @@ interface Props {
   onSendUserAnswer?: (threadId: string, toolUseId: string, answer: string) => void;
   onStopAgent?: (threadId: string) => void;
   requestListing?: (path: string) => void;
+  githubContext?: GitHubContextData | null;
 }
 
 const SCROLL_SAVE_DEBOUNCE_MS = 300;
 const SCROLL_FOLLOW_THRESHOLD = 150;
 
-export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendSilentPrompt, onExecuteThread, onSendUserAnswer, onStopAgent, requestListing }: Props) {
+export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendSilentPrompt, onExecuteThread, onSendUserAnswer, onStopAgent, requestListing, githubContext }: Props) {
   const { activeThreadId, composingNew, messages, threads, createThread, threadScrollOffsets, setThreadScrollOffset } =
     useThreadsStore();
   const threadScrollOffset = activeThreadId ? (threadScrollOffsets[activeThreadId] ?? 0) : 0;
@@ -273,6 +275,7 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
         hasThreads={threads.length > 0}
         onSend={handleNewThreadPrompt}
         requestListing={requestListing}
+        githubContext={githubContext}
       />
     );
   }
@@ -292,6 +295,7 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
           placeholder="Describe what the agent should do…"
           autoFocus
           requestListing={requestListing}
+          githubContext={githubContext}
         />
       </div>
     );
@@ -434,6 +438,7 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
           isRunning={isRunning}
           onStop={handleStop}
           requestListing={requestListing}
+          githubContext={githubContext}
         />
 
         {/* Thread stats bar */}
@@ -491,10 +496,12 @@ function WelcomePrompt({
   hasThreads,
   onSend,
   requestListing,
+  githubContext,
 }: {
   hasThreads: boolean;
   onSend: (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string, images?: ImageAttachment[]) => void;
   requestListing?: (path: string) => void;
+  githubContext?: GitHubContextData | null;
 }) {
   const suggestions = [
     'Create a REST API with Express and TypeScript',
@@ -523,6 +530,7 @@ function WelcomePrompt({
             placeholder="Describe a task for the agent…"
             autoFocus
             requestListing={requestListing}
+            githubContext={githubContext}
           />
         </div>
 

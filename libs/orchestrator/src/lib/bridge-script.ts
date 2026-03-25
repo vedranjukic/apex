@@ -135,10 +135,16 @@ function startOpenCodeServe() {
   lastOcExitCode = null;
   lastOcStderr = "";
   log("\\u{1F680}", "Starting opencode serve on port " + OC_PORT);
+  try { var upOut = execSync("opencode upgrade 2>&1", { timeout: 30000 }).toString().trim(); log("\\u{2B06}", "opencode upgrade: " + upOut); } catch (ue) { log("\\u{26A0}", "opencode upgrade skipped: " + (ue.message || ue)); }
   let ocBin = "opencode";
   try { ocBin = execSync("which opencode 2>/dev/null || echo opencode").toString().trim(); } catch {};
   const dotEnvVars = loadDotEnv(PROJECT_DIR);
-  const serveEnv = { ...process.env, ...dotEnvVars, HOME: process.env.HOME || "/home/daytona", NODE_TLS_REJECT_UNAUTHORIZED: "0", PYTHONUNBUFFERED: "1" };
+  // GPT-5.2 only supports medium for both reasoningEffort and textVerbosity (OpenCode bug #9969)
+  var gpt52Opts = { reasoningEffort: "medium", textVerbosity: "medium" };
+  var gpt52Variant = { reasoningEffort: "medium", textVerbosity: "medium" };
+  var gpt52Fix = { options: gpt52Opts, variants: { none: gpt52Variant, minimal: gpt52Variant, low: gpt52Variant, medium: gpt52Variant, high: gpt52Variant, xhigh: gpt52Variant } };
+  var inlineConfig = JSON.stringify({ model: "anthropic/claude-opus-4-20250514", provider: { openai: { models: { "gpt-5.2": gpt52Fix, "gpt-5.2-chat-latest": gpt52Fix } } } });
+  const serveEnv = { ...process.env, ...dotEnvVars, HOME: process.env.HOME || "/home/daytona", NODE_TLS_REJECT_UNAUTHORIZED: "0", PYTHONUNBUFFERED: "1", OPENCODE_CONFIG_CONTENT: inlineConfig };
   if (STDBUF_LIB) {
     serveEnv._STDBUF_O = "L";
     serveEnv.LD_PRELOAD = (serveEnv.LD_PRELOAD ? serveEnv.LD_PRELOAD + ":" : "") + STDBUF_LIB;

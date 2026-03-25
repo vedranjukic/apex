@@ -29,6 +29,15 @@ export const projects = sqliteTable('projects', {
   agentType: text('agent_type').notNull().default('build'),
   gitRepo: text('git_repo'),
   agentConfig: text('agent_config', { mode: 'json' }).$type<Record<string, unknown> | null>(),
+  githubContext: text('github_context', { mode: 'json' }).$type<{
+    type: 'issue' | 'pull';
+    number: number;
+    title: string;
+    body: string;
+    url: string;
+    branch?: string;
+    labels?: string[];
+  } | null>(),
   forkedFromId: text('forked_from_id'),
   branchName: text('branch_name'),
   localDir: text('local_dir'),

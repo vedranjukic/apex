@@ -14,13 +14,29 @@ import { previewRoutes } from './modules/preview/preview.routes';
 import { llmProxyRoutes } from './modules/llm-proxy/llm-proxy.routes';
 import { secretsRoutes } from './modules/secrets/secrets.routes';
 import { fsRoutes } from './modules/fs/fs.routes';
+import { githubRoutes } from './modules/github/github.routes';
 
 import { usersService } from './modules/users/users.service';
 import { settingsService } from './modules/settings/settings.service';
 import { threadsService } from './modules/tasks/tasks.service';
 import { projectsService } from './modules/projects/projects.service';
 import { initCA } from './modules/secrets-proxy/ca-manager';
-import { startSecretsProxy } from './modules/secrets-proxy/secrets-proxy';
+import { startSecretsProxy, stopSecretsProxy } from './modules/secrets-proxy/secrets-proxy';
+
+function setupGracefulShutdown() {
+  const shutdown = () => {
+    stopSecretsProxy();
+    process.exit(0);
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+
+  // Exit when parent dies — the desktop app spawns us with stdin: 'pipe',
+  // so EOF on stdin means the parent process is gone.
+  process.stdin.resume();
+  process.stdin.on('end', shutdown);
+  process.stdin.on('error', shutdown);
+}
 
 async function bootstrap() {
   await settingsService.init();
@@ -43,6 +59,7 @@ async function bootstrap() {
     .use(llmProxyRoutes)
     .use(secretsRoutes)
     .use(fsRoutes)
+    .use(githubRoutes)
     .use(agentWs)
     .use(projectsWs);
 
@@ -75,6 +92,8 @@ async function bootstrap() {
   app.listen({ port: Number(port), hostname: host });
 
   console.log(`🚀 API running on http://${host}:${port}/api`);
+
+  setupGracefulShutdown();
 }
 
 bootstrap();

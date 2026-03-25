@@ -15,6 +15,9 @@
   "exclude": [],
   "references": [
     {
+      "path": "../../libs/shared/tsconfig.lib.json"
+    },
+    {
       "path": "../../libs/orchestrator/tsconfig.lib.json"
     }
   ]

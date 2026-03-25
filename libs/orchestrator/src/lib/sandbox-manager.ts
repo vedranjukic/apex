@@ -233,6 +233,8 @@ export class SandboxManager extends EventEmitter {
         config.secretsProxyPort ||
         Number(process.env["SECRETS_PROXY_PORT"] || "6001"),
       secretPlaceholders: config.secretPlaceholders || {},
+      memoryMB: config.memoryMB || Number(process.env["SANDBOX_MEMORY_MB"] || "4096"),
+      cpus: config.cpus || Number(process.env["SANDBOX_CPUS"] || "2"),
     };
   }
 
@@ -312,6 +314,7 @@ export class SandboxManager extends EventEmitter {
     projectId?: string,
     onStatusChange?: (status: string) => void,
     localDir?: string,
+    gitBranch?: string,
   ): Promise<string> {
     if (!this.provider) throw new Error("SandboxManager not initialized");
 
@@ -365,7 +368,7 @@ export class SandboxManager extends EventEmitter {
     };
     this.sessions.set(sandbox.id, session);
 
-    await this.installBridge(session, gitRepo, agentType);
+    await this.installBridge(session, gitRepo, agentType, gitBranch);
 
     return sandbox.id;
   }
@@ -1700,28 +1703,36 @@ export class SandboxManager extends EventEmitter {
     const useProxy = !!proxyBase;
     const homeDir = this.config.provider === "local" ? os.homedir() : HOME_DIR;
 
-    // Write opencode.json if missing (home dir — never overwrite)
-    const checkOcConfig = await sandbox.process.executeCommand(
-      `test -f '${homeDir}/opencode.json' && echo exists || echo missing`,
-    );
-    if ((checkOcConfig.result ?? "").includes("missing")) {
+    // Write opencode.json (always overwrite to keep config in sync)
+    {
+      // GPT-5.2 only supports "medium" for both reasoningEffort and textVerbosity (OpenCode bug #9969)
+      const gpt52Opts = { reasoningEffort: "medium", textVerbosity: "medium" };
+      const gpt52Variant = { reasoningEffort: "medium", textVerbosity: "medium" };
+      const gpt52Fix = {
+        options: gpt52Opts,
+        variants: {
+          none: gpt52Variant, minimal: gpt52Variant, low: gpt52Variant,
+          medium: gpt52Variant, high: gpt52Variant, xhigh: gpt52Variant,
+        },
+      };
+      const gpt52ModelOverrides = {
+        "gpt-5.2": gpt52Fix,
+        "gpt-5.2-chat-latest": gpt52Fix,
+      };
       const openCodeConfig: Record<string, unknown> = {
         $schema: "https://opencode.ai/config.json",
+        model: "anthropic/claude-opus-4-20250514",
         default_agent: "build",
         provider: {
           ...(useProxy ? {
             anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
             openai: {
               options: { baseURL: "{env:OPENAI_BASE_URL}" },
-              models: {
-                "gpt-5.2": { options: { reasoningEffort: "medium" } },
-              },
+              models: gpt52ModelOverrides,
             },
           } : {
             openai: {
-              models: {
-                "gpt-5.2": { options: { reasoningEffort: "medium" } },
-              },
+              models: gpt52ModelOverrides,
             },
           }),
         },
@@ -1755,11 +1766,13 @@ export class SandboxManager extends EventEmitter {
           },
         },
       };
+      const ocConfigDir = `${homeDir}/.config/opencode`;
+      await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}'`);
       await sandbox.fs.uploadFile(
         Buffer.from(JSON.stringify(openCodeConfig)),
-        `${homeDir}/opencode.json`,
+        `${ocConfigDir}/opencode.json`,
       );
-      console.log(`[bridge:${sid}] wrote opencode.json`);
+      console.log(`[bridge:${sid}] wrote ${ocConfigDir}/opencode.json`);
     }
 
     // Ensure CA cert is installed (containers only — local provider uses host certs)
@@ -1806,6 +1819,7 @@ export class SandboxManager extends EventEmitter {
       `DAYTONA_SANDBOX_ID="${sandbox.id}"`,
       `APEX_PROXY_BASE_URL="${apexProxyForBridge}"`,
       `APEX_PROJECT_ID="${projectIdForBridge}"`,
+      `OPENCODE_CONFIG="${homeDir}/.config/opencode/opencode.json"`,
       ...(this.config.provider === "local"
         ? []
         : [`HOME="/home/daytona"`, `PATH="/home/daytona/.opencode/bin:$PATH"`]),
@@ -1841,6 +1855,16 @@ export class SandboxManager extends EventEmitter {
         await sandbox.fs.uploadFile(Buffer.from(bridgePkg), `${bridgeDir}/package.json`);
         await sandbox.process.executeCommand(`cd '${bridgeDir}' && npm install --no-audit --no-fund 2>&1`);
       }
+    }
+
+    // Upgrade OpenCode before starting bridge (v1.1.35 has textVerbosity bug #9969)
+    try {
+      const upgradeResult = await sandbox.process.executeCommand(
+        `${this.config.provider === "local" ? "" : 'PATH="/home/daytona/.opencode/bin:$PATH" '}opencode upgrade 2>&1 || true`,
+      );
+      console.log(`[bridge:${sid}] opencode upgrade: ${(upgradeResult.result ?? "").trim().slice(0, 200)}`);
+    } catch (e) {
+      console.log(`[bridge:${sid}] opencode upgrade skipped: ${e}`);
     }
 
     await sandbox.process.executeSessionCommand(bridgeSessionId, {
@@ -1895,6 +1919,7 @@ export class SandboxManager extends EventEmitter {
     session: InternalSession,
     gitRepo?: string,
     agentType?: string,
+    gitBranch?: string,
   ): Promise<void> {
     session.status = "starting_bridge";
     this.emit("status", session.sandboxId, "starting_bridge");
@@ -1965,23 +1990,34 @@ export class SandboxManager extends EventEmitter {
       "",
     ].join("\n");
 
+    // GPT-5.2 only supports "medium" for both reasoningEffort and textVerbosity (OpenCode bug #9969)
+    const gpt52OptsI = { reasoningEffort: "medium", textVerbosity: "medium" };
+    const gpt52VariantI = { reasoningEffort: "medium", textVerbosity: "medium" };
+    const gpt52FixI = {
+      options: gpt52OptsI,
+      variants: {
+        none: gpt52VariantI, minimal: gpt52VariantI, low: gpt52VariantI,
+        medium: gpt52VariantI, high: gpt52VariantI, xhigh: gpt52VariantI,
+      },
+    };
+    const gpt52ModelOverridesI = {
+      "gpt-5.2": gpt52FixI,
+      "gpt-5.2-chat-latest": gpt52FixI,
+    };
     const openCodeConfig: Record<string, unknown> = {
       $schema: "https://opencode.ai/config.json",
+      model: "anthropic/claude-opus-4-20250514",
       default_agent: "build",
       provider: {
         ...(useProxyI ? {
           anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
           openai: {
             options: { baseURL: "{env:OPENAI_BASE_URL}" },
-            models: {
-              "gpt-5.2": { options: { reasoningEffort: "medium" } },
-            },
+            models: gpt52ModelOverridesI,
           },
         } : {
           openai: {
-            models: {
-              "gpt-5.2": { options: { reasoningEffort: "medium" } },
-            },
+            models: gpt52ModelOverridesI,
           },
         }),
       },
@@ -2039,12 +2075,13 @@ export class SandboxManager extends EventEmitter {
     );
 
     // ── Exec 1: Write ALL files in a single call ────
-    // Config files go to the home directory and are never overwritten.
+    const ocConfigDir = `${homeDir}/.config/opencode`;
     const configFiles: { path: string; content: string }[] = [
-      { path: `${homeDir}/opencode.json`, content: JSON.stringify(openCodeConfig) },
+      { path: `${ocConfigDir}/opencode.json`, content: JSON.stringify(openCodeConfig) },
       { path: `${homeDir}/AGENTS.md`, content: sandboxInstructions },
       { path: `${homeDir}/.opencode/agents/sisyphus-prompt.txt`, content: sisyphusPrompt },
     ];
+    await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}'`);
     const existCheck = await sandbox.process.executeCommand(
       configFiles.map(f => `test -f '${f.path}' && echo '${f.path}'`).join("; ") + " || true",
     );
@@ -2067,13 +2104,20 @@ export class SandboxManager extends EventEmitter {
     const gitTask = (async () => {
       if (gitRepo) {
         this.emit("status", session.sandboxId, "cloning_repo");
+        await sandbox.process.executeCommand(`mkdir -p '${projectDir}'`);
+        const isCommitSha = gitBranch && /^[0-9a-f]{7,40}$/i.test(gitBranch);
+        const branchArg = (gitBranch && !isCommitSha) ? gitBranch : undefined;
         if (this.config.githubToken) {
           await sandbox.git.clone(
-            gitRepo, projectDir, undefined, undefined,
+            gitRepo, projectDir, branchArg, undefined,
             "x-access-token", this.config.githubToken,
           );
         } else {
-          await sandbox.process.executeCommand(`git clone ${gitRepo} .`, projectDir);
+          const branchFlag = branchArg ? ` --branch ${branchArg}` : '';
+          await sandbox.process.executeCommand(`git clone${branchFlag} ${gitRepo} .`, projectDir);
+        }
+        if (isCommitSha) {
+          await sandbox.process.executeCommand(`git checkout ${gitBranch}`, projectDir);
         }
       } else {
         const gitInitCmd = `mkdir -p '${projectDir}' && git init '${projectDir}'`;
@@ -2124,6 +2168,7 @@ export class SandboxManager extends EventEmitter {
       `DAYTONA_SANDBOX_ID="${sandbox.id}"`,
       `APEX_PROXY_BASE_URL="${apexProxyForBridgeI}"`,
       `APEX_PROJECT_ID="${projectIdI}"`,
+      `OPENCODE_CONFIG="${homeDir}/.config/opencode/opencode.json"`,
       ...(this.config.provider === "local"
         ? []
         : [`HOME="/home/daytona"`, `PATH="/home/daytona/.opencode/bin:$PATH"`]),
@@ -2169,6 +2214,14 @@ export class SandboxManager extends EventEmitter {
         log("bridge deps installed");
       }
     }
+
+    // Upgrade OpenCode before starting bridge (v1.1.35 has textVerbosity bug #9969)
+    try {
+      const ocUpgrade = await sandbox.process.executeCommand(
+        `${isLocalProvider ? "" : 'PATH="/home/daytona/.opencode/bin:$PATH" '}opencode upgrade 2>&1 || true`,
+      );
+      log("opencode upgrade: " + (ocUpgrade.result ?? "").trim().slice(0, 200));
+    } catch { log("opencode upgrade skipped"); }
 
     await sandbox.process.executeSessionCommand(bridgeSessionId, {
       command: `cd ${bridgeDir} && ${envParts.join(" ")} node bridge.cjs > ${bridgeDir}/bridge.log 2>&1`,

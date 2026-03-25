@@ -11,7 +11,7 @@ import { FilePicker } from './file-picker';
 import { AgentDropdown, ModelDropdown } from './mode-model-dropdowns';
 import { useAgentSettingsStore } from '../../stores/agent-settings-store';
 import { useEditorStore, type CodeSelection } from '../../stores/editor-store';
-import type { ImageSource } from '../../api/client';
+import type { ImageSource, GitHubContextData } from '../../api/client';
 
 export interface ImageAttachment {
   id: string;
@@ -32,10 +32,12 @@ interface Props {
   autoFocus?: boolean;
   requestListing?: (path: string) => void;
   hideAgentDropdown?: boolean;
+  githubContext?: GitHubContextData | null;
 }
 
 const FILE_TAG_ATTR = 'data-file-path';
 const SNIPPET_TAG_ATTR = 'data-snippet';
+const GITHUB_TAG_ATTR = 'data-github-context';
 const SNIPPET_MIME = 'application/x-codeany-snippet';
 
 function getCaretRect(): { top: number; left: number } | null {
@@ -56,9 +58,10 @@ function getCaretRect(): { top: number; left: number } | null {
   return { top: rect.top, left: rect.left };
 }
 
-function extractContent(el: HTMLElement): { text: string; files: string[]; snippets: CodeSelection[] } {
+function extractContent(el: HTMLElement): { text: string; files: string[]; snippets: CodeSelection[]; hasGithubContext: boolean } {
   const files: string[] = [];
   const snippets: CodeSelection[] = [];
+  let hasGithubContext = false;
   let text = '';
   for (const node of Array.from(el.childNodes)) {
     if (node.nodeType === Node.TEXT_NODE) {
@@ -67,6 +70,7 @@ function extractContent(el: HTMLElement): { text: string; files: string[]; snipp
       const element = node as HTMLElement;
       const filePath = element.getAttribute(FILE_TAG_ATTR);
       const snippetData = element.getAttribute(SNIPPET_TAG_ATTR);
+      const ghContext = element.getAttribute(GITHUB_TAG_ATTR);
       if (filePath) {
         files.push(filePath);
         text += `@${element.getAttribute('data-file-name') ?? filePath}`;
@@ -76,6 +80,9 @@ function extractContent(el: HTMLElement): { text: string; files: string[]; snipp
           snippets.push(sel);
           text += `[snippet: ${sel.filePath}:${sel.startLine}:${sel.startChar}-${sel.endLine}:${sel.endChar}]`;
         } catch { /* ignore malformed */ }
+      } else if (ghContext) {
+        hasGithubContext = true;
+        text += element.getAttribute('data-github-label') ?? `@${ghContext}`;
       } else if (element.tagName === 'BR') {
         text += '\n';
       } else {
@@ -83,7 +90,7 @@ function extractContent(el: HTMLElement): { text: string; files: string[]; snipp
       }
     }
   }
-  return { text, files, snippets };
+  return { text, files, snippets, hasGithubContext };
 }
 
 function insertNodeAtCursor(node: Node): void {
@@ -116,6 +123,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
       autoFocus,
       requestListing,
       hideAgentDropdown,
+      githubContext,
     },
     ref,
   ) {
@@ -185,11 +193,19 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
     const handleSubmit = useCallback(() => {
       const el = editorRef.current;
       if (!el || disabled) return;
-      const { text, files, snippets } = extractContent(el);
+      const { text, files, snippets, hasGithubContext: hasGhCtx } = extractContent(el);
       if (!text.trim() && images.length === 0) return;
       const { mode, model, agentType } = useAgentSettingsStore.getState();
+
+      let finalText = text.trim();
+      if (hasGhCtx && githubContext) {
+        const ctxType = githubContext.type === 'issue' ? 'Issue' : 'Pull Request';
+        const header = `GitHub ${ctxType} #${githubContext.number}: ${githubContext.title}\n${githubContext.url}\n\n${githubContext.body}`;
+        finalText = `${header}\n\n---\n\n${finalText}`;
+      }
+
       onSend(
-        text.trim(),
+        finalText,
         files.length > 0 ? files : undefined,
         mode,
         model,
@@ -200,7 +216,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
       el.innerHTML = '';
       setEmpty(true);
       setImages([]);
-    }, [onSend, disabled, images]);
+    }, [onSend, disabled, images, githubContext]);
 
     const handleStopOrSubmit = useCallback(() => {
       if (isRunning && empty && images.length === 0 && onStop) {
@@ -228,7 +244,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
 
           const { startContainer, startOffset } = range;
           const isTag = (el: HTMLElement) =>
-            el.hasAttribute(FILE_TAG_ATTR) || el.hasAttribute(SNIPPET_TAG_ATTR);
+            el.hasAttribute(FILE_TAG_ATTR) || el.hasAttribute(SNIPPET_TAG_ATTR) || el.hasAttribute(GITHUB_TAG_ATTR);
 
           if (startContainer.nodeType === Node.TEXT_NODE && startOffset === 0) {
             const prev = startContainer.previousSibling;
@@ -273,6 +289,31 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
       const charBeforeAt = atIdx > 0 ? textBefore[atIdx - 1] : undefined;
       if (charBeforeAt && charBeforeAt !== ' ' && charBeforeAt !== '\n') return;
 
+      const typed = textBefore.slice(atIdx + 1).toLowerCase();
+      if (githubContext && (typed === 'issue' || typed === 'pr')) {
+        const matchesType = (typed === 'issue' && githubContext.type === 'issue') ||
+          (typed === 'pr' && githubContext.type === 'pull');
+        if (matchesType) {
+          const fullText = node.textContent ?? '';
+          const before = fullText.slice(0, atIdx);
+          const after = fullText.slice(range.startOffset);
+          node.textContent = before;
+
+          const tag = createGitHubContextTag(githubContext);
+          const afterNode = document.createTextNode(after || '\u00a0');
+          node.parentNode?.insertBefore(afterNode, node.nextSibling);
+          node.parentNode?.insertBefore(tag, afterNode);
+
+          const newRange = document.createRange();
+          newRange.setStart(afterNode, after ? 0 : 1);
+          newRange.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(newRange);
+          updateEmpty();
+          return;
+        }
+      }
+
       if (!showPicker && requestListing) {
         const savedRange = range.cloneRange();
         savedRange.setStart(node, atIdx);
@@ -281,7 +322,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
         setPickerAnchor(rect);
         setShowPicker(true);
       }
-    }, [showPicker, requestListing, updateEmpty]);
+    }, [showPicker, requestListing, updateEmpty, githubContext]);
 
     const handlePaste = useCallback(
       (e: React.ClipboardEvent) => {
@@ -502,6 +543,8 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
   },
 );
 
+const ISSUE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1"/></svg>`;
+const PR_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/></svg>`;
 const FILE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>`;
 const FOLDER_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`;
 const CODE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>`;
@@ -564,6 +607,42 @@ function createSnippetTag(snippet: CodeSelection): HTMLSpanElement {
   close.innerHTML = CLOSE_ICON_SVG;
   close.className =
     'flex items-center cursor-pointer rounded hover:bg-accent/20 ml-0.5';
+  close.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    tag.remove();
+  });
+  tag.appendChild(close);
+
+  return tag;
+}
+
+function createGitHubContextTag(ctx: GitHubContextData): HTMLSpanElement {
+  const isIssue = ctx.type === 'issue';
+  const labelText = isIssue ? `Issue #${ctx.number}` : `PR #${ctx.number}`;
+  const displayLabel = `@${isIssue ? 'issue' : 'pr'}`;
+
+  const tag = document.createElement('span');
+  tag.setAttribute(GITHUB_TAG_ATTR, ctx.type);
+  tag.setAttribute('data-github-label', displayLabel);
+  tag.contentEditable = 'false';
+  tag.className =
+    'inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5 rounded-md bg-green-500/10 text-green-400 text-xs font-medium align-baseline cursor-default select-none';
+  tag.title = `${labelText}: ${ctx.title}`;
+
+  const icon = document.createElement('span');
+  icon.innerHTML = isIssue ? ISSUE_ICON_SVG : PR_ICON_SVG;
+  icon.className = 'flex items-center';
+  tag.appendChild(icon);
+
+  const label = document.createElement('span');
+  label.textContent = labelText;
+  tag.appendChild(label);
+
+  const close = document.createElement('span');
+  close.innerHTML = CLOSE_ICON_SVG;
+  close.className =
+    'flex items-center cursor-pointer rounded hover:bg-green-500/20 ml-0.5';
   close.addEventListener('mousedown', (e) => {
     e.preventDefault();
     e.stopPropagation();

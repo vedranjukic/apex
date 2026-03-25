@@ -143,6 +143,18 @@ export function ProjectPage() {
     return () => clearInterval(pollRef.current);
   }, [projectId, shouldPoll]);
 
+  // Re-subscribe to the agent socket when the sandbox becomes available
+  // (handles the case where the page loaded while the sandbox was still provisioning)
+  const prevSandboxIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const sandboxId = project?.sandboxId ?? null;
+    const prev = prevSandboxIdRef.current;
+    prevSandboxIdRef.current = sandboxId;
+    if (sandboxId && !prev && projectId && socket.current) {
+      socket.current.send('subscribe_project', { projectId });
+    }
+  }, [project?.sandboxId, projectId, socket]);
+
   useEffect(() => {
     const s = socket.current;
     if (!s || !projectId) return;
@@ -265,6 +277,7 @@ export function ProjectPage() {
       <CentralPanel
         projectId={projectId}
         projectAgentType={project.agentType}
+        githubContext={project.githubContext}
         onSendPrompt={handleSendPrompt}
         onSendSilentPrompt={sendPrompt}
         onExecuteThread={handleExecuteThread}
@@ -281,6 +294,7 @@ export function ProjectPage() {
 function CentralPanel({
   projectId,
   projectAgentType,
+  githubContext,
   onSendPrompt,
   onSendSilentPrompt,
   onExecuteThread,
@@ -292,6 +306,7 @@ function CentralPanel({
 }: {
   projectId: string;
   projectAgentType?: string;
+  githubContext?: import('../api/client').GitHubContextData | null;
   onSendPrompt: (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string, images?: ImageAttachment[]) => void;
   onSendSilentPrompt: (threadId: string, prompt: string, mode?: string, model?: string, agentType?: string) => void;
   onExecuteThread: (threadId: string, mode?: string, model?: string, agentType?: string) => void;
@@ -325,6 +340,7 @@ function CentralPanel({
     <AgentThread
       projectId={projectId}
       projectAgentType={projectAgentType}
+      githubContext={githubContext}
       onSendPrompt={onSendPrompt}
       onSendSilentPrompt={onSendSilentPrompt}
       onExecuteThread={onExecuteThread}
