@@ -176,12 +176,19 @@ function getFreePort(): Promise<number> {
   });
 }
 
+let apiStderrLog = '';
+
 async function waitForServer(
   port: number,
-  timeoutMs = 15000
+  timeoutMs = 30000
 ): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    if (apiProcess && apiProcess.exitCode !== null) {
+      throw new Error(
+        `API process exited with code ${apiProcess.exitCode}\n\n${apiStderrLog || '(no stderr output)'}`
+      );
+    }
     try {
       const res = await fetch(
         `http://localhost:${port}/api/settings/visible`
@@ -192,19 +199,24 @@ async function waitForServer(
     }
     await new Promise((r) => setTimeout(r, 300));
   }
-  throw new Error(`API server did not start within ${timeoutMs}ms`);
+  throw new Error(
+    `API server did not start within ${timeoutMs}ms\n\n${apiStderrLog || '(no stderr output)'}`
+  );
 }
 
 function resolveAppPath(...parts: string[]): string {
-  // In dev mode, paths are relative to the project root
-  // In production (bundled), paths are relative to the app bundle resources
-  const devRoot = path.join(__dirname, '../../../..');
-  const prodRoot = path.join(__dirname, '../../..');
+  // process.execPath is the Bun binary — in production it lives at
+  // Apex.app/Contents/MacOS/bun, so Resources is at ../Resources/
+  const execDir = path.dirname(process.execPath);
+  const bundleResources = path.resolve(execDir, '..', 'Resources');
 
-  if (fs.existsSync(path.join(devRoot, 'apps'))) {
-    return path.join(devRoot, ...parts);
+  if (fs.existsSync(path.join(bundleResources, 'apps'))) {
+    return path.join(bundleResources, ...parts);
   }
-  return path.join(prodRoot, ...parts);
+
+  // Dev fallback: project root is 4 levels up from src/bun/index.ts
+  const devRoot = path.resolve(__dirname, '../../../..');
+  return path.join(devRoot, ...parts);
 }
 
 function getUserDataPath(): string {
@@ -228,8 +240,8 @@ async function startApi(port: number): Promise<void> {
 
   const dbPath = path.join(userDataDir, 'apex.sqlite');
 
-  console.log(`Starting API: ${apiMain}`);
-  console.log(`Dashboard dir: ${dashboardDir}`);
+  console.log(`Starting API: ${apiMain} (exists: ${fs.existsSync(apiMain)})`);
+  console.log(`Dashboard dir: ${dashboardDir} (exists: ${fs.existsSync(dashboardDir)})`);
   console.log(`DB path: ${dbPath}`);
 
   apiProcess = Bun.spawn([process.execPath, apiMain], {
@@ -271,7 +283,9 @@ async function startApi(port: number): Promise<void> {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          process.stderr.write(`[api] ${decoder.decode(value)}`);
+          const chunk = decoder.decode(value);
+          apiStderrLog += chunk;
+          process.stderr.write(`[api] ${chunk}`);
         }
       } catch {
         // process exited
