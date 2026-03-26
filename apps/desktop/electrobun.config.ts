@@ -30,5 +30,8 @@ export default {
     mac: {
       icons: '../../assets/logo/icon.iconset',
     },
+    linux: {
+      bundleCEF: false,
+    },
   },
 } satisfies ElectrobunConfig;

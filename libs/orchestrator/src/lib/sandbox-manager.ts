@@ -1296,6 +1296,76 @@ export class SandboxManager extends EventEmitter {
     await sandbox.fs.uploadFile(Buffer.from(content), filePath);
   }
 
+  private static readonly SISYPHUS_PROMPT = [
+    "You are Sisyphus, an orchestration agent for complex multi-step tasks.",
+    "",
+    "Your approach:",
+    "1. Analyze the request and break it into concrete sub-tasks",
+    "2. Use the `task` tool to delegate each subtask to a worker agent",
+    "3. Track progress — when a subtask fails, retry with adjusted context",
+    "4. Provide a status update after each sub-task completes",
+    "5. Synthesize the results and present a final summary",
+    "",
+    "For each subtask, call the task tool with:",
+    '- subagent_type: "general" (for implementation work)',
+    '- subagent_type: "explore" (for codebase investigation)',
+    "",
+    "When subtasks are independent, dispatch them in parallel by making",
+    "multiple task tool calls in the same response.",
+  ].join("\n");
+
+  private static buildSandboxInstructions(projectDir: string, isLocal: boolean): string {
+    return [
+      "# Sandbox Environment",
+      "",
+      `Your working directory is \`${projectDir}\`. This IS the project root.`,
+      "All project files (source code, configs, package.json, etc.) MUST be created",
+      "directly in this directory — do NOT create a new subfolder for the app.",
+      "When asked to build or create an app, initialize it here in the current directory.",
+      "",
+      ...(isLocal
+        ? [
+            "You are running directly on the host machine (local sandbox provider).",
+            "localhost/127.0.0.1 URLs are accessible to the user.",
+            "",
+            "## Preview URLs",
+            "",
+            "When you start any HTTP server, dev server, web app, or API on any port,",
+            "you can share localhost URLs directly with the user (e.g. http://localhost:3000).",
+            "You may also use the `get_preview_url` MCP tool which returns localhost URLs.",
+          ]
+        : [
+            "You are running inside a Daytona cloud sandbox. The user CANNOT access localhost URLs.",
+            "localhost/127.0.0.1 links will NOT work for the user.",
+            "",
+            "## IMPORTANT: Preview URLs",
+            "",
+            "Whenever you start any HTTP server, dev server, web app, or API on any port,",
+            "you MUST use the `get_preview_url` MCP tool to get a publicly accessible URL.",
+            "",
+            "This tool is available in your MCP tools list as `mcp__terminal-server__get_preview_url`.",
+            "It is NOT a CLI command — use it through your normal tool-calling interface.",
+            "",
+            "Call it with the port number, e.g.: get_preview_url({ port: 3000 })",
+            "",
+            "NEVER share localhost or 127.0.0.1 URLs with the user. ALWAYS call get_preview_url",
+            "and share the returned public URL instead.",
+          ]),
+      "",
+      "## Asking the User Questions",
+      "",
+      "When you need to ask the user a question, present options, or get clarification",
+      "before proceeding, you MUST use the `ask_user` MCP tool.",
+      "",
+      "This tool is available as `mcp__terminal-server__ask_user`.",
+      "It blocks until the user responds, so the user sees a clear prompt in the UI.",
+      "",
+      "Do NOT ask questions as plain text — the UI cannot detect them.",
+      "ALWAYS use the `ask_user` tool so the system knows you are waiting for input.",
+      "",
+    ].join("\n");
+  }
+
   private static readonly DEFAULT_EXCLUDE_DIRS = [
     // Version control
     ".git",
@@ -1740,7 +1810,7 @@ export class SandboxManager extends EventEmitter {
           build: {
             description: "Full development agent with all tools enabled",
             mode: "primary",
-            prompt: "{file:AGENTS.md}",
+            prompt: `{file:${projectDir}/AGENTS.md}`,
             permission: { "*": { "*": "allow" } },
           },
           plan: {
@@ -1752,7 +1822,7 @@ export class SandboxManager extends EventEmitter {
           sisyphus: {
             description: "Orchestration agent for complex multi-step tasks",
             mode: "primary",
-            prompt: "{file:.opencode/agents/sisyphus-prompt.txt}",
+            prompt: `{file:${projectDir}/.opencode/agents/sisyphus-prompt.txt}`,
             steps: 50,
             permission: { "*": { "*": "allow" } },
           },
@@ -1767,12 +1837,24 @@ export class SandboxManager extends EventEmitter {
         },
       };
       const ocConfigDir = `${homeDir}/.config/opencode`;
-      await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}'`);
+      await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}' '${projectDir}/.opencode/agents'`);
       await sandbox.fs.uploadFile(
         Buffer.from(JSON.stringify(openCodeConfig)),
         `${ocConfigDir}/opencode.json`,
       );
       console.log(`[bridge:${sid}] wrote ${ocConfigDir}/opencode.json`);
+
+      // Write agent prompt files to projectDir (OpenCode resolves {file:} relative to project root)
+      await Promise.all([
+        sandbox.fs.uploadFile(
+          Buffer.from(SandboxManager.SISYPHUS_PROMPT),
+          `${projectDir}/.opencode/agents/sisyphus-prompt.txt`,
+        ).catch(() => { /* best-effort */ }),
+        sandbox.fs.uploadFile(
+          Buffer.from(SandboxManager.buildSandboxInstructions(projectDir, this.config.provider === "local")),
+          `${projectDir}/AGENTS.md`,
+        ).catch(() => { /* best-effort */ }),
+      ]);
     }
 
     // Ensure CA cert is installed (containers only — local provider uses host certs)
@@ -1940,55 +2022,7 @@ export class SandboxManager extends EventEmitter {
     const isLocalProvider = this.config.provider === "local";
     const homeDir = isLocalProvider ? os.homedir() : HOME_DIR;
 
-    const sandboxInstructions = [
-      "# Sandbox Environment",
-      "",
-      `Your working directory is \`${projectDir}\`. This IS the project root.`,
-      "All project files (source code, configs, package.json, etc.) MUST be created",
-      "directly in this directory — do NOT create a new subfolder for the app.",
-      "When asked to build or create an app, initialize it here in the current directory.",
-      "",
-      ...(isLocalProvider
-        ? [
-            "You are running directly on the host machine (local sandbox provider).",
-            "localhost/127.0.0.1 URLs are accessible to the user.",
-            "",
-            "## Preview URLs",
-            "",
-            "When you start any HTTP server, dev server, web app, or API on any port,",
-            "you can share localhost URLs directly with the user (e.g. http://localhost:3000).",
-            "You may also use the `get_preview_url` MCP tool which returns localhost URLs.",
-          ]
-        : [
-            "You are running inside a Daytona cloud sandbox. The user CANNOT access localhost URLs.",
-            "localhost/127.0.0.1 links will NOT work for the user.",
-            "",
-            "## IMPORTANT: Preview URLs",
-            "",
-            "Whenever you start any HTTP server, dev server, web app, or API on any port,",
-            "you MUST use the `get_preview_url` MCP tool to get a publicly accessible URL.",
-            "",
-            "This tool is available in your MCP tools list as `mcp__terminal-server__get_preview_url`.",
-            "It is NOT a CLI command — use it through your normal tool-calling interface.",
-            "",
-            "Call it with the port number, e.g.: get_preview_url({ port: 3000 })",
-            "",
-            "NEVER share localhost or 127.0.0.1 URLs with the user. ALWAYS call get_preview_url",
-            "and share the returned public URL instead.",
-          ]),
-      "",
-      "## Asking the User Questions",
-      "",
-      "When you need to ask the user a question, present options, or get clarification",
-      "before proceeding, you MUST use the `ask_user` MCP tool.",
-      "",
-      "This tool is available as `mcp__terminal-server__ask_user`.",
-      "It blocks until the user responds, so the user sees a clear prompt in the UI.",
-      "",
-      "Do NOT ask questions as plain text — the UI cannot detect them.",
-      "ALWAYS use the `ask_user` tool so the system knows you are waiting for input.",
-      "",
-    ].join("\n");
+    const sandboxInstructions = SandboxManager.buildSandboxInstructions(projectDir, isLocalProvider);
 
     // GPT-5.2 only supports "medium" for both reasoningEffort and textVerbosity (OpenCode bug #9969)
     const gpt52OptsI = { reasoningEffort: "medium", textVerbosity: "medium" };
@@ -2025,7 +2059,7 @@ export class SandboxManager extends EventEmitter {
         build: {
           description: "Full development agent with all tools enabled",
           mode: "primary",
-          prompt: "{file:AGENTS.md}",
+          prompt: `{file:${projectDir}/AGENTS.md}`,
           permission: { "*": { "*": "allow" } },
         },
         plan: {
@@ -2037,7 +2071,7 @@ export class SandboxManager extends EventEmitter {
         sisyphus: {
           description: "Orchestration agent for complex multi-step tasks with retry logic",
           mode: "primary",
-          prompt: "{file:.opencode/agents/sisyphus-prompt.txt}",
+          prompt: `{file:${projectDir}/.opencode/agents/sisyphus-prompt.txt}`,
           steps: 50,
           permission: { "*": { "*": "allow" } },
         },
@@ -2052,38 +2086,26 @@ export class SandboxManager extends EventEmitter {
       },
     };
 
-    const sisyphusPrompt = [
-      "You are Sisyphus, an orchestration agent for complex multi-step tasks.",
-      "",
-      "Your approach:",
-      "1. Analyze the request and break it into concrete sub-tasks",
-      "2. Use the `task` tool to delegate each subtask to a worker agent",
-      "3. Track progress — when a subtask fails, retry with adjusted context",
-      "4. Provide a status update after each sub-task completes",
-      "5. Synthesize the results and present a final summary",
-      "",
-      "For each subtask, call the task tool with:",
-      '- subagent_type: "general" (for implementation work)',
-      '- subagent_type: "explore" (for codebase investigation)',
-      "",
-      "When subtasks are independent, dispatch them in parallel by making",
-      "multiple task tool calls in the same response.",
-    ].join("\n");
-
     const secretsProxyUrl = resolveSecretsProxyUrl(
       this.config.proxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
 
     // ── Exec 1: Write ALL files in a single call ────
     const ocConfigDir = `${homeDir}/.config/opencode`;
-    const configFiles: { path: string; content: string }[] = [
+    // opencode.json is always written (the Dockerfile image ships a minimal
+    // placeholder that lacks agent definitions — we must overwrite it).
+    // AGENTS.md and the sisyphus prompt live in projectDir because OpenCode
+    // resolves {file:...} relative to the project root (CWD).
+    const alwaysWriteFiles: { path: string; content: string }[] = [
       { path: `${ocConfigDir}/opencode.json`, content: JSON.stringify(openCodeConfig) },
-      { path: `${homeDir}/AGENTS.md`, content: sandboxInstructions },
-      { path: `${homeDir}/.opencode/agents/sisyphus-prompt.txt`, content: sisyphusPrompt },
     ];
-    await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}'`);
+    const skipIfExistsFiles: { path: string; content: string }[] = [
+      { path: `${projectDir}/AGENTS.md`, content: sandboxInstructions },
+      { path: `${projectDir}/.opencode/agents/sisyphus-prompt.txt`, content: SandboxManager.SISYPHUS_PROMPT },
+    ];
+    await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}' '${projectDir}/.opencode/agents'`);
     const existCheck = await sandbox.process.executeCommand(
-      configFiles.map(f => `test -f '${f.path}' && echo '${f.path}'`).join("; ") + " || true",
+      skipIfExistsFiles.map(f => `test -f '${f.path}' && echo '${f.path}'`).join("; ") + " || true",
     );
     const existingPaths = new Set(
       (existCheck.result ?? "").split("\n").map(l => l.trim()).filter(Boolean),
@@ -2092,7 +2114,8 @@ export class SandboxManager extends EventEmitter {
     const allFiles: { path: string; content: string }[] = [
       { path: `${bridgeDir}/bridge.cjs`, content: bridgeCode },
       { path: `${bridgeDir}/mcp-terminal-server.cjs`, content: mcpCode },
-      ...configFiles.filter(f => !existingPaths.has(f.path)),
+      ...alwaysWriteFiles,
+      ...skipIfExistsFiles.filter(f => !existingPaths.has(f.path)),
     ];
     if (this.config.secretsProxyCaCert && secretsProxyUrl && !isLocalProvider) {
       allFiles.push({ path: CA_CERT_PATH, content: this.config.secretsProxyCaCert });
@@ -2107,15 +2130,18 @@ export class SandboxManager extends EventEmitter {
         await sandbox.process.executeCommand(`mkdir -p '${projectDir}'`);
         const isCommitSha = gitBranch && /^[0-9a-f]{7,40}$/i.test(gitBranch);
         const branchArg = (gitBranch && !isCommitSha) ? gitBranch : undefined;
-        if (this.config.githubToken) {
-          await sandbox.git.clone(
-            gitRepo, projectDir, branchArg, undefined,
-            "x-access-token", this.config.githubToken,
+        const branchFlag = branchArg ? ` --branch ${branchArg}` : '';
+        // Always use `git clone <url> .` so the repo is cloned directly into
+        // projectDir (the SDK's git.clone treats the path as a parent dir and
+        // creates a nested subdirectory).
+        let cloneUrl = gitRepo;
+        if (this.config.githubToken && gitRepo.includes("github.com")) {
+          cloneUrl = gitRepo.replace(
+            /^https:\/\/github\.com/,
+            `https://x-access-token:${this.config.githubToken}@github.com`,
           );
-        } else {
-          const branchFlag = branchArg ? ` --branch ${branchArg}` : '';
-          await sandbox.process.executeCommand(`git clone${branchFlag} ${gitRepo} .`, projectDir);
         }
+        await sandbox.process.executeCommand(`git clone${branchFlag} ${cloneUrl} .`, projectDir);
         if (isCommitSha) {
           await sandbox.process.executeCommand(`git checkout ${gitBranch}`, projectDir);
         }

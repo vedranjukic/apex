@@ -22,6 +22,40 @@ const PROVIDER_ORDER = ['daytona', 'docker', 'apple-container', 'local'];
 
 const GITHUB_URL_RE = /^https?:\/\/(?:www\.)?github\.com\/[\w.-]+\/[\w.-]+/;
 
+function generateProjectName(result: GitHubResolveResult, existingNames: string[]): string {
+  const { parsed, content } = result;
+
+  let base = '';
+
+  if (content && (parsed.type === 'issue' || parsed.type === 'pull')) {
+    base = slugifyTitle(content.title);
+  }
+
+  if (!base) {
+    base = parsed.repo;
+  }
+
+  if (base.length > 40) {
+    base = base.slice(0, 40).replace(/-+$/, '');
+  }
+
+  const nameSet = new Set(existingNames.map((n) => n.toLowerCase()));
+  if (!nameSet.has(base.toLowerCase())) return base;
+
+  for (let i = 2; ; i++) {
+    const candidate = `${base}-${i}`;
+    if (!nameSet.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
+function slugifyTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-') || 'project';
+}
+
 export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   const createProject = useProjectsStore((s) => s.createProject);
   const [name, setName] = useState('');
@@ -32,6 +66,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   const [browsing, setBrowsing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[]>([]);
+  const nameManuallyEdited = useRef(false);
 
   const [resolving, setResolving] = useState(false);
   const [resolved, setResolved] = useState<GitHubResolveResult | null>(null);
@@ -41,6 +76,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
 
   useEffect(() => {
     if (!open) return;
+    nameManuallyEdited.current = false;
     configApi.providers().then(({ providers }) => {
       setProviderStatuses(providers);
       const firstAvailable = providers.find((p) => p.available)?.type;
@@ -78,8 +114,9 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
         setResolved(result);
         setResolveError(null);
 
-        if (!name.trim()) {
-          setName(`${result.parsed.owner}/${result.parsed.repo}`);
+        if (!nameManuallyEdited.current) {
+          const existingNames = useProjectsStore.getState().projects.map((p) => p.name);
+          setName(generateProjectName(result, existingNames));
         }
       } catch (err) {
         setResolveError(err instanceof Error ? err.message : String(err));
@@ -88,7 +125,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
         setResolving(false);
       }
     }, 400);
-  }, [name]);
+  }, []);
 
   const handleGitRepoChange = useCallback((value: string) => {
     setGitRepo(value);
@@ -137,6 +174,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
       setResolved(null);
       setResolveError(null);
       lastResolvedUrl.current = '';
+      nameManuallyEdited.current = false;
       onClose();
     } finally {
       setSubmitting(false);
@@ -159,8 +197,8 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
             <input
               autoFocus
               value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="My Project"
+              onChange={(e) => { setName(e.target.value); nameManuallyEdited.current = true; }}
+              placeholder="Auto-generated from URL or type a name"
               className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary"
             />
           </div>

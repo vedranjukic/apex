@@ -4,12 +4,14 @@
  * Build script for the Apex desktop (Electrobun) app.
  *
  * 1. Runs Electrobun build for the given --env (default: dev)
- * 2. Copies API dist, dashboard dist, and VERSION into the .app bundle
+ * 2. Copies API dist, dashboard dist, and VERSION into the app bundle
  *    so the production binary can find them via resolveAppPath().
+ *
+ * Works on macOS (.app/Contents/Resources) and Linux (flat Resources dir).
  */
 
 const { execSync } = require('child_process');
-const { cpSync, readFileSync, readdirSync, existsSync, lstatSync } = require('fs');
+const { cpSync, readFileSync, readdirSync, existsSync, lstatSync, statSync } = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -19,38 +21,61 @@ const BUILD_DIR = path.join(DESKTOP_DIR, 'build');
 const env = process.argv.includes('--env')
   ? process.argv[process.argv.indexOf('--env') + 1]
   : 'dev';
+const skipBuild = process.argv.includes('--skip-build');
 
 function run(cmd, label, cwd) {
   console.log(`\n→ ${label || cmd}`);
   execSync(cmd, { cwd: cwd || ROOT, stdio: 'inherit' });
 }
 
-run(
-  `npx electrobun build --env ${env}`,
-  `Building Electrobun desktop app (${env})...`,
-  DESKTOP_DIR,
-);
-
-// Find the .app bundle in the build output (Electrobun may not match env in dir name)
-let appBundle = null;
-for (const envDir of readdirSync(BUILD_DIR)) {
-  const envPath = path.join(BUILD_DIR, envDir);
-  try {
-    const app = readdirSync(envPath).find((f) => f.endsWith('.app'));
-    if (app) {
-      appBundle = { envPath, appName: app };
-      break;
-    }
-  } catch {}
+if (!skipBuild) {
+  run(
+    `npx electrobun build --env ${env}`,
+    `Building Electrobun desktop app (${env})...`,
+    DESKTOP_DIR,
+  );
 }
-if (!appBundle) {
-  console.error(`Could not find .app bundle in ${BUILD_DIR}`);
+
+/**
+ * Search the build output for the Resources directory.
+ * macOS: build/{env}-macos-{arch}/Apex-{env}.app/Contents/Resources/
+ * Linux: build/{env}-linux-{arch}/Apex-{env}/Resources/
+ */
+function findBuildOutput() {
+  for (const envDir of readdirSync(BUILD_DIR)) {
+    const envPath = path.join(BUILD_DIR, envDir);
+    if (!statSync(envPath).isDirectory()) continue;
+
+    for (const entry of readdirSync(envPath)) {
+      const entryPath = path.join(envPath, entry);
+      if (!statSync(entryPath).isDirectory()) continue;
+
+      // macOS: Apex-dev.app/Contents/Resources/
+      if (entry.endsWith('.app')) {
+        const resources = path.join(entryPath, 'Contents', 'Resources');
+        if (existsSync(resources)) {
+          return { envPath, appPath: entryPath, resourcesDir: resources, platform: 'macos' };
+        }
+      }
+
+      // Linux: Apex-dev/Resources/
+      const resources = path.join(entryPath, 'Resources');
+      if (existsSync(resources)) {
+        return { envPath, appPath: entryPath, resourcesDir: resources, platform: 'linux' };
+      }
+    }
+  }
+  return null;
+}
+
+const output = findBuildOutput();
+if (!output) {
+  console.error(`Could not find app bundle in ${BUILD_DIR}`);
   process.exit(1);
 }
 
-const { envPath, appName } = appBundle;
-
-const resourcesDir = path.join(envPath, appName, 'Contents', 'Resources');
+const { envPath, appPath, resourcesDir, platform } = output;
+console.log(`\n→ Found ${platform} bundle: ${path.relative(ROOT, appPath)}`);
 
 const filesToCopy = [
   { src: path.join(ROOT, 'VERSION'), dest: path.join(resourcesDir, 'VERSION') },
@@ -74,7 +99,6 @@ function collectTransitiveDeps(roots) {
       const deps = { ...(pkg.dependencies || {}), ...(pkg.optionalDependencies || {}) };
       for (const dep of Object.keys(deps)) queue.push(dep);
     } catch {}
-    // Also check nested node_modules hoisted inside the module
     const nested = path.join(ROOT, 'node_modules', mod, 'node_modules');
     if (existsSync(nested)) {
       for (const sub of readdirSync(nested).filter(d => !d.startsWith('.'))) {
@@ -85,7 +109,7 @@ function collectTransitiveDeps(roots) {
   return [...seen].sort();
 }
 
-console.log(`\n→ Copying resources into ${appName}...`);
+console.log(`\n→ Copying resources into ${path.basename(appPath)}...`);
 for (const { src, dest } of filesToCopy) {
   if (!existsSync(src)) {
     console.error(`Missing: ${src} — did you build the API and dashboard first?`);
@@ -111,10 +135,11 @@ for (const mod of allModules) {
   console.log(`  ✓ ${mod}`);
 }
 
-const appPath = path.join(envPath, appName);
-run(
-  `codesign --force --deep --sign - "${appPath}"`,
-  'Ad-hoc signing bundle (seals resources + icon)...',
-);
+if (platform === 'macos') {
+  run(
+    `codesign --force --deep --sign - "${appPath}"`,
+    'Ad-hoc signing bundle (seals resources + icon)...',
+  );
+}
 
 console.log(`\n✓ Desktop build complete: ${appPath}\n`);

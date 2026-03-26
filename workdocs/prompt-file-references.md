@@ -1,11 +1,13 @@
 # Prompt Input, File References, Code Snippets & Image Attachments
 
-The thread prompt uses a `contentEditable` div instead of a plain `<textarea>` so that inline reference tags can be mixed with text. Four input types are supported:
+The thread prompt uses a `contentEditable` div instead of a plain `<textarea>` so that inline reference tags can be mixed with text. Six input types are supported:
 
 1. **File/folder references** -- triggered by typing `@` and selecting "Files" from the category picker
 2. **GitHub issue/PR references** -- triggered by typing `@` and selecting "Issue" or "PR" from the category picker (only available when the project has `githubContext`)
-3. **Code snippet references** -- created by copying text in the code editor and pasting into the prompt
-4. **Image attachments** -- added via the toolbar image button or by pasting/dropping images from the clipboard
+3. **Agent references** -- triggered by typing `@` and selecting "Agents" from the category picker, then picking a specialized agent (always available)
+4. **Skill references** -- triggered by typing `@` and selecting "Skills" from the category picker, then picking a skill or command (always available)
+5. **Code snippet references** -- created by copying text in the code editor and pasting into the prompt
+6. **Image attachments** -- added via the toolbar image button or by pasting/dropping images from the clipboard
 
 ## Key Files
 
@@ -50,18 +52,28 @@ ProjectPage
 3. Saves a Range marking the "@" position (triggerRangeRef)
 4. Opens CategoryPicker popup above the cursor
    - Shows "Files" (if requestListing is available)
+   - Shows "Agents" (always -- specialized agents from the standard harness)
+   - Shows "Skills" (always -- skills and commands from the standard harness)
    - Shows "Issue" (if project has githubContext with type 'issue')
    - Shows "PR" (if project has githubContext with type 'pull')
-   - If only "Files" is available (no GitHub context), skips directly to FilePicker
+   - If only "Files" is available (no agents/skills/GitHub), skips directly to FilePicker
 
-5a. [Files path] User selects "Files" → CategoryPicker transitions to FilePicker
+5a. [Files path] User selects "Files" → CategoryPicker transitions to FilePicker (HarnessItemPicker)
     FilePicker reads useFileTreeStore.cache for the current directory
     If directory is not cached, calls requestListing(path) via WebSocket
     User filters with the text input, navigates directories by clicking
     User selects a file (click/Enter) or folder (Shift+Click / Shift+Enter)
     handleFileSelect() removes the "@" trigger text, inserts a file tag
 
-5b. [Issue/PR path] User selects "Issue" or "PR"
+5b. [Agents path] User selects "Agents" → opens HarnessItemPicker with agent list
+    User filters and selects an agent (click/Enter)
+    Inserts a <span contentEditable="false" data-agent-ref="..."> tag
+
+5c. [Skills path] User selects "Skills" → opens HarnessItemPicker with skill/command list
+    User filters and selects a skill (click/Enter)
+    Inserts a <span contentEditable="false" data-skill-ref="..."> tag
+
+5d. [Issue/PR path] User selects "Issue" or "PR"
     handleCategorySelect() removes the "@" trigger text from the DOM
     Inserts a <span contentEditable="false" data-github-context="..."> tag
     On submit, the full issue/PR content (title, body, URL) is prepended to the prompt
@@ -107,6 +119,73 @@ ProjectPage
 - `data-github-label`: Display text (`@issue` or `@pr`) used in serialized output.
 - On submit, if a GitHub tag is present and `githubContext` prop is set, `handleSubmit()` prepends the full issue/PR content (type, number, title, URL, body) to the prompt text before sending.
 - GitHub context data (`GitHubContextData`) is stored on the project row and passed down through `ProjectPage → CentralPanel → AgentThread → PromptInput` as the `githubContext` prop.
+
+### Agent tag DOM structure
+
+```html
+<span
+  contenteditable="false"
+  data-agent-ref="explore"
+  title="Codebase exploration agent"
+  class="... bg-amber-500/10 text-amber-400 ..."
+>
+  <span><!-- bot SVG icon --></span>
+  <span>Explore</span>
+  <span><!-- X close icon --></span>
+</span>
+```
+
+- `data-agent-ref`: Agent ID (e.g. `explore`, `librarian`, `oracle`, `hephaestus`, `metis`, `momus`, `multimodal-looker`).
+- On submit, serialized as `@agent:<id>` in the prompt text.
+- Agent tags use amber/orange colors.
+
+### Skill tag DOM structure
+
+```html
+<span
+  contenteditable="false"
+  data-skill-ref="playwright"
+  title="Browser automation and testing"
+  class="... bg-violet-500/10 text-violet-400 ..."
+>
+  <span><!-- zap SVG icon --></span>
+  <span>Playwright</span>
+  <span><!-- X close icon --></span>
+</span>
+```
+
+- `data-skill-ref`: Skill/command ID (e.g. `playwright`, `frontend-ui-ux`, `git-master`, `dev-browser`, `/init-deep`, `/refactor`, etc.).
+- On submit, serialized as `@skill:<id>` in the prompt text.
+- Skill tags use violet/purple colors.
+
+### Available harness agents
+
+| Agent ID | Label | Description |
+|----------|-------|-------------|
+| `explore` | Explore | Codebase exploration agent |
+| `librarian` | Librarian | Knowledge and documentation agent |
+| `oracle` | Oracle | Analysis and reasoning agent |
+| `hephaestus` | Hephaestus | Build and craft agent |
+| `metis` | Metis | Planning and strategy agent |
+| `momus` | Momus | Code review and critique agent |
+| `multimodal-looker` | Multimodal Looker | Visual analysis agent |
+
+### Available harness skills
+
+| Skill ID | Label | Description |
+|----------|-------|-------------|
+| `playwright` | Playwright | Browser automation and testing |
+| `frontend-ui-ux` | Frontend UI/UX | Frontend and UI/UX tasks |
+| `git-master` | Git Master | Advanced Git operations |
+| `dev-browser` | Dev Browser | Development browser tasks |
+| `/init-deep` | /init-deep | Deep initialization |
+| `/ralph-loop` | /ralph-loop | Ralph loop workflow |
+| `/ulw-loop` | /ulw-loop | ULW loop workflow |
+| `/cancel-ralph` | /cancel-ralph | Cancel Ralph workflow |
+| `/refactor` | /refactor | Code refactoring |
+| `/start-work` | /start-work | Start work session |
+| `/stop-continuation` | /stop-continuation | Stop continuation |
+| `/handoff` | /handoff | Task handoff |
 
 ### CategoryPicker keyboard shortcuts
 
@@ -292,7 +371,7 @@ interface Props {
 }
 ```
 
-When `requestListing` is not provided and no `githubContext` exists, the `@` trigger is inert (no picker opens). When only files are available (no GitHub context), `@` opens the file browser directly, skipping the category picker.
+The `@` trigger always opens the category picker because Agents and Skills are always available. When only files are available (no GitHub context, and if agents/skills were removed), `@` opens the file browser directly, skipping the category picker.
 
 ### Imperative handle
 
@@ -313,8 +392,8 @@ interface PromptInputHandle {
 
 ### Tag removal
 
-File, snippet, and GitHub context tags can be removed by:
-1. **Backspace key** at the tag boundary (checks for `FILE_TAG_ATTR`, `SNIPPET_TAG_ATTR`, or `GITHUB_TAG_ATTR`).
+File, snippet, GitHub context, agent, and skill tags can be removed by:
+1. **Backspace key** at the tag boundary (checks for `FILE_TAG_ATTR`, `SNIPPET_TAG_ATTR`, `GITHUB_TAG_ATTR`, `AGENT_TAG_ATTR`, or `SKILL_TAG_ATTR`).
 2. **X button click** via `mousedown` listener on the close span.
 
 ### Submit serialization
@@ -328,6 +407,8 @@ File, snippet, and GitHub context tags can be removed by:
 - Text nodes concatenated as-is.
 - File tag spans contribute `@filename` to text, path to `files[]`.
 - Snippet tag spans contribute `[snippet: path:line:char-line:char]` to text, parsed `CodeSelection` to `snippets[]`.
+- Agent tag spans contribute `@agent:<id>` to text.
+- Skill tag spans contribute `@skill:<id>` to text.
 - GitHub context tag spans set `hasGithubContext = true` and contribute `@issue` or `@pr` to text.
 - `<br>` elements become `\n`.
 
@@ -367,7 +448,7 @@ When the user submits a prompt with references and/or images:
 
 ### Adding a new reference type
 
-1. Define a new `data-*` attribute constant (like `FILE_TAG_ATTR`, `SNIPPET_TAG_ATTR`, `GITHUB_TAG_ATTR`).
+1. Define a new `data-*` attribute constant (like `FILE_TAG_ATTR`, `SNIPPET_TAG_ATTR`, `GITHUB_TAG_ATTR`, `AGENT_TAG_ATTR`, `SKILL_TAG_ATTR`).
 2. Create a `createXxxTag()` function following the same pattern.
 3. Add a new entry to the `CategoryPicker` items array (or add detection logic in `handleInput` / `handlePaste`).
 4. Extend `extractContent()` to recognize the new tag type.
@@ -375,7 +456,7 @@ When the user submits a prompt with references and/or images:
 
 ### Changing tag appearance
 
-Edit the `className` string and SVG icon constants (`FILE_ICON_SVG`, `FOLDER_ICON_SVG`, `CODE_ICON_SVG`, `ISSUE_ICON_SVG`, `PR_ICON_SVG`, `CLOSE_ICON_SVG`). Tags are created imperatively (not JSX) because they are inserted into the contentEditable DOM directly.
+Edit the `className` string and SVG icon constants (`FILE_ICON_SVG`, `FOLDER_ICON_SVG`, `CODE_ICON_SVG`, `ISSUE_ICON_SVG`, `PR_ICON_SVG`, `AGENT_ICON_SVG`, `SKILL_ICON_SVG`, `CLOSE_ICON_SVG`). Tags are created imperatively (not JSX) because they are inserted into the contentEditable DOM directly.
 
 ### Changing how references are sent to the backend
 

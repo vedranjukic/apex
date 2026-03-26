@@ -118,7 +118,7 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 - **Two-column layout**: `ProjectList` on the left (flex-1), optional `ThreadPreviewPanel` on the right (480px, shown when a thread is selected).
 - Header row: "Projects" heading + Secrets button (shield icon) + Settings button + "New Project" button.
 - `onOpenProject` calls `openProject()` (`lib/open-project.ts`) which opens a new desktop window via IPC or a new browser tab via `window.open`.
-- Each `ProjectCard` includes a collapsible `ThreadList` showing all threads with status icons, agent type badges, and timestamps.
+- Each `ProjectCard` includes repo info when a git repo is linked (owner/repo link, issue/PR number + title with colored icons), and a collapsible `ThreadList` showing all threads with status icons, agent type badges, and timestamps.
 - Clicking a thread in any `ThreadList` opens the `ThreadPreviewPanel` with a full `AgentThread` — users can interact with agents (send prompts, see responses) directly from the project list.
 - The thread preview panel can be expanded to full screen or closed.
 - "New Thread" buttons on each project card create a new thread and open the preview panel.
@@ -199,10 +199,11 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 | Component                | Purpose |
 | ------------------------ | ------- |
 | **ProjectList**          | Centered card list (max-width 768px). Fetches projects on mount via `useProjectsStore`. Shows loading spinner, empty state, or grid of `ProjectCard`s. "New Project" button toggles `CreateProjectDialog`. Accepts `activeProjectId` prop — when a thread preview panel is open for a project, the `ThreadList` inside that project's card auto-expands. |
-| **ProjectCard**          | Bordered card displaying: project name, color-coded status badge, description, agent type label (Build / Plan / Sisyphus), creation date, per-project thread list (`ThreadList`), open (external link), new thread, and delete (with confirm) buttons. When `activeProjectId` matches, the thread list auto-expands. |
+| **ProjectCard**          | Bordered card displaying: project name, color-coded status badge, description, repo info (`RepoInfo` — owner/repo link + issue/PR context with icons), agent type label (Build / Plan / Sisyphus), creation date, per-project thread list (`ThreadList`), open (external link), new thread, and delete (with confirm) buttons. When `activeProjectId` matches, the thread list auto-expands. |
 | **ThreadList**           | Collapsible per-project thread sublist. Shows thread count, running/waiting/error badges. Each thread row: status icon, ID prefix, agent type badge, title, timestamp. Clicking a thread opens the `ThreadPreviewPanel` on the home page. |
 | **ThreadPreviewPanel**   | Fixed-width (480px) right panel on the home page. Renders a full `AgentThread` for the selected thread, allowing prompt input and agent interaction without leaving the project list. Expandable to full screen. |
-| **CreateProjectDialog**  | Modal overlay (`fixed inset-0 z-50`). Form fields: **Name** (required), **Sandbox Provider** (Daytona / Docker / Apple Container / Local grid selector with availability status), **Project Folder** (local provider only, with folder browser), **Description**, **Git Repository** (optional, cloned on create). Cancel + Create buttons. |
+| **CreateProjectDialog**  | Modal overlay (`fixed inset-0 z-50`). Form fields: **Name** (auto-generated from GitHub issue/PR title or repo name, with dedup suffix; manual edits disable auto-generation), **Sandbox Provider** (Daytona / Docker / Apple Container / Local grid selector with availability status), **Project Folder** (local provider only, with folder browser), **Description**, **Git Repository** (optional, supports GitHub issue/PR/branch/commit URLs — auto-resolves via `/api/github/resolve` with preview showing clone target and branch). Cancel + Create buttons. |
+| **RepoInfo**             | Inline display of linked repo: fork icon + `owner/repo` monospace link, plus issue (green circle) or PR (blue icon) badge with `#number title` link when `githubContext` is set. |
 
 ### 4.4 Editor Components (`components/editor/`)
 

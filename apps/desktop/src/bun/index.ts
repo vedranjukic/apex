@@ -205,13 +205,18 @@ async function waitForServer(
 }
 
 function resolveAppPath(...parts: string[]): string {
-  // process.execPath is the Bun binary — in production it lives at
-  // Apex.app/Contents/MacOS/bun, so Resources is at ../Resources/
   const execDir = path.dirname(process.execPath);
-  const bundleResources = path.resolve(execDir, '..', 'Resources');
 
-  if (fs.existsSync(path.join(bundleResources, 'apps'))) {
-    return path.join(bundleResources, ...parts);
+  // macOS: Apex.app/Contents/MacOS/bun → ../Resources/
+  const macResources = path.resolve(execDir, '..', 'Resources');
+  if (fs.existsSync(path.join(macResources, 'apps'))) {
+    return path.join(macResources, ...parts);
+  }
+
+  // Linux: Apex-dev/<bun> → Resources/
+  const linuxResources = path.resolve(execDir, 'Resources');
+  if (fs.existsSync(path.join(linuxResources, 'apps'))) {
+    return path.join(linuxResources, ...parts);
   }
 
   // Dev fallback: project root is 4 levels up from src/bun/index.ts

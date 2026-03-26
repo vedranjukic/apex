@@ -38,9 +38,42 @@ interface Props {
 const FILE_TAG_ATTR = 'data-file-path';
 const SNIPPET_TAG_ATTR = 'data-snippet';
 const GITHUB_TAG_ATTR = 'data-github-context';
+const AGENT_TAG_ATTR = 'data-agent-ref';
+const SKILL_TAG_ATTR = 'data-skill-ref';
 const SNIPPET_MIME = 'application/x-codeany-snippet';
 
-type PickerMode = 'categories' | 'files';
+interface HarnessItem {
+  id: string;
+  label: string;
+  description: string;
+}
+
+const HARNESS_AGENTS: HarnessItem[] = [
+  { id: 'explore', label: 'Explore', description: 'Codebase exploration agent' },
+  { id: 'librarian', label: 'Librarian', description: 'Knowledge and documentation agent' },
+  { id: 'oracle', label: 'Oracle', description: 'Analysis and reasoning agent' },
+  { id: 'hephaestus', label: 'Hephaestus', description: 'Build and craft agent' },
+  { id: 'metis', label: 'Metis', description: 'Planning and strategy agent' },
+  { id: 'momus', label: 'Momus', description: 'Code review and critique agent' },
+  { id: 'multimodal-looker', label: 'Multimodal Looker', description: 'Visual analysis agent' },
+];
+
+const HARNESS_SKILLS: HarnessItem[] = [
+  { id: 'playwright', label: 'Playwright', description: 'Browser automation and testing' },
+  { id: 'frontend-ui-ux', label: 'Frontend UI/UX', description: 'Frontend and UI/UX tasks' },
+  { id: 'git-master', label: 'Git Master', description: 'Advanced Git operations' },
+  { id: 'dev-browser', label: 'Dev Browser', description: 'Development browser tasks' },
+  { id: '/init-deep', label: '/init-deep', description: 'Deep initialization' },
+  { id: '/ralph-loop', label: '/ralph-loop', description: 'Ralph loop workflow' },
+  { id: '/ulw-loop', label: '/ulw-loop', description: 'ULW loop workflow' },
+  { id: '/cancel-ralph', label: '/cancel-ralph', description: 'Cancel Ralph workflow' },
+  { id: '/refactor', label: '/refactor', description: 'Code refactoring' },
+  { id: '/start-work', label: '/start-work', description: 'Start work session' },
+  { id: '/stop-continuation', label: '/stop-continuation', description: 'Stop continuation' },
+  { id: '/handoff', label: '/handoff', description: 'Task handoff' },
+];
+
+type PickerMode = 'categories' | 'files' | 'agents' | 'skills';
 
 function getCaretRect(): { top: number; left: number } | null {
   const sel = window.getSelection();
@@ -85,6 +118,12 @@ function extractContent(el: HTMLElement): { text: string; files: string[]; snipp
       } else if (ghContext) {
         hasGithubContext = true;
         text += element.getAttribute('data-github-label') ?? `@${ghContext}`;
+      } else if (element.hasAttribute(AGENT_TAG_ATTR)) {
+        const agentId = element.getAttribute(AGENT_TAG_ATTR);
+        text += `@agent:${agentId}`;
+      } else if (element.hasAttribute(SKILL_TAG_ATTR)) {
+        const skillId = element.getAttribute(SKILL_TAG_ATTR);
+        text += `@skill:${skillId}`;
       } else if (element.tagName === 'BR') {
         text += '\n';
       } else {
@@ -277,6 +316,14 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
         setPickerMode('files');
         return;
       }
+      if (category === 'agents') {
+        setPickerMode('agents');
+        return;
+      }
+      if (category === 'skills') {
+        setPickerMode('skills');
+        return;
+      }
       if (category === 'issue' && githubContext?.type === 'issue') {
         setPickerMode(null);
         const tag = createGitHubContextTag(githubContext);
@@ -310,7 +357,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
 
           const { startContainer, startOffset } = range;
           const isTag = (el: HTMLElement) =>
-            el.hasAttribute(FILE_TAG_ATTR) || el.hasAttribute(SNIPPET_TAG_ATTR) || el.hasAttribute(GITHUB_TAG_ATTR);
+            el.hasAttribute(FILE_TAG_ATTR) || el.hasAttribute(SNIPPET_TAG_ATTR) || el.hasAttribute(GITHUB_TAG_ATTR) || el.hasAttribute(AGENT_TAG_ATTR) || el.hasAttribute(SKILL_TAG_ATTR);
 
           if (startContainer.nodeType === Node.TEXT_NODE && startOffset === 0) {
             const prev = startContainer.previousSibling;
@@ -362,13 +409,9 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
         const rect = getCaretRect();
         setPickerAnchor(rect);
 
-        const hasGhIssue = githubContext?.type === 'issue';
-        const hasGhPr = githubContext?.type === 'pull';
-        if (hasGhIssue || hasGhPr || requestListing) {
-          setPickerMode('categories');
-        }
+        setPickerMode('categories');
       }
-    }, [showPicker, requestListing, updateEmpty, githubContext]);
+    }, [showPicker, updateEmpty]);
 
     const handlePaste = useCallback(
       (e: React.ClipboardEvent) => {
@@ -419,6 +462,24 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
         setPickerMode(null);
         const fileName = filePath.split('/').pop() ?? filePath;
         const tag = createFileTag(filePath, fileName, isDirectory);
+        replaceAtTrigger(tag);
+      },
+      [replaceAtTrigger],
+    );
+
+    const handleAgentSelect = useCallback(
+      (item: HarnessItem) => {
+        setPickerMode(null);
+        const tag = createAgentTag(item);
+        replaceAtTrigger(tag);
+      },
+      [replaceAtTrigger],
+    );
+
+    const handleSkillSelect = useCallback(
+      (item: HarnessItem) => {
+        setPickerMode(null);
+        const tag = createSkillTag(item);
         replaceAtTrigger(tag);
       },
       [replaceAtTrigger],
@@ -506,6 +567,26 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
                 />
               </div>
             )}
+            {pickerMode === 'agents' && (
+              <div className="absolute bottom-full left-0 mb-2">
+                <HarnessItemPicker
+                  items={HARNESS_AGENTS}
+                  onSelect={handleAgentSelect}
+                  onClose={closePicker}
+                  title="Select agent"
+                />
+              </div>
+            )}
+            {pickerMode === 'skills' && (
+              <div className="absolute bottom-full left-0 mb-2">
+                <HarnessItemPicker
+                  items={HARNESS_SKILLS}
+                  onSelect={handleSkillSelect}
+                  onClose={closePicker}
+                  title="Select skill"
+                />
+              </div>
+            )}
           </div>
 
           {/* Toolbar row */}
@@ -576,6 +657,8 @@ function CategoryPicker({ onSelect, onClose, hasFiles, hasIssue, hasPr, anchorRe
 
   const items: { id: string; label: string; icon: string; sublabel: string }[] = [];
   if (hasFiles) items.push({ id: 'files', label: 'Files', icon: FILE_ICON_SVG, sublabel: 'Browse project files' });
+  items.push({ id: 'agents', label: 'Agents', icon: AGENT_ICON_SVG, sublabel: 'Use a specialized agent' });
+  items.push({ id: 'skills', label: 'Skills', icon: SKILL_ICON_SVG, sublabel: 'Apply a skill or command' });
   if (hasIssue) items.push({ id: 'issue', label: 'Issue', icon: ISSUE_ICON_SVG, sublabel: 'Attach GitHub issue context' });
   if (hasPr) items.push({ id: 'pr', label: 'PR', icon: PR_ICON_SVG, sublabel: 'Attach pull request context' });
 
@@ -662,7 +745,120 @@ const PR_ICON_SVG_SM = `<svg xmlns="http://www.w3.org/2000/svg" width="12" heigh
 const FILE_ICON_SVG_SM = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>`;
 const FOLDER_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`;
 const CODE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>`;
+const AGENT_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="10" x="3" y="11" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" x2="8" y1="16" y2="16"/><line x1="16" x2="16" y1="16" y2="16"/></svg>`;
+const SKILL_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>`;
+const AGENT_ICON_SVG_SM = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="10" x="3" y="11" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" x2="8" y1="16" y2="16"/><line x1="16" x2="16" y1="16" y2="16"/></svg>`;
+const SKILL_ICON_SVG_SM = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>`;
 const CLOSE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`;
+
+// ── Harness Item Picker ──────────────────────────────
+
+interface HarnessItemPickerProps {
+  items: HarnessItem[];
+  onSelect: (item: HarnessItem) => void;
+  onClose: () => void;
+  title: string;
+}
+
+function HarnessItemPicker({ items, onSelect, onClose, title }: HarnessItemPickerProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [filter, setFilter] = useState('');
+  const [highlightIdx, setHighlightIdx] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const filtered = items.filter((item) =>
+    item.label.toLowerCase().includes(filter.toLowerCase()) ||
+    item.id.toLowerCase().includes(filter.toLowerCase())
+  );
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    setHighlightIdx(0);
+  }, [filter]);
+
+  useEffect(() => {
+    const container = listRef.current;
+    if (!container) return;
+    const el = container.children[highlightIdx] as HTMLElement | undefined;
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [highlightIdx]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [onClose]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setHighlightIdx((i) => (filtered.length > 0 ? (i + 1) % filtered.length : 0));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setHighlightIdx((i) => (filtered.length > 0 ? (i - 1 + filtered.length) % filtered.length : 0));
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        if (filtered[highlightIdx]) onSelect(filtered[highlightIdx]);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose, onSelect, filtered, highlightIdx]);
+
+  return (
+    <div
+      ref={panelRef}
+      className="bg-surface border border-border rounded-lg shadow-xl overflow-hidden w-72"
+    >
+      <div className="px-3 py-1.5 border-b border-border">
+        <span className="text-[10px] font-medium text-text-muted uppercase tracking-wider">{title}</span>
+      </div>
+      <div className="px-2 py-1.5 border-b border-border">
+        <input
+          ref={inputRef}
+          type="text"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter…"
+          className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-muted outline-none"
+        />
+      </div>
+      <div ref={listRef} className="py-1 max-h-56 overflow-y-auto">
+        {filtered.length === 0 && (
+          <div className="px-3 py-2 text-xs text-text-muted">No matches</div>
+        )}
+        {filtered.map((item, idx) => (
+          <button
+            key={item.id}
+            type="button"
+            onMouseEnter={() => setHighlightIdx(idx)}
+            onClick={() => onSelect(item)}
+            className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors ${
+              idx === highlightIdx ? 'bg-primary/10 text-text-primary' : 'text-text-secondary hover:bg-surface-secondary'
+            }`}
+          >
+            <div className="min-w-0">
+              <div className="text-sm font-medium">{item.label}</div>
+              <div className="text-[11px] text-text-muted truncate">{item.description}</div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 // ── Tag Factories ────────────────────────────────────
 
@@ -723,6 +919,68 @@ function createSnippetTag(snippet: CodeSelection): HTMLSpanElement {
   close.innerHTML = CLOSE_ICON_SVG;
   close.className =
     'flex items-center cursor-pointer rounded hover:bg-accent/20 ml-0.5';
+  close.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    tag.remove();
+  });
+  tag.appendChild(close);
+
+  return tag;
+}
+
+function createAgentTag(item: HarnessItem): HTMLSpanElement {
+  const tag = document.createElement('span');
+  tag.setAttribute(AGENT_TAG_ATTR, item.id);
+  tag.contentEditable = 'false';
+  tag.className =
+    'inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5 rounded-md bg-amber-500/10 text-amber-400 text-xs font-medium align-baseline cursor-default select-none';
+  tag.title = item.description;
+
+  const icon = document.createElement('span');
+  icon.innerHTML = AGENT_ICON_SVG_SM;
+  icon.className = 'flex items-center';
+  tag.appendChild(icon);
+
+  const label = document.createElement('span');
+  label.textContent = item.label;
+  tag.appendChild(label);
+
+  const close = document.createElement('span');
+  close.innerHTML = CLOSE_ICON_SVG;
+  close.className =
+    'flex items-center cursor-pointer rounded hover:bg-amber-500/20 ml-0.5';
+  close.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    tag.remove();
+  });
+  tag.appendChild(close);
+
+  return tag;
+}
+
+function createSkillTag(item: HarnessItem): HTMLSpanElement {
+  const tag = document.createElement('span');
+  tag.setAttribute(SKILL_TAG_ATTR, item.id);
+  tag.contentEditable = 'false';
+  tag.className =
+    'inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5 rounded-md bg-violet-500/10 text-violet-400 text-xs font-medium align-baseline cursor-default select-none';
+  tag.title = item.description;
+
+  const icon = document.createElement('span');
+  icon.innerHTML = SKILL_ICON_SVG_SM;
+  icon.className = 'flex items-center';
+  tag.appendChild(icon);
+
+  const label = document.createElement('span');
+  label.textContent = item.label;
+  tag.appendChild(label);
+
+  const close = document.createElement('span');
+  close.innerHTML = CLOSE_ICON_SVG;
+  close.className =
+    'flex items-center cursor-pointer rounded hover:bg-violet-500/20 ml-0.5';
   close.addEventListener('mousedown', (e) => {
     e.preventDefault();
     e.stopPropagation();

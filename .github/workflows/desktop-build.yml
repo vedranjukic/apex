@@ -1,0 +1,169 @@
+name: Build Desktop App
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      build_env:
+        description: 'Build environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - canary
+          - stable
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: macos
+            arch: arm64
+          - os: macos-13
+            platform: macos
+            arch: x64
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        run: echo "version=$(cat VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Determine build environment
+        id: build-env
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "env=${{ inputs.build_env }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref_name }}" == *"-canary"* ]]; then
+            echo "env=canary" >> "$GITHUB_OUTPUT"
+          else
+            echo "env=stable" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            build-essential \
+            python3
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build API
+        run: bun run build:api
+
+      - name: Build Dashboard
+        run: bun run build:dashboard
+
+      - name: Build & package Desktop App
+        env:
+          ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: node scripts/build-desktop.js --env ${{ steps.build-env.outputs.env }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: apex-${{ steps.build-env.outputs.env }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: apps/desktop/artifacts/*
+          if-no-files-found: warn
+
+      - name: Upload app bundle (macOS)
+        if: matrix.platform == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: apex-app-${{ steps.build-env.outputs.env }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: apps/desktop/build/*/*.app
+          if-no-files-found: warn
+
+      - name: Upload app bundle (Linux)
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: apex-app-${{ steps.build-env.outputs.env }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: apps/desktop/build/*
+          if-no-files-found: warn
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    name: Create Release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        run: echo "version=$(cat VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Determine build environment
+        id: build-env
+        run: |
+          if [[ "${{ github.ref_name }}" == *"-canary"* ]]; then
+            echo "env=canary" >> "$GITHUB_OUTPUT"
+          else
+            echo "env=stable" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+          pattern: apex-${{ steps.build-env.outputs.env }}-*
+
+      - name: Collect release files
+        run: |
+          mkdir -p release-files
+          find all-artifacts -type f \( -name "*.dmg" -o -name "*.tar.zst" -o -name "*.tar.gz" -o -name "*.zip" -o -name "*.json" -o -name "*.patch" \) -exec cp {} release-files/ \;
+          echo "Release files:"
+          ls -lh release-files/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*
+          draft: false
+          prerelease: ${{ steps.build-env.outputs.env == 'canary' }}
+          generate_release_notes: true
+          name: Apex v${{ steps.version.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

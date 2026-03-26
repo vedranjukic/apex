@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Plus, FolderOpen, Trash2, ExternalLink, Loader2, CheckCircle2,
   CircleHelp, CirclePause, XCircle, Circle, GitBranch, ChevronDown, ChevronRight, Settings, Shield,
-  Play, Square, RotateCw, MoreHorizontal,
+  Play, Square, RotateCw, MoreHorizontal, GitFork, CircleDot, GitPullRequest,
 } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { useProjectsStore } from '../../stores/projects-store';
@@ -50,6 +50,11 @@ function timeAgo(dateStr: string): string {
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
   return `${days}d ago`;
+}
+
+function extractRepoSlug(gitRepo: string): string | null {
+  const m = gitRepo.match(/github\.com\/([^/]+\/[^/.]+)/);
+  return m ? m[1] : null;
 }
 
 function SandboxControls({ project, className }: { project: Project; className?: string }) {
@@ -569,6 +574,9 @@ function ProjectCard({
               {project.description}
             </p>
           )}
+          {project.gitRepo && (
+            <RepoInfo gitRepo={project.gitRepo} githubContext={project.githubContext} />
+          )}
           <div className="flex items-center gap-3 mt-1 text-xs text-text-muted">
             <span>{{ claude_code: 'Claude Code', open_code: 'OpenCode', codex: 'Codex' }[project.agentType] || project.agentType}</span>
             <span>·</span>
@@ -637,6 +645,7 @@ function ProjectCard({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setConfirmDelete(false)}>
           <div className="bg-surface rounded-xl shadow-xl w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-semibold mb-1">Delete project</h3>
+
             <p className="text-xs text-text-secondary mb-4">
               Are you sure you want to delete <span className="font-medium text-text-primary">{project.name}</span> and its sandbox? This action cannot be undone.
             </p>
@@ -656,6 +665,49 @@ function ProjectCard({
             </div>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+function RepoInfo({ gitRepo, githubContext }: { gitRepo: string; githubContext: Project['githubContext'] }) {
+  const slug = extractRepoSlug(gitRepo);
+  const repoUrl = slug ? `https://github.com/${slug}` : gitRepo;
+  const display = slug ?? gitRepo.replace(/^https?:\/\//, '').replace(/\.git$/, '');
+
+  const isIssue = githubContext?.type === 'issue';
+  const isPr = githubContext?.type === 'pull';
+
+  return (
+    <div className="flex items-center gap-1.5 mt-1 text-[11px] text-text-muted min-w-0">
+      <GitFork className="w-3 h-3 shrink-0" />
+      <a
+        href={repoUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className="font-mono truncate hover:text-text-secondary hover:underline transition-colors"
+      >
+        {display}
+      </a>
+      {(isIssue || isPr) && githubContext && (
+        <>
+          <span className="text-text-muted/50">·</span>
+          {isIssue ? (
+            <CircleDot className="w-3 h-3 shrink-0 text-green-400" />
+          ) : (
+            <GitPullRequest className="w-3 h-3 shrink-0 text-blue-400" />
+          )}
+          <a
+            href={githubContext.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="truncate hover:text-text-secondary hover:underline transition-colors"
+          >
+            #{githubContext.number} {githubContext.title}
+          </a>
+        </>
       )}
     </div>
   );

@@ -12,12 +12,12 @@ A next-generation, agent-centric IDE optimized for managing parallel agent sessi
 
 The home page serves as a project dashboard with inline thread management:
 
-- **Project cards** — each project shows name, status badge, description, agent type, creation date, and a collapsible thread list
+- **Project cards** — each project shows name, status badge, description, repo info (owner/repo link with issue/PR context when available), agent type, creation date, and a collapsible thread list
 - **Inline thread list** — per-project collapsible section showing all threads with status icons (running/waiting/completed/error), agent type badges, ID prefix, title, and timestamps
 - **Thread preview panel** — clicking any thread opens a 480px right panel with a full agent thread (prompt input, streamed responses, tool calls) — interact with agents without leaving the project list
 - **Fork groups** — projects forked from the same parent are grouped together with expandable fork rows
 - **Quick access** — Secrets (shield icon) and Settings buttons in the header; "New Thread" button on each project card
-- **New Project** dialog with sandbox provider selection (Daytona, Docker, Apple Container, Local), folder browser for local provider, git repo URL (supports GitHub issue, PR, branch, and commit URLs with auto-detection), and description
+- **New Project** dialog with sandbox provider selection (Daytona, Docker, Apple Container, Local), folder browser for local provider, git repo URL (supports GitHub issue, PR, branch, and commit URLs with auto-detection and smart project name generation from issue/PR titles), and description
 
 ### Workspace Layout
 

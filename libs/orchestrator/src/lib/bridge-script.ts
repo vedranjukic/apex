@@ -135,16 +135,10 @@ function startOpenCodeServe() {
   lastOcExitCode = null;
   lastOcStderr = "";
   log("\\u{1F680}", "Starting opencode serve on port " + OC_PORT);
-  try { var upOut = execSync("opencode upgrade 2>&1", { timeout: 30000 }).toString().trim(); log("\\u{2B06}", "opencode upgrade: " + upOut); } catch (ue) { log("\\u{26A0}", "opencode upgrade skipped: " + (ue.message || ue)); }
   let ocBin = "opencode";
   try { ocBin = execSync("which opencode 2>/dev/null || echo opencode").toString().trim(); } catch {};
   const dotEnvVars = loadDotEnv(PROJECT_DIR);
-  // GPT-5.2 only supports medium for both reasoningEffort and textVerbosity (OpenCode bug #9969)
-  var gpt52Opts = { reasoningEffort: "medium", textVerbosity: "medium" };
-  var gpt52Variant = { reasoningEffort: "medium", textVerbosity: "medium" };
-  var gpt52Fix = { options: gpt52Opts, variants: { none: gpt52Variant, minimal: gpt52Variant, low: gpt52Variant, medium: gpt52Variant, high: gpt52Variant, xhigh: gpt52Variant } };
-  var inlineConfig = JSON.stringify({ model: "anthropic/claude-opus-4-20250514", provider: { openai: { models: { "gpt-5.2": gpt52Fix, "gpt-5.2-chat-latest": gpt52Fix } } } });
-  const serveEnv = { ...process.env, ...dotEnvVars, HOME: process.env.HOME || "/home/daytona", NODE_TLS_REJECT_UNAUTHORIZED: "0", PYTHONUNBUFFERED: "1", OPENCODE_CONFIG_CONTENT: inlineConfig };
+  const serveEnv = { ...process.env, ...dotEnvVars, HOME: process.env.HOME || "/home/daytona", NODE_TLS_REJECT_UNAUTHORIZED: "0", PYTHONUNBUFFERED: "1" };
   if (STDBUF_LIB) {
     serveEnv._STDBUF_O = "L";
     serveEnv.LD_PRELOAD = (serveEnv.LD_PRELOAD ? serveEnv.LD_PRELOAD + ":" : "") + STDBUF_LIB;
@@ -600,9 +594,13 @@ function pollSession(threadId, sessionId) {
           var pollAge = Date.now() - pollStartedAt;
           if ((seenBusyFromStatus || idleCount >= 5) && pollAge > MIN_POLL_BEFORE_IDLE_EXIT_MS) {
             flushPendingText();
-            log("\\u{1F916}", "Session " + sessionId + " idle (seenBusy=" + seenBusy + " idleCount=" + idleCount + " age=" + Math.round(pollAge/1000) + "s), emitting exit");
+            log("\\u{1F916}", "Session " + sessionId + " idle (seenBusy=" + seenBusy + " idleCount=" + idleCount + " age=" + Math.round(pollAge/1000) + "s + parts=" + emittedParts.size + ")");
             activeThreads.delete(threadId);
-            emitAgentExit(threadId, 0);
+            if (!seenBusy && emittedParts.size === 0) {
+              emitAgentError(threadId, "Agent produced no output — the agent or model may not be configured correctly. Check that the selected agent exists in the OpenCode config and the model is available.");
+            } else {
+              emitAgentExit(threadId, 0);
+            }
             return;
           }
         }
