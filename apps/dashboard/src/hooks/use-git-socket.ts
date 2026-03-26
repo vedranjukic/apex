@@ -1,6 +1,7 @@
 import { useEffect, useCallback, useRef } from 'react';
 import type { ReconnectingWebSocket } from '../lib/reconnecting-ws';
 import { useGitStore, type GitStatusData, type GitBranchEntry } from '../stores/git-store';
+import { useEditorStore } from '../stores/editor-store';
 
 const POLL_INTERVAL_MS = 5_000;
 
@@ -15,6 +16,7 @@ export interface GitActions {
   listBranches: () => void;
   createBranch: (name: string, startPoint?: string) => void;
   checkout: (ref: string) => void;
+  requestDiff: (path: string, staged: boolean) => void;
 }
 
 export function useGitSocket(
@@ -50,9 +52,16 @@ export function useGitSocket(
       setBranches(d.branches ?? []);
     };
 
+    const onGitDiffResult = (data: any) => {
+      const d = data.payload;
+      if (d.error) { console.warn('[ws] git_diff_result error:', d.error); return; }
+      useEditorStore.getState().setDiffContent(d.path, d.original ?? '', d.modified ?? '');
+    };
+
     ws.on('git_status_result', onGitStatusResult);
     ws.on('git_op_result', onGitOpResult);
     ws.on('git_branches_result', onGitBranchesResult);
+    ws.on('git_diff_result', onGitDiffResult);
 
     const poll = () => { if (ws.connected && boundProjectId.current) ws.send('git_status', { projectId: boundProjectId.current }); };
     const onConnect = (status: string) => { if (status === 'connected') setTimeout(poll, 1000); };
@@ -64,6 +73,7 @@ export function useGitSocket(
       ws.off('git_status_result', onGitStatusResult);
       ws.off('git_op_result', onGitOpResult);
       ws.off('git_branches_result', onGitBranchesResult);
+      ws.off('git_diff_result', onGitDiffResult);
       ws.offStatus(onConnect as any);
       clearInterval(intervalRef.current);
       reset();
@@ -80,6 +90,10 @@ export function useGitSocket(
   const listBranches = useCallback(() => { socketRef.current?.send('git_branches', { projectId: boundProjectId.current }); }, [socketRef]);
   const createBranch = useCallback((name: string, startPoint?: string) => { setLoading(true); socketRef.current?.send('git_create_branch', { projectId: boundProjectId.current, name, startPoint }); }, [socketRef, setLoading]);
   const checkout = useCallback((ref: string) => { setLoading(true); socketRef.current?.send('git_checkout', { projectId: boundProjectId.current, ref }); }, [socketRef, setLoading]);
+  const requestDiff = useCallback((path: string, staged: boolean) => {
+    useEditorStore.getState().openDiff(path, staged);
+    socketRef.current?.send('git_diff', { projectId: boundProjectId.current, path, staged });
+  }, [socketRef]);
 
-  return { requestStatus, stage, unstage, discard, commit, push, pull, listBranches, createBranch, checkout };
+  return { requestStatus, stage, unstage, discard, commit, push, pull, listBranches, createBranch, checkout, requestDiff };
 }

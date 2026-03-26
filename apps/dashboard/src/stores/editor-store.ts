@@ -13,18 +13,27 @@ export interface CodeSelection {
   endChar: number;
 }
 
+export interface DiffData {
+  filePath: string;
+  original: string;
+  modified: string;
+  staged: boolean;
+  loading: boolean;
+}
+
 interface EditorState {
   openFiles: OpenFile[];
   activeFilePath: string | null;
   fileContents: Record<string, string>;
   fileScrollOffsets: Record<string, number>;
-  activeView: 'thread' | 'editor';
+  activeView: 'thread' | 'editor' | 'diff';
   codeSelection: CodeSelection | null;
   /** Plain text that was on the clipboard when codeSelection was set */
   codeSelectionText: string | null;
   dirtyFiles: Set<string>;
   /** When set, CodeViewer will reveal this line after mount */
   revealLineAt: { filePath: string; line: number } | null;
+  activeDiff: DiffData | null;
 
   openFile: (path: string, name: string) => void;
   openFileAtLine: (path: string, name: string, line: number) => void;
@@ -37,6 +46,9 @@ interface EditorState {
   markDirty: (path: string) => void;
   markClean: (path: string) => void;
   showThread: () => void;
+  openDiff: (filePath: string, staged: boolean) => void;
+  setDiffContent: (filePath: string, original: string, modified: string) => void;
+  closeDiff: () => void;
   reset: () => void;
   applyLayout: (data: {
     openFiles?: OpenFile[];
@@ -56,6 +68,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   codeSelectionText: null,
   dirtyFiles: new Set<string>(),
   revealLineAt: null,
+  activeDiff: null,
 
   openFile: (path, name) => {
     const { openFiles } = get();
@@ -125,6 +138,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   showThread: () => set({ activeView: 'thread' }),
 
+  openDiff: (filePath, staged) =>
+    set({
+      activeView: 'diff',
+      activeDiff: { filePath, original: '', modified: '', staged, loading: true },
+    }),
+
+  setDiffContent: (filePath, original, modified) =>
+    set((state) => {
+      if (state.activeDiff?.filePath !== filePath) return state;
+      return {
+        activeDiff: { ...state.activeDiff, original, modified, loading: false },
+      };
+    }),
+
+  closeDiff: () => set({ activeView: 'thread', activeDiff: null }),
+
   reset: () =>
     set({
       openFiles: [],
@@ -136,6 +165,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       codeSelectionText: null,
       dirtyFiles: new Set<string>(),
       revealLineAt: null,
+      activeDiff: null,
     }),
 
   applyLayout: (data) =>

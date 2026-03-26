@@ -879,6 +879,17 @@ async function handleMessage(client: WsClient, message: unknown) {
         emitTo(client, 'git_branches_result', { branches: await resolved.manager.listBranches(resolved.sandboxId) });
         break;
       }
+      case 'git_diff': {
+        const resolved = await tryResolveProject(payload.projectId);
+        if (!resolved) { emitTo(client, 'git_diff_result', { path: payload.path, original: '', modified: '', error: 'Sandbox not ready' }); break; }
+        try {
+          const diff = await resolved.manager.getGitDiff(resolved.sandboxId, payload.path, !!payload.staged);
+          emitTo(client, 'git_diff_result', { path: payload.path, ...diff });
+        } catch (e: any) {
+          emitTo(client, 'git_diff_result', { path: payload.path, original: '', modified: '', error: e.message });
+        }
+        break;
+      }
       case 'layout_save': {
         const resolved = await tryResolveProject(payload.projectId);
         if (resolved) await resolved.manager.saveLayout(resolved.sandboxId, payload.layout);

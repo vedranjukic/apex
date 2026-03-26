@@ -8,13 +8,14 @@
 
 | Layer | File | Purpose |
 |---|---|---|
-| **Orchestrator** | `libs/orchestrator/src/lib/sandbox-manager.ts` | Git CLI methods: `findGitRoot`, `getGitStatus`, `gitStage`, `gitUnstage`, `gitDiscard`, `gitCommit`, `gitPush`, `gitPull`, `listBranches`, `gitCreateBranch`, `gitCheckout` |
+| **Orchestrator** | `libs/orchestrator/src/lib/sandbox-manager.ts` | Git CLI methods: `findGitRoot`, `getGitStatus`, `getGitDiff`, `gitStage`, `gitUnstage`, `gitDiscard`, `gitCommit`, `gitPush`, `gitPull`, `listBranches`, `gitCreateBranch`, `gitCheckout` |
 | **Orchestrator types** | `libs/orchestrator/src/lib/types.ts` | `GitFileEntry`, `GitFileStatus`, `GitStatusData`, `GitBranchEntry` |
-| **Gateway** | `apps/api/src/modules/agent/agent.gateway.ts` | Socket.io handlers for `git_status`, `git_stage`, `git_unstage`, `git_discard`, `git_commit`, `git_push`, `git_pull`, `git_branches`, `git_create_branch`, `git_checkout` |
+| **Gateway** | `apps/api/src/modules/agent/agent.ws.ts` | WebSocket handlers for `git_status`, `git_stage`, `git_unstage`, `git_discard`, `git_commit`, `git_push`, `git_pull`, `git_branches`, `git_create_branch`, `git_checkout`, `git_diff` |
 | **Zustand store** | `apps/dashboard/src/stores/git-store.ts` | `useGitStore` — branch, staged/unstaged/untracked/conflicted arrays, branches list, optimistic actions, stable merge |
-| **Socket hook** | `apps/dashboard/src/hooks/use-git-socket.ts` | `useGitSocket` — polls `git_status` every 5s, exposes action callbacks including branch operations |
+| **Socket hook** | `apps/dashboard/src/hooks/use-git-socket.ts` | `useGitSocket` — polls `git_status` every 5s, exposes action callbacks including branch operations and `requestDiff` |
 | **Config** | `apps/dashboard/src/lib/git-source-control-config.ts` | `getGitFilesDisplayLimit()` — max files to display (default 100, overridable via `localStorage.git_files_display_limit`) |
-| **UI component** | `apps/dashboard/src/components/source-control/source-control-panel.tsx` | Full panel: commit input, action button, file sections, AI generate button, too-many-files warning |
+| **UI component** | `apps/dashboard/src/components/source-control/source-control-panel.tsx` | Full panel: commit input, action button, file sections (clickable to open diff), AI generate button, too-many-files warning |
+| **Diff viewer** | `apps/dashboard/src/components/editor/diff-viewer.tsx` | Monaco `DiffEditor` — side-by-side diff view in the central panel, header with file name, staged/changes badge, close button |
 | **Branch picker** | `apps/dashboard/src/components/layout/branch-picker.tsx` | Dropdown from status bar: branch commands (create, create from, checkout detached) + scrollable branch list |
 | **Status bar** | `apps/dashboard/src/components/layout/project-status-bar.tsx` | Bottom bar: project name, clickable git branch (opens branch picker), sync status (refresh + ahead/behind counts), sandbox status, VS Code button |
 | **Wiring** | `apps/dashboard/src/pages/project-page.tsx` | Creates `useGitSocket` hook, passes actions to status bar + left sidebar |
@@ -39,6 +40,7 @@ All events use the shared `/ws/agent` namespace (same socket as file tree, termi
 | `git_branches` | `git_branches_result` | `{ projectId }` → `{ branches: GitBranchEntry[] }` |
 | `git_create_branch` | `git_op_result` + `git_status_result` + `git_branches_result` | `{ projectId, name, startPoint? }` |
 | `git_checkout` | `git_op_result` + `git_status_result` + `git_branches_result` | `{ projectId, ref }` |
+| `git_diff` | `git_diff_result` | `{ projectId, path, staged }` → `{ path, original, modified }` |
 
 Every mutation handler automatically re-fetches and emits `git_status_result` after the operation so the UI refreshes. Branch-mutating operations also re-emit `git_branches_result`.
 
@@ -181,6 +183,29 @@ git -c user.name="Apex" -c user.email="user@apex.local" commit -m 'message' 2>&1
 ```
 
 A 30-second `Promise.race` timeout prevents hangs from misconfigured or unresponsive sandboxes.
+
+---
+
+## Diff View
+
+Clicking any file row in the source control panel opens a side-by-side diff in the central panel using Monaco's `DiffEditor`.
+
+**Flow:**
+
+1. `FileRow` `onClick` calls `gitActions.requestDiff(path, staged)`.
+2. `requestDiff` sets `useEditorStore.openDiff(path, staged)` (switches `activeView` to `'diff'`, shows loading state) and sends `git_diff` over the WebSocket.
+3. Backend `getGitDiff()` fetches both file versions from the sandbox:
+   - **Staged files**: original = `git show HEAD:<path>`, modified = `git show :<path>` (index).
+   - **Unstaged/untracked files**: original = index or HEAD version, modified = working tree content.
+4. `git_diff_result` arrives; `useEditorStore.setDiffContent()` fills in the original/modified strings.
+5. `CentralPanel` renders `DiffViewer` when `activeView === 'diff'`.
+
+**Key details:**
+
+- The diff view is transient — it is not persisted in layout snapshots (`use-layout-socket.ts` normalizes `'diff'` to `'thread'` when saving).
+- Action buttons (stage/unstage/discard) use `e.stopPropagation()` so they don't also open the diff.
+- The `DiffViewer` header shows the filename, a "Staged"/"Changes" badge, the full path, and a close button that calls `closeDiff()`.
+- `DiffEditor` options: read-only, side-by-side rendering, same Monaco theme and font settings as `CodeViewer`.
 
 ---
 

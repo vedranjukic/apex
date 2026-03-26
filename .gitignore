@@ -72,3 +72,6 @@ dist-electron
 
 # Go CLI binaries
 apps/cli/bin/
+
+build/
+dist/

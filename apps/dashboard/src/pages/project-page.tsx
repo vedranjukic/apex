@@ -23,6 +23,7 @@ import type { ImageAttachment } from '../components/agent/prompt-input';
 import { useAgentSettingsStore, type AgentTypeId } from '../stores/agent-settings-store';
 import { useTerminalStore } from '../stores/terminal-store';
 import { CodeViewer } from '../components/editor/code-viewer';
+import { DiffViewer } from '../components/editor/diff-viewer';
 
 export function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -325,6 +326,10 @@ function CentralPanel({
       readFile(activeFilePath);
     }
   }, [activeView, activeFilePath, fileContents, readFile]);
+
+  if (activeView === 'diff') {
+    return <DiffViewer />;
+  }
 
   if (activeView === 'editor' && activeFilePath) {
     return (

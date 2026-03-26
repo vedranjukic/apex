@@ -123,7 +123,7 @@ export function useLayoutSocket(
       activeThreadId: threads.activeThreadId, threadScrollOffsets: threads.threadScrollOffsets,
       leftSidebarOpen: panels.leftSidebarOpen, rightSidebarOpen: panels.rightSidebarOpen,
       openFiles: editor.openFiles, activeFilePath: editor.activeFilePath,
-      activeView: editor.activeView, fileScrollOffsets: editor.fileScrollOffsets,
+      activeView: editor.activeView === 'diff' ? 'thread' : editor.activeView, fileScrollOffsets: editor.fileScrollOffsets,
     };
   }, []);
 

@@ -1219,6 +1219,40 @@ export class SandboxManager extends EventEmitter {
     return (result.result ?? "").trim();
   }
 
+  /** Get both sides of a diff for a single file */
+  async getGitDiff(
+    sandboxId: string,
+    filePath: string,
+    staged: boolean,
+  ): Promise<{ original: string; modified: string }> {
+    const gitRoot = await this.findGitRoot(sandboxId);
+    if (!gitRoot) throw new Error("No git repository found");
+    const sandbox = await this.ensureSandbox(sandboxId);
+    const safePath = filePath.replace(/[;&|`$]/g, "");
+
+    if (staged) {
+      const orig = await sandbox.process.executeCommand(
+        `git show HEAD:"${safePath}" 2>/dev/null || true`,
+        gitRoot,
+      );
+      const mod = await sandbox.process.executeCommand(
+        `git show :"${safePath}" 2>/dev/null || true`,
+        gitRoot,
+      );
+      return { original: orig.result ?? "", modified: mod.result ?? "" };
+    }
+
+    const orig = await sandbox.process.executeCommand(
+      `git show :"${safePath}" 2>/dev/null || git show HEAD:"${safePath}" 2>/dev/null || true`,
+      gitRoot,
+    );
+    const mod = await sandbox.process.executeCommand(
+      `cat "${safePath}" 2>/dev/null || true`,
+      gitRoot,
+    );
+    return { original: orig.result ?? "", modified: mod.result ?? "" };
+  }
+
   // ── File system methods ─────────────────────────────
 
   /** List files and directories in a sandbox directory */
@@ -1810,7 +1844,7 @@ export class SandboxManager extends EventEmitter {
           build: {
             description: "Full development agent with all tools enabled",
             mode: "primary",
-            prompt: `{file:${projectDir}/AGENTS.md}`,
+            prompt: `{file:${homeDir}/AGENTS.md}`,
             permission: { "*": { "*": "allow" } },
           },
           plan: {
@@ -1822,7 +1856,7 @@ export class SandboxManager extends EventEmitter {
           sisyphus: {
             description: "Orchestration agent for complex multi-step tasks",
             mode: "primary",
-            prompt: `{file:${projectDir}/.opencode/agents/sisyphus-prompt.txt}`,
+            prompt: `{file:${homeDir}/.opencode/agents/sisyphus-prompt.txt}`,
             steps: 50,
             permission: { "*": { "*": "allow" } },
           },
@@ -1837,22 +1871,23 @@ export class SandboxManager extends EventEmitter {
         },
       };
       const ocConfigDir = `${homeDir}/.config/opencode`;
-      await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}' '${projectDir}/.opencode/agents'`);
+      await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}'`);
       await sandbox.fs.uploadFile(
         Buffer.from(JSON.stringify(openCodeConfig)),
         `${ocConfigDir}/opencode.json`,
       );
       console.log(`[bridge:${sid}] wrote ${ocConfigDir}/opencode.json`);
 
-      // Write agent prompt files to projectDir (OpenCode resolves {file:} relative to project root)
+      // Write agent prompt files under HOME (not in projectDir — keep the repo clean)
+      await sandbox.process.executeCommand(`mkdir -p '${homeDir}/.opencode/agents'`);
       await Promise.all([
         sandbox.fs.uploadFile(
           Buffer.from(SandboxManager.SISYPHUS_PROMPT),
-          `${projectDir}/.opencode/agents/sisyphus-prompt.txt`,
+          `${homeDir}/.opencode/agents/sisyphus-prompt.txt`,
         ).catch(() => { /* best-effort */ }),
         sandbox.fs.uploadFile(
           Buffer.from(SandboxManager.buildSandboxInstructions(projectDir, this.config.provider === "local")),
-          `${projectDir}/AGENTS.md`,
+          `${homeDir}/AGENTS.md`,
         ).catch(() => { /* best-effort */ }),
       ]);
     }
@@ -2059,7 +2094,7 @@ export class SandboxManager extends EventEmitter {
         build: {
           description: "Full development agent with all tools enabled",
           mode: "primary",
-          prompt: `{file:${projectDir}/AGENTS.md}`,
+          prompt: `{file:${homeDir}/AGENTS.md}`,
           permission: { "*": { "*": "allow" } },
         },
         plan: {
@@ -2071,7 +2106,7 @@ export class SandboxManager extends EventEmitter {
         sisyphus: {
           description: "Orchestration agent for complex multi-step tasks with retry logic",
           mode: "primary",
-          prompt: `{file:${projectDir}/.opencode/agents/sisyphus-prompt.txt}`,
+          prompt: `{file:${homeDir}/.opencode/agents/sisyphus-prompt.txt}`,
           steps: 50,
           permission: { "*": { "*": "allow" } },
         },
@@ -2090,40 +2125,36 @@ export class SandboxManager extends EventEmitter {
       this.config.proxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
 
-    // ── Exec 1: Write ALL files in a single call ────
+    // ── Exec 1: Write all non-project files (bridge, config, agent prompts under HOME) ──
     const ocConfigDir = `${homeDir}/.config/opencode`;
-    // opencode.json is always written (the Dockerfile image ships a minimal
-    // placeholder that lacks agent definitions — we must overwrite it).
-    // AGENTS.md and the sisyphus prompt live in projectDir because OpenCode
-    // resolves {file:...} relative to the project root (CWD).
+    await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}' '${bridgeDir}' '${homeDir}/.opencode/agents'`);
+
     const alwaysWriteFiles: { path: string; content: string }[] = [
+      { path: `${bridgeDir}/bridge.cjs`, content: bridgeCode },
+      { path: `${bridgeDir}/mcp-terminal-server.cjs`, content: mcpCode },
       { path: `${ocConfigDir}/opencode.json`, content: JSON.stringify(openCodeConfig) },
     ];
     const skipIfExistsFiles: { path: string; content: string }[] = [
-      { path: `${projectDir}/AGENTS.md`, content: sandboxInstructions },
-      { path: `${projectDir}/.opencode/agents/sisyphus-prompt.txt`, content: SandboxManager.SISYPHUS_PROMPT },
+      { path: `${homeDir}/AGENTS.md`, content: sandboxInstructions },
+      { path: `${homeDir}/.opencode/agents/sisyphus-prompt.txt`, content: SandboxManager.SISYPHUS_PROMPT },
     ];
-    await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}' '${projectDir}/.opencode/agents'`);
     const existCheck = await sandbox.process.executeCommand(
       skipIfExistsFiles.map(f => `test -f '${f.path}' && echo '${f.path}'`).join("; ") + " || true",
     );
     const existingPaths = new Set(
       (existCheck.result ?? "").split("\n").map(l => l.trim()).filter(Boolean),
     );
-
-    const allFiles: { path: string; content: string }[] = [
-      { path: `${bridgeDir}/bridge.cjs`, content: bridgeCode },
-      { path: `${bridgeDir}/mcp-terminal-server.cjs`, content: mcpCode },
+    const infraFiles: { path: string; content: string }[] = [
       ...alwaysWriteFiles,
       ...skipIfExistsFiles.filter(f => !existingPaths.has(f.path)),
     ];
     if (this.config.secretsProxyCaCert && secretsProxyUrl && !isLocalProvider) {
-      allFiles.push({ path: CA_CERT_PATH, content: this.config.secretsProxyCaCert });
+      infraFiles.push({ path: CA_CERT_PATH, content: this.config.secretsProxyCaCert });
     }
 
-    const writeFilesTask = this.batchWriteFiles(sandbox, allFiles).then(() => log("files written"));
+    const writeInfraTask = this.batchWriteFiles(sandbox, infraFiles).then(() => log("infra files written"));
 
-    // ── Exec 2: git init/clone (parallel with file writes) ──
+    // ── Exec 2: git clone/init (parallel with infra writes, projectDir must be empty for clone) ──
     const gitTask = (async () => {
       if (gitRepo) {
         this.emit("status", session.sandboxId, "cloning_repo");
@@ -2131,9 +2162,6 @@ export class SandboxManager extends EventEmitter {
         const isCommitSha = gitBranch && /^[0-9a-f]{7,40}$/i.test(gitBranch);
         const branchArg = (gitBranch && !isCommitSha) ? gitBranch : undefined;
         const branchFlag = branchArg ? ` --branch ${branchArg}` : '';
-        // Always use `git clone <url> .` so the repo is cloned directly into
-        // projectDir (the SDK's git.clone treats the path as a parent dir and
-        // creates a nested subdirectory).
         let cloneUrl = gitRepo;
         if (this.config.githubToken && gitRepo.includes("github.com")) {
           cloneUrl = gitRepo.replace(
@@ -2147,7 +2175,6 @@ export class SandboxManager extends EventEmitter {
         }
       } else {
         const gitInitCmd = `mkdir -p '${projectDir}' && git init '${projectDir}'`;
-        // For container providers, also set up git credential helper
         const credentialCmd = (this.config.githubToken && this.config.provider !== "local")
           ? ` && git config --global credential.helper store && echo "https://x-access-token:${this.config.githubToken}@github.com" > ~/.git-credentials`
           : "";
@@ -2158,12 +2185,12 @@ export class SandboxManager extends EventEmitter {
 
     // ── Exec 3: Update CA certs if needed (parallel, containers only) ──
     const caCertTask = (this.config.secretsProxyCaCert && secretsProxyUrl && this.config.provider !== "local")
-      ? writeFilesTask.then(() =>
+      ? writeInfraTask.then(() =>
           sandbox.process.executeCommand("sudo update-ca-certificates 2>/dev/null || true"),
         ).then(() => log("CA cert updated"))
       : Promise.resolve();
 
-    await Promise.all([writeFilesTask, gitTask, caCertTask]);
+    await Promise.all([writeInfraTask, gitTask, caCertTask]);
     log("setup complete");
 
     // ── Exec 4: Start bridge ────────────────────────

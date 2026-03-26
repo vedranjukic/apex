@@ -43,6 +43,7 @@ apps/dashboard/src/
 │   │   └── create-project-dialog.tsx # Modal form for creating a new project
 │   ├── editor/
 │   │   ├── code-viewer.tsx         # Monaco-based file editor (syntax highlighting, save, snippet copy)
+│   │   ├── diff-viewer.tsx         # Monaco DiffEditor — side-by-side git diff view (read-only)
 │   │   ├── apex-theme.ts           # Custom Monaco dark theme matching app design tokens
 │   │   └── lang-map.ts             # Maps file extensions / filenames to Monaco language IDs
 │   └── terminal/
@@ -161,7 +162,7 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 - Full `AppShell` with all slots: `leftSidebar`, `sidebar`, `terminalPanel`, `statusBar`, `children`.
 - The **status bar** combines project info (left) with sandbox status + VS Code button (right).
 - While layout or terminals are restoring, a **full-screen loading overlay** is shown.
-- **Central panel** switches between `AgentThread` (default) and `CodeViewer` based on `useEditorStore.activeView`. Clicking a file in the explorer opens it in the Monaco editor; the thread button returns to the thread view.
+- **Central panel** switches between `AgentThread` (default), `CodeViewer`, and `DiffViewer` based on `useEditorStore.activeView` (`'thread'`, `'editor'`, or `'diff'`). Clicking a file in the explorer opens it in the Monaco editor; clicking a file in the source control panel opens the diff view; the thread button returns to the thread view.
 - Welcome/empty state: large prompt box with suggestion chips (if no threads exist).
 
 ---
@@ -210,6 +211,7 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 | Component         | Purpose |
 | ----------------- | ------- |
 | **CodeViewer**    | Full-featured file editor powered by `@monaco-editor/react`. Renders a tab bar (file name + dirty indicator dot) and the Monaco editor below. Theme: custom "apex-dark" (defined in `apex-theme.ts`). Language detection via `getLanguageFromPath()`. Registers two Monaco actions: **Ctrl/Cmd+C** (copy with `CodeSelection` metadata for snippet references), **Ctrl/Cmd+S** (save file via `onSave` prop → socket `file_write`). Tracks unsaved changes in `useEditorStore.dirtyFiles`. |
+| **DiffViewer**    | Read-only side-by-side diff view using Monaco's `DiffEditor`. Reads `useEditorStore.activeDiff` for original/modified content. Header bar: file name, "Staged"/"Changes" badge, full path, close button. Opened when clicking a file in the source control panel via `gitActions.requestDiff()`. |
 | **apex-theme.ts** | `IStandaloneThemeData` for Monaco. `vs-dark` base with custom colors matching the app's dark palette (`#1e2132` editor background, `#6366f1` cursor/selection). |
 | **lang-map.ts**   | `getLanguageFromPath(filePath)` — maps file extensions (`.ts`, `.py`, `.go`, etc.) and special filenames (`Dockerfile`, `Makefile`, `.env`) to Monaco language IDs. Falls back to `plaintext`. |
 
@@ -344,7 +346,8 @@ When switching to a thread that has a stored `agentType`, `AgentThread` calls `s
 | `activeFilePath`              | `string \| null` — currently viewed file |
 | `fileContents`                | `Record<string, string>` — cached file content keyed by path |
 | `fileScrollOffsets`           | `Record<string, number>` — scroll positions per file |
-| `activeView`                  | `'thread' \| 'editor'` (default `'thread'`) — switches central panel |
+| `activeView`                  | `'thread' \| 'editor' \| 'diff'` (default `'thread'`) — switches central panel |
+| `activeDiff`                  | `DiffData \| null` — `{ filePath, original, modified, staged, loading }` for the active diff view |
 | `codeSelection`               | `CodeSelection \| null` — last copied code snippet metadata |
 | `dirtyFiles`                  | `Set<string>` — files with unsaved changes |
 | `openFile(path, name)`        | Adds file to tabs (if not already open), activates it, switches to `editor` view |
@@ -353,6 +356,9 @@ When switching to a thread that has a stored `agentType`, `AgentThread` calls `s
 | `markDirty(path)`             | Marks file as having unsaved changes (shown as dot in tab) |
 | `markClean(path)`             | Clears dirty flag (called on successful `file_write_result`) |
 | `showThread()`                  | Switches `activeView` to `'thread'` |
+| `openDiff(filePath, staged)`  | Switches `activeView` to `'diff'`, sets `activeDiff` with loading state |
+| `setDiffContent(filePath, original, modified)` | Fills in diff content once the WebSocket response arrives |
+| `closeDiff()`                 | Returns to `'thread'` view, clears `activeDiff` |
 | `applyLayout(data)`           | Restores open files, active file, and view from saved layout |
 | `reset()`                     | Clears all editor state |
 
@@ -414,10 +420,11 @@ All hooks share **one Socket.io connection** created by `useAgentSocket` (namesp
 
 ### 6.6 `useGitSocket`
 
-- **Emits**: `git_status` (polled every 5s), `git_stage`, `git_unstage`, `git_discard`, `git_commit`, `git_push`, `git_pull`, `git_branches`, `git_create_branch`, `git_checkout`
-- **Listens**: `git_status_result`, `git_op_result`, `git_branches_result`
-- Returns `GitActions`: `requestStatus`, `stage`, `unstage`, `discard`, `commit`, `push`, `pull`, `listBranches`, `createBranch`, `checkout`
+- **Emits**: `git_status` (polled every 5s), `git_stage`, `git_unstage`, `git_discard`, `git_commit`, `git_push`, `git_pull`, `git_branches`, `git_create_branch`, `git_checkout`, `git_diff`
+- **Listens**: `git_status_result`, `git_op_result`, `git_branches_result`, `git_diff_result`
+- Returns `GitActions`: `requestStatus`, `stage`, `unstage`, `discard`, `commit`, `push`, `pull`, `listBranches`, `createBranch`, `checkout`, `requestDiff`
 - Updates `useGitStore` with status data, branch list, and loading state.
+- `requestDiff(path, staged)` calls `useEditorStore.openDiff()` and sends `git_diff`; `git_diff_result` listener calls `useEditorStore.setDiffContent()`.
 
 ---
 

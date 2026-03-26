@@ -345,6 +345,7 @@ export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt, 
               actions={{
                 onStage: stageFiles,
               }}
+              onFileClick={(path) => gitActions.requestDiff(path, false)}
             />
           )}
 
@@ -357,6 +358,7 @@ export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt, 
                 onUnstage: unstageFiles,
                 onUnstageAll: () => unstageFiles(staged.map((f) => f.path)),
               }}
+              onFileClick={(path) => gitActions.requestDiff(path, true)}
             />
           )}
 
@@ -371,6 +373,7 @@ export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt, 
                 onStageAll: () => stageFiles(unstaged.map((f) => f.path)),
                 onDiscardAll: () => discardFiles(unstaged.map((f) => f.path)),
               }}
+              onFileClick={(path) => gitActions.requestDiff(path, false)}
             />
           )}
 
@@ -385,6 +388,7 @@ export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt, 
                 onStageAll: () => stageFiles(untracked.map((f) => f.path)),
                 onDiscardAll: () => discardFiles(untracked.map((f) => f.path)),
               }}
+              onFileClick={(path) => gitActions.requestDiff(path, false)}
             />
           )}
 
@@ -480,11 +484,13 @@ function FileSection({
   files,
   variant,
   actions,
+  onFileClick,
 }: {
   title: string;
   files: GitFileEntry[];
   variant: SectionVariant;
   actions: SectionActions;
+  onFileClick?: (path: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -537,6 +543,7 @@ function FileSection({
               file={file}
               variant={variant}
               actions={actions}
+              onFileClick={onFileClick}
             />
           ))}
         </div>
@@ -560,10 +567,12 @@ function FileRow({
   file,
   variant,
   actions,
+  onFileClick,
 }: {
   file: GitFileEntry;
   variant: SectionVariant;
   actions: SectionActions;
+  onFileClick?: (path: string) => void;
 }) {
   const badge = statusBadge[file.status] ?? { letter: '?', color: 'text-text-muted' };
   const lastSlash = file.path.lastIndexOf('/');
@@ -571,7 +580,10 @@ function FileRow({
   const dirname = lastSlash >= 0 ? file.path.slice(0, lastSlash) : '';
 
   return (
-    <div className="flex items-center gap-1 pl-4 pr-1 py-0.5 rounded hover:bg-sidebar-hover group/row min-h-[22px]">
+    <div
+      className="flex items-center gap-1 pl-4 pr-1 py-0.5 rounded hover:bg-sidebar-hover group/row min-h-[22px] cursor-pointer"
+      onClick={() => onFileClick?.(file.path)}
+    >
       <span className="text-xs text-text-primary truncate shrink-0">{basename}</span>
       <span className="flex-1" />
       {dirname && (
@@ -586,21 +598,21 @@ function FileRow({
           <ActionButton
             icon={<Plus className="w-3 h-3" />}
             title="Stage"
-            onClick={() => actions.onStage!([file.path])}
+            onClick={(e) => { e.stopPropagation(); actions.onStage!([file.path]); }}
           />
         )}
         {variant === 'staged' && actions.onUnstage && (
           <ActionButton
             icon={<Minus className="w-3 h-3" />}
             title="Unstage"
-            onClick={() => actions.onUnstage!([file.path])}
+            onClick={(e) => { e.stopPropagation(); actions.onUnstage!([file.path]); }}
           />
         )}
         {(variant === 'unstaged' || variant === 'untracked') && actions.onDiscard && (
           <ActionButton
             icon={<Undo2 className="w-3 h-3" />}
             title="Discard"
-            onClick={() => actions.onDiscard!([file.path])}
+            onClick={(e) => { e.stopPropagation(); actions.onDiscard!([file.path]); }}
           />
         )}
       </div>
