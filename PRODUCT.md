@@ -34,13 +34,43 @@ An agent-centric workspace that puts threads and agent interaction front and cen
 
 ### Agents
 
-Three AI agents powered by OpenCode, selectable per-project or per-thread:
+Three primary AI agents powered by OpenCode, selectable per-project or per-thread:
 
-- **Build** — full autonomous coding agent (default)
+- **Build** — full autonomous coding agent with all tools enabled (default)
 - **Plan** — read-only analysis and planning, produces plan documents
-- **Sisyphus** — orchestration agent (Anthropic models only)
+- **Sisyphus** — orchestration agent that breaks complex tasks into subtasks and delegates to specialized sub-agents
 
 Each agent supports models from multiple providers (Anthropic, OpenAI, Google, OpenCode Zen free). The project-level default can be overridden on any individual thread via the agent dropdown in the prompt toolbar.
+
+The default sandbox runtime bundles **oh-my-openagent**, an OpenCode plugin that extends all agents with a library of specialized sub-agents, composable skills, and workflow commands.
+
+#### Task Delegation Agents
+
+Sisyphus and Build can delegate work to category-based sub-agents, each tuned for a specific kind of task:
+
+- **visual-engineering** — frontend, UI/UX, design, styling, and animation
+- **ultrabrain** — complex logic-heavy tasks requiring deep reasoning
+- **deep** — goal-oriented autonomous problem-solving for difficult issues
+- **artistry** — creative problem-solving with unconventional approaches
+- **quick** — simple tasks like single-file changes or typo fixes
+- **writing** — documentation, prose, and technical writing
+
+Additional direct sub-agents are available for targeted work: **explore** (codebase discovery), **librarian** (information retrieval), **oracle** (knowledge and best practices), **hephaestus** (building and creation), **metis** (strategic planning), **momus** (critical analysis), and **multimodal-looker** (visual analysis).
+
+#### Skills
+
+Agents can load specialized skills that provide domain-specific knowledge and tools:
+
+- **playwright** — browser automation: navigate pages, fill forms, take screenshots, intercept network requests, execute JavaScript
+- **frontend-ui-ux** — designer-turned-developer skill for creating visually polished interfaces with distinctive typography, color, and animation
+- **git-master** — advanced git operations: atomic commit ordering, rebase surgery, history archaeology, automatic commit-style matching
+- **dev-browser** — persistent browser automation with ARIA snapshots, screenshot capture, and network interception across script executions
+
+Skills are composable — multiple skills can be loaded together when spawning sub-agents.
+
+#### Workflow Commands
+
+Agents support slash commands for workflow control: `/init-deep` (start a deep work session), `/ralph-loop` (continuous autonomous work mode), `/ulw-loop` (ultra-long work sessions), `/refactor`, `/handoff`, and more.
 
 ### AI Agent Thread
 

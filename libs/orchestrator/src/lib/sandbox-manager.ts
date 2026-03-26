@@ -1829,6 +1829,7 @@ export class SandboxManager extends EventEmitter {
         $schema: "https://opencode.ai/config.json",
         model: "anthropic/claude-opus-4-20250514",
         default_agent: "build",
+        plugin: ["oh-my-openagent"],
         provider: {
           ...(useProxy ? {
             anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
@@ -2079,6 +2080,7 @@ export class SandboxManager extends EventEmitter {
       $schema: "https://opencode.ai/config.json",
       model: "anthropic/claude-opus-4-20250514",
       default_agent: "build",
+      plugin: ["oh-my-openagent"],
       provider: {
         ...(useProxyI ? {
           anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },

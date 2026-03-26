@@ -230,6 +230,7 @@ func (m *Manager) installBridge(ctx context.Context, sandbox *daytona.Sandbox, p
 	openCodeConfig, _ := json.Marshal(map[string]interface{}{
 		"$schema":       "https://opencode.ai/config.json",
 		"default_agent": "build",
+		"plugin":        []string{"oh-my-openagent"},
 		"agent": map[string]interface{}{
 			"build": map[string]interface{}{
 				"description": "Full development agent with all tools enabled",
