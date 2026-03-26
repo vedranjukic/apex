@@ -9,7 +9,12 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { AppShell } from "../components/layout/app-shell";
-import { settingsApi, type SettingSource } from "../api/client";
+import {
+  settingsApi,
+  githubApi,
+  type SettingSource,
+  type GitHubUser,
+} from "../api/client";
 
 interface FieldDef {
   key: string;
@@ -18,6 +23,13 @@ interface FieldDef {
   placeholder: string;
   help: string;
   helpExtra?: React.ReactNode;
+  dynamicPlaceholder?: (ghUser: GitHubUser | null) => string;
+}
+
+interface FieldGroup {
+  title: string;
+  description?: string;
+  fields: FieldDef[];
 }
 
 const GITHUB_TOKEN_HELP = (
@@ -77,56 +89,93 @@ const GITHUB_TOKEN_HELP = (
   </details>
 );
 
-const FIELDS: FieldDef[] = [
+const FIELD_GROUPS: FieldGroup[] = [
   {
-    key: "ANTHROPIC_API_KEY",
-    label: "Anthropic API Key (Claude Code)",
-    type: "password",
-    placeholder: "sk-ant-...",
-    help: "Required for Claude Code projects. Get your key from console.anthropic.com",
+    title: "Agent API Keys",
+    description: "Keys for AI coding agent providers.",
+    fields: [
+      {
+        key: "ANTHROPIC_API_KEY",
+        label: "Anthropic API Key (Claude Code)",
+        type: "password",
+        placeholder: "sk-ant-...",
+        help: "Required for Claude Code projects. Get your key from console.anthropic.com",
+      },
+      {
+        key: "OPENAI_API_KEY",
+        label: "OpenAI API Key (Codex)",
+        type: "password",
+        placeholder: "sk-proj-...",
+        help: "Required for Codex projects. Get your key from platform.openai.com",
+      },
+    ],
   },
   {
-    key: "OPENAI_API_KEY",
-    label: "OpenAI API Key (Codex)",
-    type: "password",
-    placeholder: "sk-proj-...",
-    help: "Required for Codex projects. Get your key from platform.openai.com",
+    title: "GitHub",
+    description:
+      "Token for repository access. Name and email are used for git commits inside sandboxes.",
+    fields: [
+      {
+        key: "GITHUB_TOKEN",
+        label: "Personal Access Token",
+        type: "password",
+        placeholder: "ghp_...",
+        help: "Enables cloning, pushing, and pulling private repositories.",
+        helpExtra: GITHUB_TOKEN_HELP,
+      },
+      {
+        key: "GIT_USER_NAME",
+        label: "Git User Name",
+        type: "text",
+        placeholder: "",
+        help: "Override the name used for git commits. Leave empty to use your GitHub profile name.",
+        dynamicPlaceholder: (gh) =>
+          gh?.name ? `${gh.name} (from GitHub)` : "",
+      },
+      {
+        key: "GIT_USER_EMAIL",
+        label: "Git User Email",
+        type: "text",
+        placeholder: "",
+        help: "Override the email used for git commits. Leave empty to use your GitHub profile email.",
+        dynamicPlaceholder: (gh) =>
+          gh?.email ? `${gh.email} (from GitHub)` : "",
+      },
+    ],
   },
   {
-    key: "DAYTONA_API_KEY",
-    label: "Daytona API Key",
-    type: "password",
-    placeholder: "",
-    help: "Get your key from app.daytona.io → Settings → API Keys",
-  },
-  {
-    key: "DAYTONA_API_URL",
-    label: "Daytona API URL",
-    type: "text",
-    placeholder: "https://app.daytona.io/api",
-    help: "Leave empty to use the default Daytona endpoint",
-  },
-  {
-    key: "DAYTONA_SNAPSHOT",
-    label: "Daytona Snapshot",
-    type: "text",
-    placeholder: "apex-default-0.1.1",
-    help: "Daytona provider snapshot name. Leave empty to use the default.",
-  },
-  {
-    key: "SANDBOX_IMAGE",
-    label: "Container Image",
-    type: "text",
-    placeholder: "docker.io/daytonaio/apex-default:0.1.1",
-    help: "Container image for Docker and Apple Container providers. Leave empty to use the default.",
-  },
-  {
-    key: "GITHUB_TOKEN",
-    label: "GitHub Personal Access Token",
-    type: "password",
-    placeholder: "ghp_...",
-    help: "Enables cloning, pushing, and pulling private repositories.",
-    helpExtra: GITHUB_TOKEN_HELP,
+    title: "Sandbox",
+    description: "Configuration for sandbox providers.",
+    fields: [
+      {
+        key: "DAYTONA_API_KEY",
+        label: "Daytona API Key",
+        type: "password",
+        placeholder: "",
+        help: "Get your key from app.daytona.io → Settings → API Keys",
+      },
+      {
+        key: "DAYTONA_API_URL",
+        label: "Daytona API URL",
+        type: "text",
+        placeholder: "https://app.daytona.io/api",
+        help: "Leave empty to use the default Daytona endpoint",
+      },
+      {
+        key: "DAYTONA_SNAPSHOT",
+        label: "Daytona Snapshot",
+        type: "text",
+        placeholder: "apex-default-0.1.1",
+        help: "Daytona provider snapshot name. Leave empty to use the default.",
+      },
+      {
+        key: "SANDBOX_IMAGE",
+        label: "Container Image",
+        type: "text",
+        placeholder: "docker.io/daytonaio/apex-default:0.1.1",
+        help: "Container image for Docker and Apple Container providers. Leave empty to use the default.",
+      },
+    ],
   },
 ];
 
@@ -139,6 +188,7 @@ export function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<Status>("idle");
   const [errorMsg, setErrorMsg] = useState("");
+  const [ghUser, setGhUser] = useState<GitHubUser | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -161,6 +211,11 @@ export function SettingsPage() {
         }
         setValues(vals);
         setSources(srcs);
+
+        try {
+          const user = await githubApi.user();
+          if (!cancelled && user) setGhUser(user);
+        } catch { /* token may not be configured */ }
       } catch {
         // settings not available yet
       } finally {
@@ -186,6 +241,12 @@ export function SettingsPage() {
       }
       setValues(vals);
       setSources(srcs);
+
+      try {
+        const user = await githubApi.user();
+        setGhUser(user);
+      } catch { /* ignore */ }
+
       setStatus("saved");
       setTimeout(() => navigate("/"), 1500);
     } catch (err) {
@@ -229,34 +290,56 @@ export function SettingsPage() {
             Values set here override environment variables.
           </p>
 
-          <div className="space-y-6">
-            {FIELDS.map((field) => (
-              <div key={field.key}>
-                <div className="flex items-center gap-2 mb-1.5">
-                  <label
-                    htmlFor={field.key}
-                    className="block text-sm font-medium"
-                  >
-                    {field.label}
-                  </label>
-                  {sources[field.key] === "env" && (
-                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-surface-secondary text-text-muted border border-border">
-                      ENV
-                    </span>
-                  )}
+          <div className="space-y-10">
+            {FIELD_GROUPS.map((group) => (
+              <section key={group.title}>
+                <h2 className="text-base font-semibold mb-0.5">
+                  {group.title}
+                </h2>
+                {group.description && (
+                  <p className="text-xs text-text-muted mb-4">
+                    {group.description}
+                  </p>
+                )}
+                <div className="space-y-5">
+                  {group.fields.map((field) => {
+                    const placeholder =
+                      field.dynamicPlaceholder?.(ghUser) || field.placeholder;
+                    return (
+                      <div key={field.key}>
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <label
+                            htmlFor={field.key}
+                            className="block text-sm font-medium"
+                          >
+                            {field.label}
+                          </label>
+                          {sources[field.key] === "env" && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-surface-secondary text-text-muted border border-border">
+                              ENV
+                            </span>
+                          )}
+                        </div>
+                        <input
+                          id={field.key}
+                          type={field.type}
+                          value={values[field.key] ?? ""}
+                          onChange={(e) =>
+                            handleChange(field.key, e.target.value)
+                          }
+                          placeholder={placeholder}
+                          autoComplete="off"
+                          className="w-full px-3 py-2 rounded-lg bg-surface-secondary border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary transition-colors"
+                        />
+                        <p className="mt-1 text-xs text-text-muted">
+                          {field.help}
+                        </p>
+                        {field.helpExtra}
+                      </div>
+                    );
+                  })}
                 </div>
-                <input
-                  id={field.key}
-                  type={field.type}
-                  value={values[field.key] ?? ""}
-                  onChange={(e) => handleChange(field.key, e.target.value)}
-                  placeholder={field.placeholder}
-                  autoComplete="off"
-                  className="w-full px-3 py-2 rounded-lg bg-surface-secondary border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary transition-colors"
-                />
-                <p className="mt-1 text-xs text-text-muted">{field.help}</p>
-                {field.helpExtra}
-              </div>
+              </section>
             ))}
           </div>
 

@@ -9,6 +9,7 @@ import { projectsWsBroadcast } from './projects.ws';
 import { getCACertPem } from '../secrets-proxy/ca-manager';
 import { getSecretsProxyPort } from '../secrets-proxy/secrets-proxy';
 import { secretsService } from '../secrets/secrets.service';
+import { settingsService } from '../settings/settings.service';
 
 export type Project = typeof projects.$inferSelect & { threads?: (typeof tasks.$inferSelect)[] };
 
@@ -109,10 +110,29 @@ class ProjectsService {
       }
     } catch { /* secrets table may not exist yet */ }
 
+    let gitUserName = '';
+    let gitUserEmail = '';
+    try {
+      const nameOverride = await settingsService.get('GIT_USER_NAME');
+      const emailOverride = await settingsService.get('GIT_USER_EMAIL');
+      if (nameOverride && emailOverride) {
+        gitUserName = nameOverride;
+        gitUserEmail = emailOverride;
+      } else if (process.env.GITHUB_TOKEN) {
+        const ghUser = await githubService.fetchUser();
+        if (ghUser) {
+          gitUserName = nameOverride || ghUser.name;
+          gitUserEmail = emailOverride || ghUser.email;
+        }
+      }
+    } catch { /* non-fatal — sandboxes will just lack git identity */ }
+
     const sharedConfig = {
       anthropicApiKey: process.env.ANTHROPIC_API_KEY,
       openaiApiKey: process.env.OPENAI_API_KEY,
       githubToken: process.env.GITHUB_TOKEN,
+      gitUserName,
+      gitUserEmail,
       secretsProxyCaCert: caCert,
       secretsProxyPort: getSecretsProxyPort(),
       secretPlaceholders,

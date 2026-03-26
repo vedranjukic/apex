@@ -4,11 +4,6 @@
 tmp
 out-tsc
 
-# Build output (per-app dist folders)
-apps/*/dist
-!apps/desktop/dist
-libs/*/dist
-
 # dependencies
 node_modules
 

@@ -221,9 +221,23 @@ export interface GitHubResolveResult {
   content?: GitHubContextData;
 }
 
+export interface GitHubUser {
+  name: string;
+  email: string;
+  login: string;
+  avatarUrl: string;
+}
+
 export const githubApi = {
   resolve: (url: string) =>
     request<GitHubResolveResult>(`/github/resolve?url=${encodeURIComponent(url)}`),
+  user: async (): Promise<GitHubUser | null> => {
+    const res = await fetch(`${BASE}/github/user`, {
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (res.status === 204 || !res.ok) return null;
+    return res.json();
+  },
 };
 
 // ── Threads ──────────────────────────────────────────

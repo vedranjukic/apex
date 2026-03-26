@@ -16,6 +16,7 @@ The home page serves as a project dashboard with inline thread management:
 - **Inline thread list** — per-project collapsible section showing all threads with status icons (running/waiting/completed/error), agent type badges, ID prefix, title, and timestamps
 - **Thread preview panel** — clicking any thread opens a 480px right panel with a full agent thread (prompt input, streamed responses, tool calls) — interact with agents without leaving the project list
 - **Fork groups** — projects forked from the same parent are grouped together with expandable fork rows
+- **GitHub auth indicator** — shows the connected GitHub user (avatar + login) in the header when a token is configured, or a "GitHub not connected" link to settings when no token is set
 - **Quick access** — Secrets (shield icon) and Settings buttons in the header; "New Thread" button on each project card
 - **New Project** dialog with sandbox provider selection (Daytona, Docker, Apple Container, Local), folder browser for local provider, git repo URL (supports GitHub issue, PR, branch, and commit URLs with auto-detection and smart project name generation from issue/PR titles), and description
 
@@ -104,6 +105,7 @@ VS Code-style full-text search across the entire project workspace:
 Full git integration built into the left sidebar and status bar:
 
 - **Status view** — staged, unstaged, untracked, and conflicted file sections with per-file action buttons (stage, unstage, discard)
+- **Diff view** — click any changed file to open a side-by-side diff in the central panel using Monaco's diff editor, showing original vs modified content with syntax highlighting
 - **Commit** — textarea with contextual action button (Commit, Commit All, or Sync Changes) based on the current state
 - **AI commit messages** — click the sparkle icon to generate a conventional commit message from staged changes and recent thread context
 - **Push / Pull / Sync** — one-click sync from the status bar with ahead/behind counts
@@ -159,7 +161,7 @@ The IDE is available as a native desktop application for macOS, Linux, and Windo
 - **Native window management** — multiple project windows, draggable title bar, macOS dock behavior
 - **Open in IDE** — detects locally installed Cursor or VS Code and launches a native SSH remote connection to the sandbox (managed SSH config with 24-hour tokens)
 - **Code-server fallback** — in the web version, "Open in IDE" launches a code-server URL instead
-- **Settings UI** — configure API keys from a built-in settings page instead of `.env` files
+- **Settings UI** — configure API keys from a built-in settings page (grouped by context: Agent API Keys, GitHub, Sandbox) instead of `.env` files
 - **Delta updates** — binary diff (bsdiff) updates for small download sizes
 - **Identical features** — everything that works in the web version works identically in the desktop app
 
@@ -345,7 +347,7 @@ Both the IDE and CLI are built on the same sandboxing layer:
 | **Secrets Proxy** | MITM HTTPS proxy for user-defined API secrets; values never enter containers |
 | **Session-per-Thread** | Each thread maintains conversational context; follow-up prompts include a conversation history summary built from stored messages |
 | **Multi-thread Concurrency** | Multiple threads can have concurrent agent processes in the same sandbox |
-| **Git-ready Sandboxes** | Every project starts version-controlled — either cloned from a provided repo or initialized with `git init` |
+| **Git-ready Sandboxes** | Every project starts version-controlled — either cloned from a provided repo or initialized with `git init`. Git author identity (name/email) is auto-configured from the linked GitHub account or manual overrides in settings |
 | **SQLite Database** | Projects, threads, and messages persisted locally (shared between CLI and desktop app) |
 | **Preview Proxy** | HTTP reverse proxy for local providers; signed URLs for Daytona; TCP forwarding for desktop |
 

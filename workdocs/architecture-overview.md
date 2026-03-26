@@ -20,7 +20,7 @@
 ### Project Creation
 1. `POST /api/projects` → creates project with `status: creating`. Accepts optional `gitRepo` URL (plain repo, GitHub issue/PR/branch/commit URL), `gitBranch`, `githubContext`, and `provider` (default `daytona`). The backend normalizes GitHub URLs via `parseGitHubUrl()` — extracting the clone URL, branch ref, and auto-fetching issue/PR content from the GitHub API when the frontend doesn't provide it.
 2. `ProjectsService.provisionSandbox()` runs async → routes to the correct `SandboxManager` based on the project's `provider` field, creates sandbox, installs bridge + MCP terminal server, connects via preview URL → sets `status: running` + stores `sandboxId`
-3. During sandbox provisioning: if `gitRepo` is set, creates the project directory, then clones the repo (`git clone --branch <ref> <url> .` for branches; `git clone` + `git checkout <sha>` for commits; plain `git clone` for repos/issues); otherwise runs `git init` so every project starts version-controlled
+3. During sandbox provisioning: if `gitRepo` is set, creates the project directory, then clones the repo (`git clone --branch <ref> <url> .` for branches; `git clone` + `git checkout <sha>` for commits; plain `git clone` for repos/issues); otherwise runs `git init` so every project starts version-controlled. If a GitHub token is configured, `git config --global user.name` and `user.email` are set from the GitHub profile (or manual overrides in `GIT_USER_NAME`/`GIT_USER_EMAIL` settings)
 4. Dashboard polls project status while `creating`, shows sandbox status indicator (green/yellow/red) in top bar
 
 ### Thread + Agent Execution (Session-per-Thread)

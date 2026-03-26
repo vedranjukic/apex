@@ -81,7 +81,7 @@ Dashboard code checks `window.apex?.isElectron` to switch behavior:
 Same as web mode — API keys are configured from the dashboard Settings page (`/settings`):
 
 - **Backend**: `SettingsModule` stores key-value pairs in the `settings` SQLite table
-- **Frontend**: `SettingsPage` at `/settings` with form fields for API keys
+- **Frontend**: `SettingsPage` at `/settings` with form fields grouped by context (Agent API Keys, GitHub, Sandbox). The GitHub section includes token, git user name, and git user email — name/email auto-detected from the GitHub API when a token is set, with manual override support
 - **Visibility**: `SETTINGS_VISIBLE=true` passed as env to the API subprocess
 
 ## Static File Serving

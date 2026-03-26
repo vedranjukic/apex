@@ -29,7 +29,16 @@ export interface ResolveResult {
   content?: GitHubContent;
 }
 
+export interface GitHubUser {
+  name: string;
+  email: string;
+  login: string;
+  avatarUrl: string;
+}
+
 class GitHubService {
+  private userCache: (GitHubUser & { token: string }) | null = null;
+
   private get token(): string | undefined {
     return process.env['GITHUB_TOKEN'];
   }
@@ -77,6 +86,41 @@ class GitHubService {
       labels: (data.labels ?? []).map((l: any) => (typeof l === 'string' ? l : l.name)),
       state: data.state,
     };
+  }
+
+  async fetchUser(): Promise<GitHubUser | null> {
+    if (!this.token) return null;
+    if (this.userCache && this.userCache.token === this.token) {
+      const { token: _t, ...user } = this.userCache;
+      return user;
+    }
+
+    try {
+      const data = await this.ghFetch('/user');
+      let email: string = data.email ?? '';
+
+      if (!email) {
+        try {
+          const emails: any[] = await this.ghFetch('/user/emails');
+          const primary = emails.find((e) => e.primary && e.verified);
+          email = primary?.email ?? `${data.id}+${data.login}@users.noreply.github.com`;
+        } catch {
+          email = `${data.id}+${data.login}@users.noreply.github.com`;
+        }
+      }
+
+      const user: GitHubUser = {
+        name: data.name || data.login,
+        email,
+        login: data.login,
+        avatarUrl: data.avatar_url ?? '',
+      };
+      this.userCache = { ...user, token: this.token! };
+      return user;
+    } catch (err) {
+      console.log(`[github] Failed to fetch user: ${err instanceof Error ? err.message : err}`);
+      return null;
+    }
   }
 
   async resolve(url: string): Promise<ResolveResult> {

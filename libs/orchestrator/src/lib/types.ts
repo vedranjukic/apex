@@ -346,4 +346,8 @@ export interface OrchestratorConfig {
   memoryMB?: number;
   /** Number of CPU cores for container sandboxes. */
   cpus?: number;
+  /** Git author name for commits inside sandboxes. */
+  gitUserName?: string;
+  /** Git author email for commits inside sandboxes. */
+  gitUserEmail?: string;
 }

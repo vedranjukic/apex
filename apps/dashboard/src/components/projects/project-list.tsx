@@ -3,14 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import {
   Plus, FolderOpen, Trash2, ExternalLink, Loader2, CheckCircle2,
   CircleHelp, CirclePause, XCircle, Circle, GitBranch, ChevronDown, ChevronRight, Settings, Shield,
-  Play, Square, RotateCw, MoreHorizontal, GitFork, CircleDot, GitPullRequest,
+  Play, Square, RotateCw, MoreHorizontal, GitFork, CircleDot, GitPullRequest, Github,
 } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { useProjectsStore } from '../../stores/projects-store';
 import { useProjectsSocket } from '../../hooks/use-projects-socket';
 import { CreateProjectDialog } from './create-project-dialog';
-import { settingsApi, projectsApi } from '../../api/client';
-import type { Project, Thread } from '../../api/client';
+import { settingsApi, projectsApi, githubApi } from '../../api/client';
+import type { Project, Thread, GitHubUser } from '../../api/client';
 
 const STATUS_LABELS: Record<string, string> = {
   creating: 'creating',
@@ -177,6 +177,8 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
   const { projects, loading, fetchProjects, deleteProject } = useProjectsStore();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
+  const [ghUser, setGhUser] = useState<GitHubUser | null>(null);
+  const [ghLoaded, setGhLoaded] = useState(false);
   const navigate = useNavigate();
 
   useProjectsSocket();
@@ -184,6 +186,7 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
   useEffect(() => {
     fetchProjects();
     settingsApi.visible().then((r) => setSettingsVisible(r.visible)).catch(() => {});
+    githubApi.user().then((u) => { if (u) setGhUser(u); }).catch(() => {}).finally(() => setGhLoaded(true));
     const interval = setInterval(fetchProjects, 3000);
     return () => clearInterval(interval);
   }, [fetchProjects]);
@@ -196,6 +199,37 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-2xl font-bold">Projects</h1>
           <div className="flex items-center gap-2">
+            {ghLoaded && (
+              ghUser?.login ? (
+                <a
+                  href={`https://github.com/${ghUser.login}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors"
+                  title={`${ghUser.name} (${ghUser.email})`}
+                >
+                  {ghUser.avatarUrl ? (
+                    <img
+                      src={ghUser.avatarUrl}
+                      alt={ghUser.login}
+                      className="w-4 h-4 rounded-full"
+                    />
+                  ) : (
+                    <Github className="w-3.5 h-3.5" />
+                  )}
+                  <span className="font-medium">{ghUser.login}</span>
+                </a>
+              ) : (
+                <button
+                  onClick={() => navigate('/settings')}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs text-text-muted hover:text-text-secondary hover:bg-surface-secondary transition-colors"
+                  title="Configure GitHub token in settings"
+                >
+                  <Github className="w-3.5 h-3.5" />
+                  <span>GitHub not connected</span>
+                </button>
+              )
+            )}
             {settingsVisible && (
               <>
                 <button

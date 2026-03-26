@@ -10,6 +10,8 @@ export const ALLOWED_KEYS = new Set([
   'DAYTONA_SNAPSHOT',
   'SANDBOX_IMAGE',
   'GITHUB_TOKEN',
+  'GIT_USER_NAME',
+  'GIT_USER_EMAIL',
   'PROXY_CA_CERT',
   'PROXY_CA_KEY',
 ]);

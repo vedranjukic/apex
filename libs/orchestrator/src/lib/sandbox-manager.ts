@@ -235,6 +235,8 @@ export class SandboxManager extends EventEmitter {
       secretPlaceholders: config.secretPlaceholders || {},
       memoryMB: config.memoryMB || Number(process.env["SANDBOX_MEMORY_MB"] || "4096"),
       cpus: config.cpus || Number(process.env["SANDBOX_CPUS"] || "2"),
+      gitUserName: config.gitUserName || "",
+      gitUserEmail: config.gitUserEmail || "",
     };
   }
 
@@ -2179,6 +2181,13 @@ export class SandboxManager extends EventEmitter {
           ? ` && git config --global credential.helper store && echo "https://x-access-token:${this.config.githubToken}@github.com" > ~/.git-credentials`
           : "";
         await sandbox.process.executeCommand(gitInitCmd + credentialCmd);
+      }
+      if (this.config.gitUserName && this.config.gitUserEmail) {
+        const safeName = this.config.gitUserName.replace(/"/g, '\\"');
+        const safeEmail = this.config.gitUserEmail.replace(/"/g, '\\"');
+        await sandbox.process.executeCommand(
+          `git config --global user.name "${safeName}" && git config --global user.email "${safeEmail}"`,
+        );
       }
       log("git done");
     })();

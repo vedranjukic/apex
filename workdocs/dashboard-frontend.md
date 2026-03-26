@@ -100,7 +100,7 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 │                                              │               │
 │   ProjectList                                │ ThreadPreview │
 │   ┌────────────────────────────────────────┐ │   Panel       │
-│   │  "Projects" + [Secrets] [Settings]     │ │   (480px)     │
+│   │  "Projects" + [GitHub] [Secrets] [Settings]│ │   (480px)     │
 │   │              + [New Project]            │ │               │
 │   ├────────────────────────────────────────┤ │  AgentThread  │
 │   │  ProjectCard  (name, status, threads)  │ │  for selected │
@@ -117,7 +117,7 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 
 - Wrapped in `AppShell` (no sidebar, no terminal panel, no status bar).
 - **Two-column layout**: `ProjectList` on the left (flex-1), optional `ThreadPreviewPanel` on the right (480px, shown when a thread is selected).
-- Header row: "Projects" heading + Secrets button (shield icon) + Settings button + "New Project" button.
+- Header row: "Projects" heading + GitHub auth indicator (avatar + login when connected, "GitHub not connected" link when no token) + Secrets button (shield icon) + Settings button + "New Project" button.
 - `onOpenProject` calls `openProject()` (`lib/open-project.ts`) which opens a new desktop window via IPC or a new browser tab via `window.open`.
 - Each `ProjectCard` includes repo info when a git repo is linked (owner/repo link, issue/PR number + title with colored icons), and a collapsible `ThreadList` showing all threads with status icons, agent type badges, and timestamps.
 - Clicking a thread in any `ThreadList` opens the `ThreadPreviewPanel` with a full `AgentThread` — users can interact with agents (send prompts, see responses) directly from the project list.
@@ -199,7 +199,7 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 
 | Component                | Purpose |
 | ------------------------ | ------- |
-| **ProjectList**          | Centered card list (max-width 768px). Fetches projects on mount via `useProjectsStore`. Shows loading spinner, empty state, or grid of `ProjectCard`s. "New Project" button toggles `CreateProjectDialog`. Accepts `activeProjectId` prop — when a thread preview panel is open for a project, the `ThreadList` inside that project's card auto-expands. |
+| **ProjectList**          | Centered card list (max-width 768px). Fetches projects on mount via `useProjectsStore`. Shows loading spinner, empty state, or grid of `ProjectCard`s. "New Project" button toggles `CreateProjectDialog`. Accepts `activeProjectId` prop — when a thread preview panel is open for a project, the `ThreadList` inside that project's card auto-expands. Header includes a GitHub auth indicator: shows avatar + login (linking to GitHub profile) when a token is configured, or a muted "GitHub not connected" button linking to settings when no token is set. Fetches `GET /api/github/user` on mount. |
 | **ProjectCard**          | Bordered card displaying: project name, color-coded status badge, description, repo info (`RepoInfo` — owner/repo link + issue/PR context with icons), agent type label (Build / Plan / Sisyphus), creation date, per-project thread list (`ThreadList`), open (external link), new thread, and delete (with confirm) buttons. When `activeProjectId` matches, the thread list auto-expands. |
 | **ThreadList**           | Collapsible per-project thread sublist. Shows thread count, running/waiting/error badges. Each thread row: status icon, ID prefix, agent type badge, title, timestamp. Clicking a thread opens the `ThreadPreviewPanel` on the home page. |
 | **ThreadPreviewPanel**   | Fixed-width (480px) right panel on the home page. Renders a full `AgentThread` for the selected thread, allowing prompt input and agent interaction without leaving the project list. Expandable to full screen. |
@@ -437,6 +437,7 @@ Thin `fetch` wrapper over `/api`. All requests send `Content-Type: application/j
 | `usersApi`      | `GET /users/me` |
 | `projectsApi`   | `GET /projects`, `GET /projects/:id`, `POST /projects`, `PATCH /projects/:id`, `DELETE /projects/:id`, `GET /projects/:id/vscode-url` |
 | `threadsApi`      | `GET /projects/:id/threads(?search=)`, `GET /threads/:id`, `POST /projects/:id/threads`, `GET /threads/:id/messages`, `DELETE /threads/:id` |
+| `githubApi`     | `GET /github/resolve?url=`, `GET /github/user` (returns `GitHubUser \| null` — resolved identity with setting overrides) |
 
 ### Key TypeScript Types
 
@@ -445,6 +446,7 @@ Thin `fetch` wrapper over `/api`. All requests send `Content-Type: application/j
 - **`Message`** — `id, taskId, role, content: ContentBlock[], metadata, createdAt`
 - **`ContentBlock`** — `type` (`text` | `tool_use` | `tool_result` | `image`), plus type-specific fields (`text`, `name`, `input`, `content`, `tool_use_id`, `source?: ImageSource`)
 - **`ImageSource`** — `{ type: 'base64', media_type: string, data: string }` — base64-encoded image payload for `image` content blocks
+- **`GitHubUser`** — `{ name, email, login, avatarUrl }` — resolved GitHub identity (from token or setting overrides)
 
 ---
 
