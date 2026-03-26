@@ -98,39 +98,50 @@ function extractContent(el: HTMLElement): { text: string; files: string[]; snipp
   const snippets: CodeSelection[] = [];
   let hasGithubContext = false;
   let text = '';
-  for (const node of Array.from(el.childNodes)) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      text += node.textContent ?? '';
-    } else if (node.nodeType === Node.ELEMENT_NODE) {
-      const element = node as HTMLElement;
-      const filePath = element.getAttribute(FILE_TAG_ATTR);
-      const snippetData = element.getAttribute(SNIPPET_TAG_ATTR);
-      const ghContext = element.getAttribute(GITHUB_TAG_ATTR);
-      if (filePath) {
-        files.push(filePath);
-        text += `@${element.getAttribute('data-file-name') ?? filePath}`;
-      } else if (snippetData) {
-        try {
-          const sel = JSON.parse(snippetData) as CodeSelection;
-          snippets.push(sel);
-          text += `[snippet: ${sel.filePath}:${sel.startLine}:${sel.startChar}-${sel.endLine}:${sel.endChar}]`;
-        } catch { /* ignore malformed */ }
-      } else if (ghContext) {
-        hasGithubContext = true;
-        text += element.getAttribute('data-github-label') ?? `@${ghContext}`;
-      } else if (element.hasAttribute(AGENT_TAG_ATTR)) {
-        const agentId = element.getAttribute(AGENT_TAG_ATTR);
-        text += `@agent:${agentId}`;
-      } else if (element.hasAttribute(SKILL_TAG_ATTR)) {
-        const skillId = element.getAttribute(SKILL_TAG_ATTR);
-        text += `@skill:${skillId}`;
-      } else if (element.tagName === 'BR') {
-        text += '\n';
-      } else {
-        text += element.textContent ?? '';
+
+  function walk(parent: Node) {
+    for (const node of Array.from(parent.childNodes)) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        text += node.textContent ?? '';
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        const element = node as HTMLElement;
+        const tag = element.tagName;
+        const filePath = element.getAttribute(FILE_TAG_ATTR);
+        const snippetData = element.getAttribute(SNIPPET_TAG_ATTR);
+        const ghContext = element.getAttribute(GITHUB_TAG_ATTR);
+        if (filePath) {
+          files.push(filePath);
+          text += `@${element.getAttribute('data-file-name') ?? filePath}`;
+        } else if (snippetData) {
+          try {
+            const sel = JSON.parse(snippetData) as CodeSelection;
+            snippets.push(sel);
+            text += `[snippet: ${sel.filePath}:${sel.startLine}:${sel.startChar}-${sel.endLine}:${sel.endChar}]`;
+          } catch { /* ignore malformed */ }
+        } else if (ghContext) {
+          hasGithubContext = true;
+          text += element.getAttribute('data-github-label') ?? `@${ghContext}`;
+        } else if (element.hasAttribute(AGENT_TAG_ATTR)) {
+          const agentId = element.getAttribute(AGENT_TAG_ATTR);
+          text += `@agent:${agentId}`;
+        } else if (element.hasAttribute(SKILL_TAG_ATTR)) {
+          const skillId = element.getAttribute(SKILL_TAG_ATTR);
+          text += `@skill:${skillId}`;
+        } else if (tag === 'BR') {
+          text += '\n';
+        } else if (tag === 'DIV' || tag === 'P') {
+          if (text.length > 0 && !text.endsWith('\n')) {
+            text += '\n';
+          }
+          walk(element);
+        } else {
+          text += element.textContent ?? '';
+        }
       }
     }
   }
+
+  walk(el);
   return { text, files, snippets, hasGithubContext };
 }
 
