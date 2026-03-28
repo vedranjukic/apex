@@ -30,6 +30,7 @@ All UI state is in Zustand stores under `apps/dashboard/src/stores/`:
 - `agent-settings-store.ts` -- agent type (build/plan/sisyphus) and model selection
 - `theme-store.ts` -- color theme selection (midnight-blue, dark, light), persisted to localStorage
 - `lsp-store.ts` -- per-language LSP server status (starting/ready/error/stopped) from bridge
+- `references-store.ts` -- Find All References/Implementations results for the sidebar panel
 Access store actions outside React components with `useXxxStore.getState().action()`.
 
 ## Conventions

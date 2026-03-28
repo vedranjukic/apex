@@ -103,7 +103,10 @@ When using the **Plan** agent, responses render in a dedicated plan format:
 A Monaco-based code editor with full Language Server Protocol (LSP) support, built into the workspace:
 
 - **Language intelligence** — hover information, autocompletion, go-to-definition, find references, and real-time diagnostics powered by language servers running inside the sandbox (TypeScript, Python, Go, Rust, Java)
+- **Context menu** — right-click for Go to Definition, Go to Type Definition, Go to Implementations, Go to References, Find All References, Find All Implementations, Rename Symbol, plus Cut/Copy/Paste. On the desktop app, uses a native OS context menu; on the web, a DOM popup. LSP actions are enabled when the language server is connected, disabled otherwise.
+- **References panel** — "Find All References" and "Find All Implementations" display results in a dedicated sidebar panel, grouped by file with click-to-navigate
 - **On-demand LSP activation** — language servers start lazily when you first open a file of that language, with a status indicator showing initialization progress
+- **Sandbox file system** — the editor's peek widgets (Go to References, Go to Definition) can load and display code from any file in the sandbox, not just the currently open file
 - **Tabbed interface** — open multiple files with tab management, dirty-state dot indicators, and save support
 - **Thread ↔ Editor toggle** — switch the center panel between the AI thread and the code editor from the top bar
 - **Snippet copy** — copying code from the editor puts structured snippet data on the clipboard for pasting into prompts as precise references

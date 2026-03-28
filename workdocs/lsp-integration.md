@@ -56,10 +56,15 @@ flowchart TB
 | **Bridge types** | `libs/orchestrator/src/lib/types.ts` | `BridgeLspData`, `BridgeLspResponse`, `BridgeLspStatus` message types |
 | **MCP server** | `libs/orchestrator/src/lib/mcp-lsp-script.ts` | Agent-facing MCP tools: `lsp_hover`, `lsp_definition`, `lsp_references`, `lsp_diagnostics`, `lsp_completions`, `lsp_symbols` |
 | **NestJS relay** | `apps/api/src/modules/agent/agent.ws.ts` | Relays `lsp_data`/`lsp_response`/`lsp_status` between dashboard Socket.io and bridge WebSocket |
-| **Dashboard editor** | `apps/dashboard/src/components/editor/code-viewer.tsx` | `MonacoEditorReactComp` with LSP-aware configuration |
-| **Dashboard transport** | `apps/dashboard/src/components/editor/lsp-transport.ts` | Custom `MessageTransport` bridging Socket.io events to JSON-RPC for `vscode-languageclient` |
-| **Dashboard context** | `apps/dashboard/src/components/editor/lsp-context.tsx` | React context managing per-language `LanguageClientWrapper` lifecycle |
+| **Dashboard editor** | `apps/dashboard/src/components/editor/code-viewer.tsx` | `MonacoEditorReactComp` with LSP config, context menu, action execution, reveal-line |
+| **Dashboard context menu** | `apps/dashboard/src/components/editor/editor-context-menu.tsx` | DOM-based right-click menu (web); desktop uses Electrobun native `ContextMenu` |
+| **Dashboard LSP request** | `apps/dashboard/src/components/editor/lsp-request.ts` | One-shot LSP request utility for Find All References/Implementations |
+| **Dashboard transport** | `apps/dashboard/src/components/editor/lsp-transport.ts` | Custom `MessageTransport` bridging Socket.io events to JSON-RPC + client-side LSP readiness detection |
+| **Dashboard context** | `apps/dashboard/src/components/editor/lsp-context.tsx` | React context + sandbox file system overlay registration |
+| **Dashboard sandbox FS** | `apps/dashboard/src/components/editor/sandbox-fs-provider.ts` | VS Code file system overlay fetching sandbox files on demand via Socket.io |
+| **Dashboard references** | `apps/dashboard/src/components/editor/references-panel.tsx` | Sidebar panel for Find All References/Implementations results |
 | **Dashboard store** | `apps/dashboard/src/stores/lsp-store.ts` | Zustand store for per-language LSP status |
+| **Dashboard refs store** | `apps/dashboard/src/stores/references-store.ts` | Zustand store for Find All results |
 | **Dashboard hook** | `apps/dashboard/src/hooks/use-lsp-socket.ts` | Socket.io hook for LSP data/status events |
 | **Sandbox manager** | `libs/orchestrator/src/lib/sandbox-manager.ts` | Uploads `mcp-lsp-server.cjs`, registers in `opencode.json` |
 | **Dockerfile** | `images/default/Dockerfile` | Installs all 5 LSP servers (typescript-language-server, pylsp, gopls, rust-analyzer, jdtls) |

@@ -91,7 +91,7 @@ A CLI binary that makes remote sandboxed agents feel local. See the full [CLI do
 
 A desktop (Electrobun) and web development environment for building applications interactively with AI agents.
 
-- **Full IDE experience** — VS Code–inspired layout with resizable panels, file explorer, Monaco code editor with LSP intelligence (hover, completions, go-to-definition, diagnostics), search, and Git source control
+- **Full IDE experience** — VS Code–inspired layout with resizable panels, file explorer, Monaco code editor with LSP intelligence (hover, completions, go-to-definition, references, rename, context menu), search, and Git source control
 - **Task dashboard** — home page shows all projects with inline thread lists; click any thread to interact with it in a side panel without leaving the overview
 - **Three agents** — Build (autonomous coding), Plan (read-only analysis), Sisyphus (orchestration) — selectable per-thread with models from multiple providers
 - **Live agent thread** — send prompts and watch the agent work in real time with grouped message rendering, image attachments, code snippet references, and `@issue`/`@pr` GitHub context injection

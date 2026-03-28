@@ -295,9 +295,12 @@ The central panel toggles between `AgentThread` and `CodeViewer` based on `useEd
 - Clicking a file in the explorer calls `useEditorStore.openFile()` (switches to `editor` view) and emits `file_read` via socket to fetch content.
 - `CodeViewer` renders `@typefox/monaco-editor-react` (`MonacoEditorReactComp`) backed by `monaco-languageclient` and VS Code services (`@codingame/monaco-vscode-*`). Theme is "Default Dark Modern" via VS Code's `userConfiguration`. Language detection via `lang-map.ts`.
 - **LSP integration**: On file open, `lsp-context.tsx` determines the language and connects a `LanguageClientWrapper` via a custom Socket.io transport (`lsp-transport.ts`). LSP messages flow: dashboard → Socket.io `lsp_data` → NestJS relay → bridge → LSP server (stdio), and back via `lsp_response`. One language client per language, shared across all open files. Per-language status (starting/ready/error) is tracked in `lsp-store.ts` via `lsp_status` events.
+- **Context menu**: Right-click opens a custom context menu with LSP actions (Go to Definition/Type Definition/Implementations/References, Find All References/Implementations, Rename Symbol) plus Cut/Copy/Paste. On the desktop app, Electrobun's native `ContextMenu.showContextMenu()` API is used; on the web, a DOM popup (`EditorContextMenu`). LSP actions are disabled when the language server isn't ready. "Go to" actions use Monaco's built-in commands (`editor.trigger`); "Find All" actions send direct LSP requests via Socket.io and display results in the References sidebar panel.
+- **Sandbox file system**: `lsp-context.tsx` registers a `registerFileSystemOverlay` from `@codingame/monaco-vscode-files-service-override` that fetches file content on demand from the sandbox via Socket.io `file_read`/`file_read_result`. This enables Monaco's peek widgets (Go to References, etc.) to load and display code from any file in the sandbox, not just the currently open file.
 - **Save flow**: Ctrl/Cmd+S → `editor.save` command → `writeFile(path, content)` → socket `file_write` → gateway → `SandboxManager.writeFile()` → `sandbox.fs.uploadFile()`. On success, gateway emits `file_write_result { ok: true }` → `useEditorStore.markClean()` clears the dirty indicator.
 - **Snippet copy**: Ctrl/Cmd+C in the editor attaches `CodeSelection` metadata (file path, line/char range) to the clipboard alongside the plain text. This metadata is used by the prompt input for `@`-referenced code snippets.
 - Dirty files are tracked in `useEditorStore.dirtyFiles` (a `Set<string>`). Unsaved changes show a dot in the file tab bar.
+- **Reveal line**: Clicking a reference in the References panel or search results calls `openFileAtLine()`, which sets `revealLineAt` in the editor store. `CodeViewer` consumes this to scroll the editor to the target line via `editor.revealLineInCenter()`.
 
 ## LSP (Language Server Protocol)
 
@@ -397,11 +400,16 @@ apps/dashboard/src/components/agent/thread-stats-bar.tsx – Aggregated thread s
 apps/dashboard/src/lib/model-context.ts             – Model context window sizes + token formatting helpers
 apps/dashboard/src/components/agent/plan-block.tsx     – Inline plan card (markdown + Build button)
 apps/dashboard/src/components/agent/markdown-block.tsx  – Inline collapsible markdown card (summaries)
-apps/dashboard/src/components/editor/code-viewer.tsx      – Monaco-based file editor (LSP-enabled, syntax highlighting, save, snippet copy)
+apps/dashboard/src/components/editor/code-viewer.tsx      – Monaco-based file editor (LSP-enabled, context menu, syntax highlighting, save, snippet copy, reveal-line)
+apps/dashboard/src/components/editor/editor-context-menu.tsx – DOM-based editor context menu (web; desktop uses native Electrobun menu)
+apps/dashboard/src/components/editor/lsp-request.ts       – One-shot LSP request utility for Find All References/Implementations
 apps/dashboard/src/components/editor/lsp-transport.ts     – Socket.io → JSON-RPC message transport for language clients
-apps/dashboard/src/components/editor/lsp-context.tsx      – React context managing per-language LSP client lifecycle
+apps/dashboard/src/components/editor/lsp-context.tsx      – React context managing per-language LSP client lifecycle + sandbox FS overlay
+apps/dashboard/src/components/editor/sandbox-fs-provider.ts – VS Code file system overlay that fetches sandbox files on demand via Socket.io
+apps/dashboard/src/components/editor/references-panel.tsx  – Sidebar panel for Find All References/Implementations results
 apps/dashboard/src/components/editor/lang-map.ts          – File extension → Monaco language ID mapping
 apps/dashboard/src/stores/lsp-store.ts                     – Zustand store — per-language LSP server status
+apps/dashboard/src/stores/references-store.ts              – Zustand store — Find All References/Implementations results
 apps/dashboard/src/hooks/use-lsp-socket.ts                 – Socket.io hook for LSP data/status events
 apps/dashboard/src/components/terminal/terminal-panel.tsx  – Resizable bottom panel with tabs
 apps/dashboard/src/components/terminal/terminal-tab.tsx    – Single xterm.js terminal renderer
