@@ -55,6 +55,32 @@ export function ProjectPage() {
     }
   }, [projectId, fetchThreads]);
 
+  // Re-fetch threads & project info when the window regains attention
+  // (handles sleep/wake, window focus via focusOrOpenWindow, etc.)
+  useEffect(() => {
+    if (!projectId) return;
+    let lastRefresh = Date.now();
+    const STALE_MS = 15_000;
+
+    const refresh = () => {
+      const now = Date.now();
+      if (now - lastRefresh < STALE_MS) return;
+      lastRefresh = now;
+      fetchThreads(projectId);
+      projectsApi.get(projectId).then((p) => setProject(p)).catch(() => {});
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', refresh);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [projectId, fetchThreads]);
+
   const handleSendPrompt = useCallback(
     (threadId: string, prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string, images?: ImageAttachment[]) => {
       let fullPrompt = prompt;

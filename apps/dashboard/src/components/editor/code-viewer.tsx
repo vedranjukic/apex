@@ -6,6 +6,7 @@ import { useEditorStore, type CodeSelection } from '../../stores/editor-store';
 import { useThemeStore } from '../../stores/theme-store';
 import { getLanguageFromPath } from './lang-map';
 import { getMonacoThemeName, getMonacoThemeData } from './apex-theme';
+import { ensureMonacoTsDefaults } from './monaco-ts-defaults';
 import { themeIds } from '../../lib/themes';
 
 const SNIPPET_MIME = 'application/x-codeany-snippet';
@@ -28,6 +29,8 @@ export function CodeViewer({ filePath, content, onSave }: CodeViewerProps) {
     (editor, monaco) => {
       editorRef.current = editor;
       monacoRef.current = monaco;
+
+      ensureMonacoTsDefaults(monaco);
 
       for (const id of themeIds) {
         monaco.editor.defineTheme(getMonacoThemeName(id), getMonacoThemeData(id));

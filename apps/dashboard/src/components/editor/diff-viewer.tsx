@@ -6,6 +6,7 @@ import { useEditorStore, type DiffData } from '../../stores/editor-store';
 import { useThemeStore } from '../../stores/theme-store';
 import { getLanguageFromPath } from './lang-map';
 import { getMonacoThemeName, getMonacoThemeData } from './apex-theme';
+import { ensureMonacoTsDefaults } from './monaco-ts-defaults';
 import { themeIds } from '../../lib/themes';
 import { cn } from '../../lib/cn';
 
@@ -24,6 +25,7 @@ export function DiffViewer() {
   const handleMount: DiffOnMount = useCallback(
     (editor, monaco) => {
       monacoRef.current = monaco;
+      ensureMonacoTsDefaults(monaco);
       for (const id of themeIds) {
         monaco.editor.defineTheme(getMonacoThemeName(id), getMonacoThemeData(id));
       }

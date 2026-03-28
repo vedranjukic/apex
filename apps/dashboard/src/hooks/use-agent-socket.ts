@@ -16,10 +16,15 @@ export function useAgentSocket(projectId: string | undefined) {
     const ws = new ReconnectingWebSocket('/ws/agent');
     wsRef.current = ws;
 
+    let hasConnectedOnce = false;
     ws.onStatus((status) => {
       if (status === 'connected') {
         console.log('[ws] connected, subscribing to project', projectId);
         ws.send('subscribe_project', { projectId });
+        if (hasConnectedOnce) {
+          useThreadsStore.getState().fetchThreads(projectId);
+        }
+        hasConnectedOnce = true;
       } else if (status === 'disconnected') {
         console.log('[ws] disconnected');
       }
