@@ -4,6 +4,7 @@ import { useTerminalStore } from '../stores/terminal-store';
 import { useThreadsStore } from '../stores/tasks-store';
 import { usePanelsStore } from '../stores/panels-store';
 import { useEditorStore, type OpenFile } from '../stores/editor-store';
+import { useFileTreeStore } from '../stores/file-tree-store';
 
 const SAVE_DEBOUNCE_MS = 500;
 const LOAD_TIMEOUT_MS = 3000;
@@ -23,6 +24,7 @@ interface LayoutData {
   activeFilePath?: string | null;
   activeView?: 'thread' | 'editor';
   fileScrollOffsets?: Record<string, number>;
+  expandedFolders?: string[];
 }
 
 function saveLocalLayout(projectId: string, data: LayoutData): void {
@@ -46,6 +48,7 @@ export function useLayoutSocket(
   const setLeftSidebar = usePanelsStore((s) => s.setLeftSidebar);
   const setRightSidebar = usePanelsStore((s) => s.setRightSidebar);
   const applyEditorLayout = useEditorStore((s) => s.applyLayout);
+  const setExpandedFolders = useFileTreeStore((s) => s.setExpandedFolders);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const layoutLoaded = useRef(false);
   const [layoutReady, setLayoutReady] = useState(false);
@@ -62,8 +65,9 @@ export function useLayoutSocket(
         setThreadScrollOffset(layout.activeThreadId, layout.threadScrollOffset);
       }
       applyEditorLayout({ openFiles: layout.openFiles, activeFilePath: layout.activeFilePath, activeView: layout.activeView, fileScrollOffsets: layout.fileScrollOffsets });
+      if (layout.expandedFolders) setExpandedFolders(layout.expandedFolders);
     },
-    [applyTerminalLayout, setActiveThread, setThreadScrollOffset, setLeftSidebar, setRightSidebar, applyEditorLayout],
+    [applyTerminalLayout, setActiveThread, setThreadScrollOffset, setLeftSidebar, setRightSidebar, applyEditorLayout, setExpandedFolders],
   );
 
   useEffect(() => {
@@ -117,6 +121,7 @@ export function useLayoutSocket(
     const threads = useThreadsStore.getState();
     const panels = usePanelsStore.getState();
     const editor = useEditorStore.getState();
+    const fileTree = useFileTreeStore.getState();
     return {
       terminalPanelOpen: term.panelOpen, terminalPanelHeight: term.panelHeight,
       activeTerminalId: term.activeTerminalId, portsTabVisible: term.portsTabVisible,
@@ -124,6 +129,7 @@ export function useLayoutSocket(
       leftSidebarOpen: panels.leftSidebarOpen, rightSidebarOpen: panels.rightSidebarOpen,
       openFiles: editor.openFiles, activeFilePath: editor.activeFilePath,
       activeView: editor.activeView === 'diff' ? 'thread' : editor.activeView, fileScrollOffsets: editor.fileScrollOffsets,
+      expandedFolders: fileTree.expandedFolders,
     };
   }, []);
 
@@ -144,7 +150,10 @@ export function useLayoutSocket(
       if (state.openFiles !== prevState.openFiles || state.activeFilePath !== prevState.activeFilePath ||
           state.activeView !== prevState.activeView || state.fileScrollOffsets !== prevState.fileScrollOffsets) saveLayout(getLayoutSnapshot());
     });
-    return () => { unsubTerminal(); unsubThreads(); unsubPanels(); unsubEditor(); if (debounceTimer.current) clearTimeout(debounceTimer.current); };
+    const unsubFileTree = useFileTreeStore.subscribe((state, prevState) => {
+      if (state.expandedFolders !== prevState.expandedFolders) saveLayout(getLayoutSnapshot());
+    });
+    return () => { unsubTerminal(); unsubThreads(); unsubPanels(); unsubEditor(); unsubFileTree(); if (debounceTimer.current) clearTimeout(debounceTimer.current); };
   }, [saveLayout, getLayoutSnapshot]);
 
   return { layoutReady };

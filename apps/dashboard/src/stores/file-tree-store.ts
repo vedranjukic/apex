@@ -11,6 +11,7 @@ interface FileTreeState {
   pendingPaths: string[];
   rootPath: string | null;
   changedDirs: string[];
+  expandedFolders: string[];
 
   setRootPath: (path: string) => void;
   setEntries: (dirPath: string, entries: FileEntry[]) => void;
@@ -20,6 +21,7 @@ interface FileTreeState {
   isPending: (dirPath: string) => boolean;
   invalidate: (dirPath: string) => void;
   clearChangedDirs: () => void;
+  setExpandedFolders: (folders: string[]) => void;
   reset: () => void;
 }
 
@@ -28,6 +30,7 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
   pendingPaths: [],
   rootPath: null,
   changedDirs: [],
+  expandedFolders: [],
 
   setRootPath: (path: string) => set({ rootPath: path }),
 
@@ -76,5 +79,7 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
 
   clearChangedDirs: () => set({ changedDirs: [] }),
 
-  reset: () => set({ cache: {}, pendingPaths: [], rootPath: null, changedDirs: [] }),
+  setExpandedFolders: (folders: string[]) => set({ expandedFolders: folders }),
+
+  reset: () => set({ cache: {}, pendingPaths: [], rootPath: null, changedDirs: [], expandedFolders: [] }),
 }));
