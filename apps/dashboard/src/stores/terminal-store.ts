@@ -162,15 +162,18 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   setPanelHeight: (height) => set({ panelHeight: height }),
 
   applyLayout: (layout) => {
-    const { terminalsLoaded } = get();
+    const { terminalsLoaded, terminals } = get();
     if (layout.portsTabVisible !== undefined) {
       set({ portsTabVisible: layout.portsTabVisible });
     }
     if (terminalsLoaded) {
+      const validActiveId = terminals.find((t) => t.id === layout.activeTerminalId)
+        ? layout.activeTerminalId
+        : terminals[0]?.id ?? null;
       set({
         panelOpen: layout.terminalPanelOpen,
         panelHeight: layout.terminalPanelHeight,
-        activeTerminalId: layout.activeTerminalId,
+        activeTerminalId: validActiveId,
       });
     } else {
       set({
