@@ -780,7 +780,9 @@ startOpenCodeServe();
 // ── LSP Manager ──────────────────────────────────────
 const LSP_COMMANDS = {
   typescript: ["typescript-language-server", ["--stdio"]],
+  typescriptreact: ["typescript-language-server", ["--stdio"]],
   javascript: ["typescript-language-server", ["--stdio"]],
+  javascriptreact: ["typescript-language-server", ["--stdio"]],
   python: ["pylsp", []],
   go: ["gopls", []],
   rust: ["rust-analyzer", []],
@@ -828,13 +830,14 @@ function emitLspStatus(language, status, error) {
 }
 
 function getOrStartLsp(language) {
-  const existing = lspServers.get(language);
+  const serverKey = normalizeLspLanguage(language);
+  const existing = lspServers.get(serverKey);
   if (existing && existing.status !== "stopped" && existing.status !== "error") {
     if (existing.status === "ready") return Promise.resolve(existing);
     return existing.readyPromise;
   }
 
-  const cmdEntry = LSP_COMMANDS[language];
+  const cmdEntry = LSP_COMMANDS[language] || LSP_COMMANDS[serverKey];
   if (!cmdEntry) return Promise.reject(new Error("No LSP server for language: " + language));
   const [cmd, args] = cmdEntry;
 
@@ -846,7 +849,7 @@ function getOrStartLsp(language) {
     pendingRequests: new Map(),
     capabilities: null,
   };
-  lspServers.set(language, entry);
+  lspServers.set(serverKey, entry);
   emitLspStatus(language, "starting");
   log("\\u{1F680}", "Starting LSP for " + language + ": " + cmd + " " + args.join(" "));
 
@@ -956,11 +959,17 @@ function lspNotify(language, method, params) {
   });
 }
 
+function normalizeLspLanguage(lang) {
+  if (lang === "typescriptreact") return "typescript";
+  if (lang === "javascriptreact") return "javascript";
+  return lang;
+}
+
 function detectLanguageFromUri(uri) {
   const ext = (uri.split(".").pop() || "").toLowerCase();
   const map = {
-    ts: "typescript", tsx: "typescript", mts: "typescript", cts: "typescript",
-    js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
+    ts: "typescript", tsx: "typescriptreact", mts: "typescript", cts: "typescript",
+    js: "javascript", jsx: "javascriptreact", mjs: "javascript", cjs: "javascript",
     py: "python", pyw: "python",
     go: "go",
     rs: "rust",

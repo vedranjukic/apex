@@ -38,22 +38,31 @@ export function createStubWebSocket(): WebSocket {
   } as unknown as WebSocket;
 }
 
+function normalizeLspLang(lang: string): string {
+  if (lang === 'typescriptreact') return 'typescript';
+  if (lang === 'javascriptreact') return 'javascript';
+  return lang;
+}
+
 class SocketIoMessageReader extends AbstractMessageReader {
   private callback: DataCallback | null = null;
   private socketHandler: LspResponseHandler | null = null;
+  private normalizedLang: string;
 
   constructor(
     private socket: ReconnectingWebSocket,
     private language: string,
   ) {
     super();
+    this.normalizedLang = normalizeLspLang(language);
   }
 
   listen(callback: DataCallback): Disposable {
     this.callback = callback;
 
     this.socketHandler = (data) => {
-      if (data.payload?.language !== this.language) return;
+      const respLang = normalizeLspLang(data.payload?.language ?? '');
+      if (respLang !== this.normalizedLang) return;
       const msg = data.payload.jsonrpc;
       if (msg && this.callback) {
         this.callback(msg as Message);

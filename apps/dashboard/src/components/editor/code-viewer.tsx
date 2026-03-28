@@ -26,7 +26,8 @@ import '@codingame/monaco-vscode-markdown-basics-default-extension';
 import '@codingame/monaco-vscode-yaml-default-extension';
 
 const LSP_SUPPORTED_LANGUAGES = new Set([
-  'typescript', 'javascript', 'python', 'go', 'rust', 'java',
+  'typescript', 'typescriptreact', 'javascript', 'javascriptreact',
+  'python', 'go', 'rust', 'java',
 ]);
 
 const vscodeApiConfig: MonacoVscodeApiConfig = {
