@@ -3,7 +3,7 @@ import { execFile as execFileCb } from 'child_process';
 import { db } from '../../database/db';
 import { projects, tasks } from '../../database/schema';
 import { SandboxManager } from '@apex/orchestrator';
-import { parseGitHubUrl } from '@apex/shared';
+import { parseGitHubUrl, issueBranchName } from '@apex/shared';
 import { githubService } from '../github/github.service';
 import { projectsWsBroadcast } from './projects.ws';
 import { getCACertPem } from '../secrets-proxy/ca-manager';
@@ -347,6 +347,13 @@ class ProjectsService {
       }
     }
 
+    // For issue-based projects, auto-create a feature branch so agent commits
+    // land on a separate branch instead of the repo's default branch.
+    let createBranch: string | undefined;
+    if (!gitBranch && githubContext && (githubContext as any).type === 'issue' && (githubContext as any).number && (githubContext as any).title) {
+      createBranch = issueBranchName((githubContext as any).number, (githubContext as any).title);
+    }
+
     await db.insert(projects).values({
       id,
       userId,
@@ -359,12 +366,13 @@ class ProjectsService {
       localDir: data.localDir || null,
       agentConfig: data.agentConfig || null,
       githubContext: (githubContext as any) || null,
+      branchName: createBranch || null,
       status: 'creating',
     });
     const saved = await this.findById(id);
     projectsWsBroadcast('project_created', saved);
 
-    this.provisionSandbox(saved.id, saved.sandboxSnapshot, saved.provider as ProviderType, saved.name, saved.gitRepo, saved.agentType, saved.localDir || undefined, gitBranch).catch((err) => {
+    this.provisionSandbox(saved.id, saved.sandboxSnapshot, saved.provider as ProviderType, saved.name, saved.gitRepo, saved.agentType, saved.localDir || undefined, gitBranch, createBranch).catch((err) => {
       console.error(`[projects] Failed to provision sandbox for project ${saved.id}:`, err);
     });
 
@@ -508,7 +516,7 @@ class ProjectsService {
   private async provisionSandbox(
     projectId: string, snapshot: string, provider: ProviderType,
     projectName?: string, gitRepo?: string | null, agentType?: string,
-    localDir?: string, gitBranch?: string,
+    localDir?: string, gitBranch?: string, createBranch?: string,
   ): Promise<void> {
     if (!(await this.ensureSandboxManager(provider))) {
       await db.update(projects).set({ status: 'stopped' }).where(eq(projects.id, projectId));
@@ -522,7 +530,7 @@ class ProjectsService {
     };
     try {
       const sandboxId = await manager.createSandbox(
-        snapshot, projectName, gitRepo || undefined, agentType, projectId, onStatusChange, localDir, gitBranch,
+        snapshot, projectName, gitRepo || undefined, agentType, projectId, onStatusChange, localDir, gitBranch, createBranch,
       );
       await db.update(projects).set({ sandboxId, status: 'running', statusError: null }).where(eq(projects.id, projectId));
       projectsWsBroadcast('project_updated', await this.findById(projectId));

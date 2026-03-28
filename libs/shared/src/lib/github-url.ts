@@ -58,3 +58,19 @@ export function parseGitHubUrl(raw: string): ParsedGitHubUrl | null {
 
   return { type: 'repo', owner, repo, cloneUrl };
 }
+
+/**
+ * Generate a git-safe branch name from a GitHub issue number and title.
+ * Example: issue 42 "Fix login page crash!" → "issue-42/fix-login-page-crash"
+ */
+export function issueBranchName(issueNumber: number, title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 60)
+    .replace(/-$/, '');
+  return `issue-${issueNumber}/${slug || 'work'}`;
+}

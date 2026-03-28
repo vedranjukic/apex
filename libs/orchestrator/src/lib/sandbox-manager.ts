@@ -318,6 +318,7 @@ export class SandboxManager extends EventEmitter {
     onStatusChange?: (status: string) => void,
     localDir?: string,
     gitBranch?: string,
+    createBranch?: string,
   ): Promise<string> {
     if (!this.provider) throw new Error("SandboxManager not initialized");
 
@@ -371,7 +372,7 @@ export class SandboxManager extends EventEmitter {
     };
     this.sessions.set(sandbox.id, session);
 
-    await this.installBridge(session, gitRepo, agentType, gitBranch);
+    await this.installBridge(session, gitRepo, agentType, gitBranch, createBranch);
 
     return sandbox.id;
   }
@@ -2071,6 +2072,7 @@ export class SandboxManager extends EventEmitter {
     gitRepo?: string,
     agentType?: string,
     gitBranch?: string,
+    createBranch?: string,
   ): Promise<void> {
     session.status = "starting_bridge";
     this.emit("status", session.sandboxId, "starting_bridge");
@@ -2221,6 +2223,10 @@ export class SandboxManager extends EventEmitter {
         await sandbox.process.executeCommand(`git clone${branchFlag} ${cloneUrl} .`, projectDir);
         if (isCommitSha) {
           await sandbox.process.executeCommand(`git checkout ${gitBranch}`, projectDir);
+        }
+        if (createBranch) {
+          const safeBranch = createBranch.replace(/[^a-zA-Z0-9/_.-]/g, "");
+          await sandbox.process.executeCommand(`git checkout -b "${safeBranch}"`, projectDir);
         }
       } else {
         const gitInitCmd = `mkdir -p '${projectDir}' && git init '${projectDir}'`;
