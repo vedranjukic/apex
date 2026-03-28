@@ -7,8 +7,11 @@ import {
   type MessageTransports,
 } from 'vscode-languageserver-protocol/browser.js';
 import type { ReconnectingWebSocket } from '../../lib/reconnecting-ws';
+import { useLspStore } from '../../stores/lsp-store';
 
 type LspResponseHandler = (data: { type: string; payload: { language: string; jsonrpc: any } }) => void;
+
+const lspReadyDetected = new Set<string>();
 
 /**
  * Minimal WebSocket stub that satisfies LanguageClientWrapper's readyState
@@ -65,6 +68,10 @@ class SocketIoMessageReader extends AbstractMessageReader {
       if (respLang !== this.normalizedLang) return;
       const msg = data.payload.jsonrpc;
       if (msg && this.callback) {
+        if (!lspReadyDetected.has(this.normalizedLang) && msg.result?.capabilities) {
+          lspReadyDetected.add(this.normalizedLang);
+          useLspStore.getState().setStatus(this.normalizedLang, 'ready');
+        }
         this.callback(msg as Message);
       }
     };
@@ -93,6 +100,12 @@ class SocketIoMessageWriter extends AbstractMessageWriter {
   }
 
   async write(msg: Message): Promise<void> {
+    if ((msg as any).method === 'initialize') {
+      const lang = normalizeLspLang(this.language);
+      if (!lspReadyDetected.has(lang)) {
+        useLspStore.getState().setStatus(lang, 'starting');
+      }
+    }
     this.socket.send('lsp_data', {
       projectId: this.projectId,
       language: this.language,

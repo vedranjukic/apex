@@ -1,5 +1,6 @@
-import { createContext, useContext, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import type { ReconnectingWebSocket } from '../../lib/reconnecting-ws';
+import { registerSandboxFs } from './sandbox-fs-provider';
 
 interface LspContextValue {
   socketRef: { current: ReconnectingWebSocket | null };
@@ -20,6 +21,12 @@ export function LspProvider({
   projectId: string;
   children: ReactNode;
 }) {
+  useEffect(() => {
+    if (!socket.current || !projectId) return;
+    const disposable = registerSandboxFs(socket, projectId);
+    return () => disposable.dispose();
+  }, [socket, projectId]);
+
   return (
     <LspContext.Provider value={{ socketRef: socket, projectId }}>
       {children}

@@ -1,7 +1,7 @@
-import { FolderOpen, GitBranch, Search, Settings, LayoutGrid, type LucideIcon } from 'lucide-react';
+import { FolderOpen, GitBranch, Search, Settings, LayoutGrid, ListTree, type LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/cn';
 
-export type ActivityCategory = 'explorer' | 'git' | 'search' | 'settings';
+export type ActivityCategory = 'explorer' | 'git' | 'search' | 'references' | 'settings';
 
 interface ActivityBarProps {
   active: ActivityCategory | null;
@@ -18,6 +18,7 @@ const topItems: ActivityItem[] = [
   { id: 'explorer', icon: FolderOpen, label: 'Explorer' },
   { id: 'git', icon: GitBranch, label: 'Source Control' },
   { id: 'search', icon: Search, label: 'Search' },
+  { id: 'references', icon: ListTree, label: 'References' },
 ];
 
 const bottomItems: ActivityItem[] = [

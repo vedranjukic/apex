@@ -2,6 +2,7 @@ import {
   BrowserWindow,
   BrowserView,
   ApplicationMenu,
+  ContextMenu,
   Utils,
 } from 'electrobun/bun';
 import Electrobun from 'electrobun/bun';
@@ -315,6 +316,32 @@ function createRpcHandlers() {
           } catch (err) {
             return { ok: false, error: String(err) };
           }
+        },
+        showContextMenu: (params) => {
+          return new Promise<{ action: string | null }>((resolve) => {
+            const menuItems = params.items.map((item) => {
+              if (item.type === 'separator') return { type: 'separator' as const };
+              return {
+                label: item.label ?? '',
+                action: item.action ?? '',
+                accelerator: item.accelerator,
+                enabled: item.enabled ?? true,
+              };
+            });
+
+            const handler = (e: { data: { action: string } }) => {
+              Electrobun.events.off('context-menu-clicked', handler);
+              resolve({ action: e.data.action });
+            };
+
+            Electrobun.events.on('context-menu-clicked', handler);
+            ContextMenu.showContextMenu(menuItems);
+
+            setTimeout(() => {
+              Electrobun.events.off('context-menu-clicked', handler);
+              resolve({ action: null });
+            }, 30000);
+          });
         },
       },
       messages: {

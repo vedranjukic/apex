@@ -1,16 +1,21 @@
-import { useRef, useCallback, useState, useMemo } from 'react';
+import { useRef, useCallback, useState, useMemo, useEffect } from 'react';
 import { Loader2, FileText, Zap } from 'lucide-react';
 import { MonacoEditorReactComp } from '@typefox/monaco-editor-react';
 import { configureDefaultWorkerFactory } from 'monaco-languageclient/workerFactory';
 import type { MonacoVscodeApiConfig } from 'monaco-languageclient/vscodeApiWrapper';
 import type { EditorAppConfig } from 'monaco-languageclient/editorApp';
+import type { EditorApp } from 'monaco-languageclient/editorApp';
 import type { LanguageClientConfig } from 'monaco-languageclient/lcwrapper';
 import { useEditorStore } from '../../stores/editor-store';
 import { useThemeStore } from '../../stores/theme-store';
 import { useLspStore, type LspServerStatus } from '../../stores/lsp-store';
+import { useReferencesStore } from '../../stores/references-store';
+import { usePanelsStore } from '../../stores/panels-store';
 import { getLanguageFromPath } from './lang-map';
 import { useLspContext } from './lsp-context';
 import { createSocketIoTransports, createStubWebSocket } from './lsp-transport';
+import { sendLspRequest } from './lsp-request';
+import { EditorContextMenu, type EditorMenuItem } from './editor-context-menu';
 import { cn } from '../../lib/cn';
 
 import '@codingame/monaco-vscode-typescript-basics-default-extension';
@@ -54,6 +59,33 @@ const vscodeApiConfig: MonacoVscodeApiConfig = {
   monacoWorkerFactory: configureDefaultWorkerFactory,
 };
 
+const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.userAgent);
+const cmdKey = isMac ? '⌘' : 'Ctrl+';
+
+function normalizeLspLang(lang: string): string {
+  if (lang === 'typescriptreact') return 'typescript';
+  if (lang === 'javascriptreact') return 'javascript';
+  return lang;
+}
+
+function buildContextMenuItems(lspReady: boolean): EditorMenuItem[] {
+  return [
+    { type: 'action', id: 'goto-definition', label: 'Go to Definition', shortcut: 'F12', disabled: !lspReady },
+    { type: 'action', id: 'goto-type-definition', label: 'Go to Type Definition', disabled: !lspReady },
+    { type: 'action', id: 'goto-implementations', label: 'Go to Implementations', shortcut: isMac ? '⌘F12' : 'Ctrl+F12', disabled: !lspReady },
+    { type: 'action', id: 'goto-references', label: 'Go to References', shortcut: '⇧F12', disabled: !lspReady },
+    { type: 'separator' },
+    { type: 'action', id: 'find-all-references', label: 'Find All References', shortcut: isMac ? '⌥⇧F12' : 'Alt+Shift+F12', disabled: !lspReady },
+    { type: 'action', id: 'find-all-implementations', label: 'Find All Implementations', disabled: !lspReady },
+    { type: 'separator' },
+    { type: 'action', id: 'rename-symbol', label: 'Rename Symbol', shortcut: 'F2', disabled: !lspReady },
+    { type: 'separator' },
+    { type: 'action', id: 'cut', label: 'Cut', shortcut: `${cmdKey}X` },
+    { type: 'action', id: 'copy', label: 'Copy', shortcut: `${cmdKey}C` },
+    { type: 'action', id: 'paste', label: 'Paste', shortcut: `${cmdKey}V` },
+  ];
+}
+
 interface CodeViewerProps {
   filePath: string;
   content: string | undefined;
@@ -65,9 +97,12 @@ export function CodeViewer({ filePath, content, onSave }: CodeViewerProps) {
   const isLoading = content === undefined;
   const isDirty = useEditorStore((s) => s.dirtyFiles.has(filePath));
   const language = getLanguageFromPath(filePath);
-  const lspStatus = useLspStore((s) => s.languages[language]);
+  const normalizedLang = normalizeLspLang(language);
+  const lspStatus = useLspStore((s) => s.languages[normalizedLang]);
   const { socketRef, projectId } = useLspContext();
   const [editorReady, setEditorReady] = useState(false);
+  const editorAppRef = useRef<EditorApp>(undefined);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
 
   const editorAppConfig: EditorAppConfig = {
     codeResources: {
@@ -90,7 +125,7 @@ export function CodeViewer({ filePath, content, onSave }: CodeViewerProps) {
           $type: 'WebSocketDirect',
           webSocket: createStubWebSocket(),
         },
-        messageTransports: createSocketIoTransports(socketRef.current, projectId, language),
+        messageTransports: createSocketIoTransports(socketRef.current!, projectId!, language),
       },
       clientOptions: {
         documentSelector: [language],
@@ -98,9 +133,151 @@ export function CodeViewer({ filePath, content, onSave }: CodeViewerProps) {
     };
   }, [language, projectId, socketRef]);
 
-  const handleEditorStartDone = useCallback(() => {
+  const handleEditorStartDone = useCallback((app?: EditorApp) => {
+    editorAppRef.current = app;
     setEditorReady(true);
   }, []);
+
+  const revealLineAt = useEditorStore((s) => s.revealLineAt);
+  const clearRevealLineAt = useEditorStore((s) => s.clearRevealLineAt);
+
+  useEffect(() => {
+    if (!revealLineAt || revealLineAt.filePath !== filePath || !editorReady) return;
+    const editor = editorAppRef.current?.getEditor();
+    if (!editor) return;
+
+    const line = revealLineAt.line;
+    clearRevealLineAt();
+
+    requestAnimationFrame(() => {
+      editor.revealLineInCenter(line);
+      editor.setPosition({ lineNumber: line, column: 1 });
+      editor.focus();
+    });
+  }, [revealLineAt, filePath, editorReady, clearRevealLineAt]);
+
+  const lspReady = lspStatus?.status === 'ready' && LSP_SUPPORTED_LANGUAGES.has(language);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const apex = (window as any).apex;
+    if (apex?.isElectron && apex.showContextMenu) {
+      const items = buildContextMenuItems(lspReady).map((item) => {
+        if (item.type === 'separator') return { type: 'separator' as const };
+        return {
+          label: item.label,
+          action: item.id,
+          accelerator: item.shortcut,
+          enabled: !item.disabled,
+        };
+      });
+      apex.showContextMenu(items).then((result: { action: string | null }) => {
+        if (result?.action) executeEditorAction(result.action);
+      });
+    } else {
+      setCtxMenu({ x: e.clientX, y: e.clientY });
+    }
+  }, [lspReady, language, filePath]);
+
+  const triggerEditorCommand = useCallback((editor: any, commandId: string) => {
+    editor.focus();
+    try {
+      const result = editor.trigger('ctxMenu', commandId, null);
+      if (result && typeof result.then === 'function') {
+        result.catch((err: unknown) => {
+          console.warn(`[CodeViewer] ${commandId} failed:`, err);
+        });
+      }
+    } catch (err) {
+      console.warn(`[CodeViewer] ${commandId} failed:`, err);
+    }
+  }, []);
+
+  const executeEditorAction = useCallback((actionId: string) => {
+    const editor = editorAppRef.current?.getEditor();
+    if (!editor) return;
+
+    switch (actionId) {
+      case 'goto-definition':
+        triggerEditorCommand(editor, 'editor.action.revealDefinition');
+        break;
+      case 'goto-type-definition':
+        triggerEditorCommand(editor, 'editor.action.goToTypeDefinition');
+        break;
+      case 'goto-implementations':
+        triggerEditorCommand(editor, 'editor.action.goToImplementation');
+        break;
+      case 'goto-references':
+        triggerEditorCommand(editor, 'editor.action.goToReferences');
+        break;
+      case 'find-all-references':
+        findAllLocations('textDocument/references', 'References');
+        break;
+      case 'find-all-implementations':
+        findAllLocations('textDocument/implementation', 'Implementations');
+        break;
+      case 'rename-symbol':
+        triggerEditorCommand(editor, 'editor.action.rename');
+        break;
+      case 'cut':
+        editor.focus();
+        document.execCommand('cut');
+        break;
+      case 'copy':
+        editor.focus();
+        document.execCommand('copy');
+        break;
+      case 'paste':
+        editor.focus();
+        navigator.clipboard.readText().then((text) => {
+          const selection = editor.getSelection();
+          if (selection) {
+            editor.executeEdits('paste', [{
+              range: selection,
+              text,
+              forceMoveMarkers: true,
+            }]);
+          }
+        }).catch(() => {
+          document.execCommand('paste');
+        });
+        break;
+    }
+  }, [language, filePath, triggerEditorCommand]);
+
+  const findAllLocations = useCallback((method: string, kind: string) => {
+    const editor = editorAppRef.current?.getEditor();
+    if (!editor || !socketRef.current || !projectId) return;
+
+    const position = editor.getPosition();
+    if (!position) return;
+
+    const model = editor.getModel();
+    const wordInfo = model?.getWordAtPosition(position);
+    const word = wordInfo?.word ?? '?';
+
+    const refsStore = useReferencesStore.getState();
+    refsStore.setLoading(true);
+    usePanelsStore.getState().openPanel('references');
+
+    const params: Record<string, unknown> = {
+      textDocument: { uri: `file://${filePath}` },
+      position: { line: position.lineNumber - 1, character: position.column - 1 },
+    };
+    if (method === 'textDocument/references') {
+      params.context = { includeDeclaration: true };
+    }
+
+    sendLspRequest(socketRef.current, projectId, language, method, params)
+      .then((result) => {
+        const locations = Array.isArray(result) ? result : [];
+        refsStore.setResults(`${kind} to '${word}'`, locations);
+      })
+      .catch((err) => {
+        console.error(`[CodeViewer] ${method} failed:`, err);
+        refsStore.setResults(`${kind} to '${word}' — error`, []);
+      });
+  }, [language, filePath, socketRef, projectId]);
 
   const showLspStatus = lspStatus && LSP_SUPPORTED_LANGUAGES.has(language);
 
@@ -126,7 +303,7 @@ export function CodeViewer({ filePath, content, onSave }: CodeViewerProps) {
           <Loader2 className="w-5 h-5 animate-spin text-text-muted" />
         </div>
       ) : (
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 overflow-hidden" onContextMenu={handleContextMenu}>
           <MonacoEditorReactComp
             vscodeApiConfig={vscodeApiConfig}
             editorAppConfig={editorAppConfig}
@@ -135,6 +312,15 @@ export function CodeViewer({ filePath, content, onSave }: CodeViewerProps) {
             onEditorStartDone={handleEditorStartDone}
             onError={(e) => console.error('[CodeViewer] Monaco error:', e)}
           />
+          {ctxMenu && (
+            <EditorContextMenu
+              x={ctxMenu.x}
+              y={ctxMenu.y}
+              items={buildContextMenuItems(lspReady)}
+              onAction={executeEditorAction}
+              onClose={() => setCtxMenu(null)}
+            />
+          )}
         </div>
       )}
     </div>

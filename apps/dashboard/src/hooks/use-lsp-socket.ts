@@ -23,8 +23,7 @@ export function useLspSocket(
 
     const onLspResponse = (_data: { payload: { language: string; jsonrpc: unknown } }) => {
       // LSP JSON-RPC responses are handled by the language client transport,
-      // not consumed directly here. This listener is a placeholder for future
-      // direct response handling if needed.
+      // not consumed directly here.
     };
 
     ws.on('lsp_status', onLspStatus);
