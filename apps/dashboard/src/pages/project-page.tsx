@@ -25,6 +25,7 @@ import { useAgentSettingsStore, type AgentTypeId } from '../stores/agent-setting
 import { useTerminalStore } from '../stores/terminal-store';
 import { CodeViewer } from '../components/editor/code-viewer';
 import { DiffViewer } from '../components/editor/diff-viewer';
+import { LspProvider } from '../components/editor/lsp-context';
 
 export function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -303,19 +304,21 @@ export function ProjectPage() {
       {(project.status === 'creating' || project.status === 'pulling_image' || project.status === 'starting' || project.status === 'stopping' || project.status === 'stopped' || project.status === 'error' || !layoutReady) && (
         <SandboxOverlay project={project} provisionMsg={provisionMsg} onStart={handleStartSandbox} onRestart={handleRestartSandbox} />
       )}
-      <CentralPanel
-        projectId={projectId}
-        projectAgentType={project.agentType}
-        githubContext={project.githubContext}
-        onSendPrompt={handleSendPrompt}
-        onSendSilentPrompt={sendPrompt}
-        onExecuteThread={handleExecuteThread}
-        onSendUserAnswer={sendUserAnswer}
-        onStopAgent={stopAgent}
-        readFile={fileActions.readFile}
-        writeFile={fileActions.writeFile}
-        requestListing={fileActions.requestListing}
-      />
+      <LspProvider socket={socket} projectId={projectId}>
+        <CentralPanel
+          projectId={projectId}
+          projectAgentType={project.agentType}
+          githubContext={project.githubContext}
+          onSendPrompt={handleSendPrompt}
+          onSendSilentPrompt={sendPrompt}
+          onExecuteThread={handleExecuteThread}
+          onSendUserAnswer={sendUserAnswer}
+          onStopAgent={stopAgent}
+          readFile={fileActions.readFile}
+          writeFile={fileActions.writeFile}
+          requestListing={fileActions.requestListing}
+        />
+      </LspProvider>
     </AppShell>
   );
 }

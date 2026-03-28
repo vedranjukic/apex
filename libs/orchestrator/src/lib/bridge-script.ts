@@ -844,7 +844,7 @@ function getOrStartLsp(language) {
   const entry = {
     proc: null, status: "starting", language, readyPromise,
     pendingRequests: new Map(),
-    onMessage: null,
+    capabilities: null,
   };
   lspServers.set(language, entry);
   emitLspStatus(language, "starting");
@@ -909,6 +909,7 @@ function getOrStartLsp(language) {
         rejectReady(new Error(resp.error.message || "Init failed"));
         return;
       }
+      entry.capabilities = resp.result ? resp.result.capabilities : {};
       lspSend(proc, { jsonrpc: "2.0", method: "initialized", params: {} });
       entry.status = "ready";
       emitLspStatus(language, "ready");
@@ -1163,11 +1164,33 @@ wss.on("connection", (ws) => {
       else if (msg.type === "lsp_data") {
         const lang = msg.language;
         if (lang && msg.jsonrpc) {
-          getOrStartLsp(lang).then(function(entry) {
-            lspSend(entry.proc, msg.jsonrpc);
-          }).catch(function(e) {
-            ws.send(JSON.stringify({ type: "lsp_response", language: lang, jsonrpc: { error: { code: -32600, message: e.message } } }));
-          });
+          const method = msg.jsonrpc.method;
+          if (method === "initialize") {
+            getOrStartLsp(lang).then(function(entry) {
+              ws.send(JSON.stringify({ type: "lsp_response", language: lang, jsonrpc: {
+                jsonrpc: "2.0", id: msg.jsonrpc.id,
+                result: { capabilities: entry.capabilities || {} },
+              }}));
+            }).catch(function(e) {
+              ws.send(JSON.stringify({ type: "lsp_response", language: lang, jsonrpc: {
+                jsonrpc: "2.0", id: msg.jsonrpc.id,
+                error: { code: -32600, message: e.message },
+              }}));
+            });
+          } else if (method === "initialized") {
+            // Already sent by bridge during init; ignore from client
+          } else {
+            getOrStartLsp(lang).then(function(entry) {
+              lspSend(entry.proc, msg.jsonrpc);
+            }).catch(function(e) {
+              if (msg.jsonrpc.id !== undefined) {
+                ws.send(JSON.stringify({ type: "lsp_response", language: lang, jsonrpc: {
+                  jsonrpc: "2.0", id: msg.jsonrpc.id,
+                  error: { code: -32600, message: e.message },
+                }}));
+              }
+            });
+          }
         }
       }
       else if (msg.type === "ping") { ws.send(JSON.stringify({ type: "pong" })); }

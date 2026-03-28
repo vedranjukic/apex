@@ -1,75 +1,67 @@
-import { useMemo } from 'react';
+import { useCallback, useState } from 'react';
 import { Loader2, X, GitCommitHorizontal } from 'lucide-react';
 import { MonacoEditorReactComp } from '@typefox/monaco-editor-react';
 import { configureDefaultWorkerFactory } from 'monaco-languageclient/workerFactory';
 import type { MonacoVscodeApiConfig } from 'monaco-languageclient/vscodeApiWrapper';
 import type { EditorAppConfig } from 'monaco-languageclient/editorApp';
 import { useEditorStore } from '../../stores/editor-store';
-import { useThemeStore } from '../../stores/theme-store';
 import { getLanguageFromPath } from './lang-map';
 import { cn } from '../../lib/cn';
 
-function getVscodeThemeName(themeId: string): string {
-  switch (themeId) {
-    case 'light': return 'Default Light Modern';
-    case 'dark': return 'Default Dark Modern';
-    case 'midnight-blue':
-    default:
-      return 'Default Dark Modern';
-  }
-}
+const vscodeApiConfig: MonacoVscodeApiConfig = {
+  $type: 'extended',
+  viewsConfig: {
+    $type: 'EditorService',
+  },
+  userConfiguration: {
+    json: JSON.stringify({
+      'workbench.colorTheme': 'Default Dark Modern',
+      'editor.minimap.enabled': false,
+      'editor.fontSize': 13,
+      'editor.fontFamily': "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
+      'editor.lineNumbers': 'on',
+      'editor.scrollBeyondLastLine': false,
+      'editor.padding.top': 8,
+      'editor.contextmenu': false,
+      'editor.readOnly': true,
+      'diffEditor.renderSideBySide': true,
+      'diffEditor.renderOverviewRuler': false,
+    }),
+  },
+  monacoWorkerFactory: configureDefaultWorkerFactory,
+};
 
 export function DiffViewer() {
   const diff = useEditorStore((s) => s.activeDiff);
   const closeDiff = useEditorStore((s) => s.closeDiff);
-  const themeId = useThemeStore((s) => s.themeId);
+  const [ready, setReady] = useState(false);
 
-  const vscodeApiConfig = useMemo<MonacoVscodeApiConfig>(() => ({
-    $type: 'extended',
-    viewsConfig: {
-      $type: 'EditorService',
-    },
-    userConfiguration: {
-      json: JSON.stringify({
-        'workbench.colorTheme': getVscodeThemeName(themeId),
-        'editor.minimap.enabled': false,
-        'editor.fontSize': 13,
-        'editor.fontFamily': "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
-        'editor.lineNumbers': 'on',
-        'editor.scrollBeyondLastLine': false,
-        'editor.padding.top': 8,
-        'editor.contextmenu': false,
-        'editor.readOnly': true,
-        'diffEditor.renderSideBySide': true,
-        'diffEditor.renderOverviewRuler': false,
-      }),
-    },
-    monacoWorkerFactory: configureDefaultWorkerFactory,
-  }), [themeId]);
-
-  const language = diff ? getLanguageFromPath(diff.filePath) : 'plaintext';
-
-  const editorAppConfig = useMemo<EditorAppConfig | null>(() => {
-    if (!diff || diff.loading) return null;
-    return {
-      codeResources: {
-        original: {
-          text: diff.original ?? '',
-          uri: `/workspace${diff.filePath}.original`,
-          enforceLanguageId: language,
-        },
-        modified: {
-          text: diff.modified ?? '',
-          uri: `/workspace${diff.filePath}.modified`,
-          enforceLanguageId: language,
-        },
-      },
-    };
-  }, [diff, language]);
+  const handleEditorStartDone = useCallback(() => {
+    setReady(true);
+  }, []);
 
   if (!diff) return null;
 
   const fileName = diff.filePath.split('/').pop() ?? diff.filePath;
+  const language = getLanguageFromPath(diff.filePath);
+
+  const editorAppConfig: EditorAppConfig | null =
+    diff.loading
+      ? null
+      : {
+          codeResources: {
+            original: {
+              text: diff.original ?? '',
+              uri: `file://${diff.filePath}.original`,
+              enforceLanguageId: language,
+            },
+            modified: {
+              text: diff.modified ?? '',
+              uri: `file://${diff.filePath}.modified`,
+              enforceLanguageId: language,
+            },
+          },
+        };
 
   return (
     <div className="flex flex-col h-full bg-surface text-text-primary">
@@ -109,6 +101,7 @@ export function DiffViewer() {
             vscodeApiConfig={vscodeApiConfig}
             editorAppConfig={editorAppConfig}
             style={{ height: '100%' }}
+            onEditorStartDone={handleEditorStartDone}
             onError={(e) => console.error('[DiffViewer] Monaco error:', e)}
           />
         </div>

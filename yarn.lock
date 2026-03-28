@@ -1692,6 +1692,13 @@
     "@codingame/monaco-vscode-api" "25.1.2"
     "@codingame/monaco-vscode-files-service-override" "25.1.2"
 
+"@codingame/monaco-vscode-css-default-extension@^25.1.2":
+  version "25.1.2"
+  resolved "https://registry.npmjs.org/@codingame/monaco-vscode-css-default-extension/-/monaco-vscode-css-default-extension-25.1.2.tgz"
+  integrity sha512-myNdWeU/24hGde44RDaY9KKnwvAfewG6yKMfJQBQxR0sVmHU43XwgwagtL2H2p3perLPGv3X1/2Vo/YfD/sIAg==
+  dependencies:
+    "@codingame/monaco-vscode-api" "25.1.2"
+
 "@codingame/monaco-vscode-editor-api@^25.1.2":
   version "25.1.2"
   resolved "https://registry.npmjs.org/@codingame/monaco-vscode-editor-api/-/monaco-vscode-editor-api-25.1.2.tgz"
@@ -1736,10 +1743,45 @@
   dependencies:
     "@codingame/monaco-vscode-api" "25.1.2"
 
+"@codingame/monaco-vscode-go-default-extension@^25.1.2":
+  version "25.1.2"
+  resolved "https://registry.npmjs.org/@codingame/monaco-vscode-go-default-extension/-/monaco-vscode-go-default-extension-25.1.2.tgz"
+  integrity sha512-qALsgRSwsZW5g83wEiTIMThOtcYWIFUAgj1d56N44Q7h/nyvl6G4u0bVxIfv4W6Cj0uWXqKkzEgP/OOpV/bItw==
+  dependencies:
+    "@codingame/monaco-vscode-api" "25.1.2"
+
 "@codingame/monaco-vscode-host-service-override@25.1.2":
   version "25.1.2"
   resolved "https://registry.npmjs.org/@codingame/monaco-vscode-host-service-override/-/monaco-vscode-host-service-override-25.1.2.tgz"
   integrity sha512-lgaalpA9CUQW7i0bBwgBOK0DQNDvOo3QO3p6Rz6yVsHpgA4iMqq2d11dBDUKvuQSwIHPRu8CMHCqhQk/BQN/YA==
+  dependencies:
+    "@codingame/monaco-vscode-api" "25.1.2"
+
+"@codingame/monaco-vscode-html-default-extension@^25.1.2":
+  version "25.1.2"
+  resolved "https://registry.npmjs.org/@codingame/monaco-vscode-html-default-extension/-/monaco-vscode-html-default-extension-25.1.2.tgz"
+  integrity sha512-K6K3KOTA0wcJnip+bdtK2SkjG6c/gptJGIsmtzMY4/oL7e/3hcbSs941on98isxix6pLnMUwTu1agKcF8jQhqA==
+  dependencies:
+    "@codingame/monaco-vscode-api" "25.1.2"
+
+"@codingame/monaco-vscode-java-default-extension@^25.1.2":
+  version "25.1.2"
+  resolved "https://registry.npmjs.org/@codingame/monaco-vscode-java-default-extension/-/monaco-vscode-java-default-extension-25.1.2.tgz"
+  integrity sha512-9B+gEFghGxCuNb/PAHPUnjBbuNWm0FKpinxeuyBUUh92hOeVLxaKfjFsXAaf1I4q507LfEkufqxQndsQFFxskA==
+  dependencies:
+    "@codingame/monaco-vscode-api" "25.1.2"
+
+"@codingame/monaco-vscode-javascript-default-extension@^25.1.2":
+  version "25.1.2"
+  resolved "https://registry.npmjs.org/@codingame/monaco-vscode-javascript-default-extension/-/monaco-vscode-javascript-default-extension-25.1.2.tgz"
+  integrity sha512-SIrq+EfJ9Nk+aTjOXBPdp2+K242W6lAlGYjln/AnwNa+1h0roQ07efZNV0LBkVrwH4wmT9TmN/IXE2Boau37cQ==
+  dependencies:
+    "@codingame/monaco-vscode-api" "25.1.2"
+
+"@codingame/monaco-vscode-json-default-extension@^25.1.2":
+  version "25.1.2"
+  resolved "https://registry.npmjs.org/@codingame/monaco-vscode-json-default-extension/-/monaco-vscode-json-default-extension-25.1.2.tgz"
+  integrity sha512-lbzUZr8E2vg40bQFhWFq/qc0QqnRHKKWwCuxymkv0kpVgyXlS52EjjvrhvOo8TV/r7eLg+R0yHzF4IKWgltGrA==
   dependencies:
     "@codingame/monaco-vscode-api" "25.1.2"
 
@@ -1879,6 +1921,13 @@
     "@codingame/monaco-vscode-api" "25.1.2"
     "@codingame/monaco-vscode-environment-service-override" "25.1.2"
 
+"@codingame/monaco-vscode-markdown-basics-default-extension@^25.1.2":
+  version "25.1.2"
+  resolved "https://registry.npmjs.org/@codingame/monaco-vscode-markdown-basics-default-extension/-/monaco-vscode-markdown-basics-default-extension-25.1.2.tgz"
+  integrity sha512-7zWs5J9172T7itiPKo7z+UVLmohqR+vF3HdgyjwUDAcG3dTnXbRox04CMNl/KK/Pzujju4ZsZDPzkhJvrPjR3w==
+  dependencies:
+    "@codingame/monaco-vscode-api" "25.1.2"
+
 "@codingame/monaco-vscode-model-service-override@^25.1.2":
   version "25.1.2"
   resolved "https://registry.npmjs.org/@codingame/monaco-vscode-model-service-override/-/monaco-vscode-model-service-override-25.1.2.tgz"
@@ -1890,6 +1939,13 @@
   version "25.1.2"
   resolved "https://registry.npmjs.org/@codingame/monaco-vscode-monarch-service-override/-/monaco-vscode-monarch-service-override-25.1.2.tgz"
   integrity sha512-akyNHOJQRS7YHyk6kf0Encnkt+shlR+bIB84UJRUHFgSeF8s5gkDkQuFJph0YeUDWJWat+yBLUSZx2nHomdbHQ==
+  dependencies:
+    "@codingame/monaco-vscode-api" "25.1.2"
+
+"@codingame/monaco-vscode-python-default-extension@^25.1.2":
+  version "25.1.2"
+  resolved "https://registry.npmjs.org/@codingame/monaco-vscode-python-default-extension/-/monaco-vscode-python-default-extension-25.1.2.tgz"
+  integrity sha512-2W5pHtn2yOayGr7lcwQFNlbkyziaM7yK1Gq5cxFKXYgsReHTRAx+SN5xMachkms/mSnulH2rww+HbDW2zRHf0A==
   dependencies:
     "@codingame/monaco-vscode-api" "25.1.2"
 
@@ -1911,6 +1967,13 @@
     mime-types "^3.0.2"
     thenby "^1.3.4"
     yauzl "^3.0.0"
+
+"@codingame/monaco-vscode-rust-default-extension@^25.1.2":
+  version "25.1.2"
+  resolved "https://registry.npmjs.org/@codingame/monaco-vscode-rust-default-extension/-/monaco-vscode-rust-default-extension-25.1.2.tgz"
+  integrity sha512-7FOdXtd2hqleG11OCcvjbpb2sweb8n0c+uPlg2gIyJrvuPdyX7+W2fgJQm+DtmfQN2+/LNeYz9EOxjBC43kL0w==
+  dependencies:
+    "@codingame/monaco-vscode-api" "25.1.2"
 
 "@codingame/monaco-vscode-textmate-service-override@^25.1.2":
   version "25.1.2"
@@ -1934,6 +1997,13 @@
   dependencies:
     "@codingame/monaco-vscode-api" "25.1.2"
     "@codingame/monaco-vscode-files-service-override" "25.1.2"
+
+"@codingame/monaco-vscode-typescript-basics-default-extension@^25.1.2":
+  version "25.1.2"
+  resolved "https://registry.npmjs.org/@codingame/monaco-vscode-typescript-basics-default-extension/-/monaco-vscode-typescript-basics-default-extension-25.1.2.tgz"
+  integrity sha512-tGpGAvVsINHodqPtjZDEOkjXAKLWiCr90P/dNC7W8XghxUHzQHqYmAunkkcJXWcRluaXcNBvPGplm1GaQfn3lQ==
+  dependencies:
+    "@codingame/monaco-vscode-api" "25.1.2"
 
 "@codingame/monaco-vscode-view-banner-service-override@25.1.2":
   version "25.1.2"
@@ -1987,6 +2057,13 @@
     "@codingame/monaco-vscode-view-common-service-override" "25.1.2"
     "@codingame/monaco-vscode-view-status-bar-service-override" "25.1.2"
     "@codingame/monaco-vscode-view-title-bar-service-override" "25.1.2"
+
+"@codingame/monaco-vscode-yaml-default-extension@^25.1.2":
+  version "25.1.2"
+  resolved "https://registry.npmjs.org/@codingame/monaco-vscode-yaml-default-extension/-/monaco-vscode-yaml-default-extension-25.1.2.tgz"
+  integrity sha512-Tew43Zof0MiEJkaVD5pi0crAgZE+BoGsJR1T7KuzUQo77GEMBF4UyXkPS3ZPadBa51/F/G0Wa4gGCDgCWIHi+A==
+  dependencies:
+    "@codingame/monaco-vscode-api" "25.1.2"
 
 "@daytonaio/api-client@0.131.0-alpha.2":
   version "0.131.0-alpha.2"

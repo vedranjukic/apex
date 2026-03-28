@@ -11,7 +11,7 @@ const version = readFileSync(resolve(import.meta.dirname, '../../VERSION'), 'utf
 
 export default defineConfig(() => ({
   root: import.meta.dirname,
-  cacheDir: '../../node_modules/.vite/apps/dashboard',
+  // cacheDir: '../../node_modules/.vite/apps/dashboard',
   server: {
     port: 4200,
     host: '0.0.0.0',

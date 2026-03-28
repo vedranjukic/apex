@@ -2170,10 +2170,16 @@ export class SandboxManager extends EventEmitter {
     const ocConfigDir = `${homeDir}/.config/opencode`;
     await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}' '${bridgeDir}' '${homeDir}/.opencode/agents'`);
 
-    const alwaysWriteFiles: { path: string; content: string }[] = [
+    // Split large files into separate batches to avoid exceeding Daytona exec limits.
+    // bridge.cjs alone is ~50KB base64; adding MCP scripts would exceed the limit.
+    const bridgeFiles: { path: string; content: string }[] = [
       { path: `${bridgeDir}/bridge.cjs`, content: bridgeCode },
+    ];
+    const mcpFiles: { path: string; content: string }[] = [
       { path: `${bridgeDir}/mcp-terminal-server.cjs`, content: mcpCode },
       { path: `${bridgeDir}/mcp-lsp-server.cjs`, content: mcpLspCode },
+    ];
+    const configFiles: { path: string; content: string }[] = [
       { path: `${ocConfigDir}/opencode.json`, content: JSON.stringify(openCodeConfig) },
     ];
     const skipIfExistsFiles: { path: string; content: string }[] = [
@@ -2186,15 +2192,16 @@ export class SandboxManager extends EventEmitter {
     const existingPaths = new Set(
       (existCheck.result ?? "").split("\n").map(l => l.trim()).filter(Boolean),
     );
-    const infraFiles: { path: string; content: string }[] = [
-      ...alwaysWriteFiles,
-      ...skipIfExistsFiles.filter(f => !existingPaths.has(f.path)),
-    ];
+    const promptFiles = skipIfExistsFiles.filter(f => !existingPaths.has(f.path));
     if (this.config.secretsProxyCaCert && secretsProxyUrl && !isLocalProvider) {
-      infraFiles.push({ path: CA_CERT_PATH, content: this.config.secretsProxyCaCert });
+      configFiles.push({ path: CA_CERT_PATH, content: this.config.secretsProxyCaCert });
     }
 
-    const writeInfraTask = this.batchWriteFiles(sandbox, infraFiles).then(() => log("infra files written"));
+    const writeInfraTask = Promise.all([
+      this.batchWriteFiles(sandbox, bridgeFiles),
+      this.batchWriteFiles(sandbox, mcpFiles),
+      this.batchWriteFiles(sandbox, [...configFiles, ...promptFiles]),
+    ]).then(() => log("infra files written"));
 
     // ── Exec 2: git clone/init (parallel with infra writes, projectDir must be empty for clone) ──
     const gitTask = (async () => {
