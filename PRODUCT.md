@@ -100,11 +100,14 @@ When using the **Plan** agent, responses render in a dedicated plan format:
 
 ### Integrated Editor
 
-A Monaco-based code editor built into the workspace:
+A Monaco-based code editor with full Language Server Protocol (LSP) support, built into the workspace:
 
+- **Language intelligence** — hover information, autocompletion, go-to-definition, find references, and real-time diagnostics powered by language servers running inside the sandbox (TypeScript, Python, Go, Rust, Java)
+- **On-demand LSP activation** — language servers start lazily when you first open a file of that language, with a status indicator showing initialization progress
 - **Tabbed interface** — open multiple files with tab management, dirty-state dot indicators, and save support
 - **Thread ↔ Editor toggle** — switch the center panel between the AI thread and the code editor from the top bar
 - **Snippet copy** — copying code from the editor puts structured snippet data on the clipboard for pasting into prompts as precise references
+- **Agent LSP access** — the AI agent can use LSP tools (hover, definition, references, diagnostics, completions, symbols) via MCP, sharing the same language servers as the editor
 
 ### Integrated Terminals
 

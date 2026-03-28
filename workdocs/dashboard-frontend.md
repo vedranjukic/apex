@@ -1,7 +1,7 @@
 # Dashboard Frontend — Layout & Component Reference
 
 > **Package**: `@apex/dashboard` · **Path**: `apps/dashboard/`
-> **Stack**: React 19, Vite, Tailwind CSS v4, Zustand, Socket.io, xterm.js, Monaco Editor
+> **Stack**: React 19, Vite, Tailwind CSS v4, Zustand, Socket.io, xterm.js, Monaco Editor (via `@typefox/monaco-editor-react` + `monaco-languageclient`)
 > **Dev server**: `http://localhost:4200` — proxies `/api` and `/ws` to the API at `localhost:6000`
 
 ---
@@ -42,9 +42,10 @@ apps/dashboard/src/
 │   │   ├── project-list.tsx        # Card grid of projects with create/open/delete actions
 │   │   └── create-project-dialog.tsx # Modal form for creating a new project
 │   ├── editor/
-│   │   ├── code-viewer.tsx         # Monaco-based file editor (syntax highlighting, save, snippet copy)
+│   │   ├── code-viewer.tsx         # Monaco-based file editor with LSP (MonacoEditorReactComp)
 │   │   ├── diff-viewer.tsx         # Monaco DiffEditor — side-by-side git diff view (read-only)
-│   │   ├── apex-theme.ts           # Custom Monaco dark theme matching app design tokens
+│   │   ├── lsp-transport.ts        # Socket.io ↔ JSON-RPC message transport for language clients
+│   │   ├── lsp-context.tsx         # React context managing per-language LSP client lifecycle
 │   │   └── lang-map.ts             # Maps file extensions / filenames to Monaco language IDs
 │   └── terminal/
 │       ├── terminal-panel.tsx      # Resizable terminal panel with drag handle & auto-create logic
@@ -58,7 +59,8 @@ apps/dashboard/src/
 │   ├── use-file-tree-socket.ts     # File explorer: listing, CRUD, read, write via socket
 │   ├── use-search-socket.ts        # Grep-based file search via socket
 │   ├── use-git-socket.ts           # Git operations (status, stage, commit, push/pull, branches, checkout)
-│   └── use-ports-socket.ts         # Port scanning & preview URL requests
+│   ├── use-ports-socket.ts         # Port scanning & preview URL requests
+│   └── use-lsp-socket.ts           # LSP data/status events via socket
 ├── stores/
 │   ├── projects-store.ts           # Zustand store — project CRUD
 │   ├── tasks-store.ts              # Zustand store — threads, messages, active thread
@@ -70,7 +72,8 @@ apps/dashboard/src/
 │   ├── plan-store.ts               # Zustand store — plan mode state (plan text accumulation, completion)
 │   ├── agent-settings-store.ts     # Zustand store — agent type (build/plan/sisyphus) and model selection
 │   ├── ports-store.ts              # Zustand store — forwarded ports list from sandbox port scanning
-│   └── git-store.ts                # Zustand store — git status, branches, optimistic staging/unstaging
+│   ├── git-store.ts                # Zustand store — git status, branches, optimistic staging/unstaging
+│   └── lsp-store.ts                # Zustand store — per-language LSP server status (starting/ready/error/stopped)
 └── lib/
     ├── cn.ts                       # clsx + tailwind-merge helper
     ├── model-context.ts            # Model context window sizes + token formatting helpers
@@ -208,12 +211,13 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 
 ### 4.4 Editor Components (`components/editor/`)
 
-| Component         | Purpose |
-| ----------------- | ------- |
-| **CodeViewer**    | Full-featured file editor powered by `@monaco-editor/react`. Renders a tab bar (file name + dirty indicator dot) and the Monaco editor below. Theme: custom "apex-dark" (defined in `apex-theme.ts`). Language detection via `getLanguageFromPath()`. Registers two Monaco actions: **Ctrl/Cmd+C** (copy with `CodeSelection` metadata for snippet references), **Ctrl/Cmd+S** (save file via `onSave` prop → socket `file_write`). Tracks unsaved changes in `useEditorStore.dirtyFiles`. |
-| **DiffViewer**    | Read-only side-by-side diff view using Monaco's `DiffEditor`. Reads `useEditorStore.activeDiff` for original/modified content. Header bar: file name, "Staged"/"Changes" badge, full path, close button. Opened when clicking a file in the source control panel via `gitActions.requestDiff()`. |
-| **apex-theme.ts** | `IStandaloneThemeData` for Monaco. `vs-dark` base with custom colors matching the app's dark palette (`#1e2132` editor background, `#6366f1` cursor/selection). |
-| **lang-map.ts**   | `getLanguageFromPath(filePath)` — maps file extensions (`.ts`, `.py`, `.go`, etc.) and special filenames (`Dockerfile`, `Makefile`, `.env`) to Monaco language IDs. Falls back to `plaintext`. |
+| Component            | Purpose |
+| -------------------- | ------- |
+| **CodeViewer**       | Full-featured file editor powered by `@typefox/monaco-editor-react` (`MonacoEditorReactComp`) with `monaco-languageclient` providing VS Code services and LSP integration. Renders a tab bar (file name + dirty indicator dot) and the editor below. Theme: "Default Dark Modern" via VS Code `userConfiguration`. Language detection via `getLanguageFromPath()`. LSP features (hover, completions, go-to-definition, diagnostics) are provided automatically when the bridge has a running language server for the file's language. Registers Monaco actions for save (Ctrl/Cmd+S) and copy with `CodeSelection` metadata (Ctrl/Cmd+C). Tracks unsaved changes in `useEditorStore.dirtyFiles`. |
+| **DiffViewer**       | Read-only side-by-side diff view using `MonacoEditorReactComp` in diff mode (`codeResources.original` + `codeResources.modified`). Reads `useEditorStore.activeDiff` for content. Header bar: file name, "Staged"/"Changes" badge, full path, close button. Opened when clicking a file in the source control panel via `gitActions.requestDiff()`. |
+| **lsp-transport.ts** | Custom `MessageTransport` bridging Socket.io `lsp_data`/`lsp_response` events to the JSON-RPC reader/writer expected by `vscode-languageclient`. One transport per language. |
+| **lsp-context.tsx**  | React context that manages the lifecycle of language clients. On file open, determines the language, creates or reuses a `LanguageClientWrapper`, and connects it via the Socket.io transport. Exposes LSP status per language. |
+| **lang-map.ts**      | `getLanguageFromPath(filePath)` — maps file extensions (`.ts`, `.py`, `.go`, etc.) and special filenames (`Dockerfile`, `Makefile`, `.env`) to Monaco language IDs and LSP language identifiers. Falls back to `plaintext`. |
 
 ### 4.5 Terminal Components (`components/terminal/`)
 
@@ -362,7 +366,19 @@ When switching to a thread that has a stored `agentType`, `AgentThread` calls `s
 | `applyLayout(data)`           | Restores open files, active file, and view from saved layout |
 | `reset()`                     | Clears all editor state |
 
-### 5.9 `useFileTreeStore` (`stores/file-tree-store.ts`)
+### 5.9 `useLspStore` (`stores/lsp-store.ts`)
+
+| Field / Action                | Type / Description |
+| ----------------------------- | ------------------ |
+| `statuses`                    | `Record<string, LspStatus>` — per-language LSP status (`starting` / `ready` / `error` / `stopped`) |
+| `errors`                      | `Record<string, string>` — per-language error messages |
+| `setStatus(language, status, error?)` | Updates the status (and optional error) for a language |
+| `getStatus(language)`         | Returns the current status for a language |
+| `reset()`                     | Clears all LSP state |
+
+Populated by `lsp_status` events relayed from the bridge through the NestJS gateway.
+
+### 5.10 `useFileTreeStore` (`stores/file-tree-store.ts`)
 
 | Field / Action                | Type / Description |
 | ----------------------------- | ------------------ |
@@ -426,6 +442,13 @@ All hooks share **one Socket.io connection** created by `useAgentSocket` (namesp
 - Updates `useGitStore` with status data, branch list, and loading state.
 - `requestDiff(path, staged)` calls `useEditorStore.openDiff()` and sends `git_diff`; `git_diff_result` listener calls `useEditorStore.setDiffContent()`.
 
+### 6.7 `useLspSocket`
+
+- **Emits**: `lsp_data` (raw JSON-RPC messages to the bridge LSP manager, tagged with `language`)
+- **Listens**: `lsp_response` (JSON-RPC from LSP server), `lsp_status` (per-language server status: starting/ready/error/stopped)
+- Updates `useLspStore` with language server status.
+- Provides the Socket.io instance to `lsp-transport.ts` for the language client's message transport.
+
 ---
 
 ## 7. API Client (`api/client.ts`)
@@ -464,10 +487,10 @@ The app supports three color themes, selectable via the Settings panel, command 
 
 **Key files:**
 - `stores/theme-store.ts` — Zustand store: `themeId`, `setTheme(id)`, `cycleTheme()`. Persists to `localStorage` key `apex-theme`.
-- `lib/themes.ts` — Theme registry: CSS token values, Monaco `IStandaloneThemeData`, xterm `ITheme` per theme.
+- `lib/themes.ts` — Theme registry: CSS token values, xterm `ITheme` per theme.
 - `styles.css` — CSS custom properties per `[data-theme]` attribute on `<html>`.
 
-**How it works:** `styles.css` defines intermediate `--t-*` CSS custom properties that the Tailwind `@theme` block references. Theme switching sets a `data-theme` attribute on `<html>`, which overrides the `--t-*` properties. This makes all Tailwind utility classes (e.g. `bg-surface`, `text-text-primary`) theme-aware automatically. Monaco editor and xterm terminal themes are switched independently via their respective APIs in `code-viewer.tsx` and `terminal-tab.tsx`.
+**How it works:** `styles.css` defines intermediate `--t-*` CSS custom properties that the Tailwind `@theme` block references. Theme switching sets a `data-theme` attribute on `<html>`, which overrides the `--t-*` properties. This makes all Tailwind utility classes (e.g. `bg-surface`, `text-text-primary`) theme-aware automatically. Monaco editor theming is controlled via VS Code's `userConfiguration` JSON (`workbench.colorTheme` setting) in the `MonacoEditorReactComp` config; xterm terminal themes are switched via the xterm API in `terminal-tab.tsx`.
 
 **Adding a new theme:** Add the theme definition to `lib/themes.ts` (CSS tokens, Monaco colors, terminal colors), add the CSS variable overrides in `styles.css` under `[data-theme="your-id"]`, and add the `ThemeId` union member.
 

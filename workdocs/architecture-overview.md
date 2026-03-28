@@ -126,6 +126,7 @@ Example: user asks *"start the dev server so I can watch it"* → agent calls `o
 - File events: `file_list`, `file_create`, `file_rename`, `file_delete`, `file_move`, `file_read`, `file_write` (client→server); `file_list_result`, `file_op_result`, `file_changed`, `file_read_result`, `file_write_result` (server→client)
 - Project info events: `project_info` (client→server + server→client) – returns `{ gitBranch, projectDir }` for the status bar and file tree root
 - Git branch events: `git_branches`, `git_create_branch`, `git_checkout` (client→server); `git_branches_result` (server→client) – branch list and switching
+- LSP events: `lsp_data` (client→server, raw JSON-RPC to LSP server); `lsp_response` (server→client, JSON-RPC from LSP server); `lsp_status` (server→client, per-language server status). All carry a `language` field for routing.
 - Payload uses `threadId` (maps to internal `taskId` in DB)
 
 ## Message Rendering
@@ -288,14 +289,54 @@ For Daytona sandboxes, the MCP tool falls back to the Daytona API's signed previ
 - Panel toggle bar always visible; panel hidden by default
 - Zustand store (`useTerminalStore`) tracks terminals, active tab, panel open/closed state
 
-## File Editor (Monaco)
+## File Editor (Monaco + LSP)
 The central panel toggles between `AgentThread` and `CodeViewer` based on `useEditorStore.activeView`.
 
 - Clicking a file in the explorer calls `useEditorStore.openFile()` (switches to `editor` view) and emits `file_read` via socket to fetch content.
-- `CodeViewer` renders `@monaco-editor/react` with a custom "apex-dark" theme (`apex-theme.ts`) and auto-detected language (`lang-map.ts`).
+- `CodeViewer` renders `@typefox/monaco-editor-react` (`MonacoEditorReactComp`) backed by `monaco-languageclient` and VS Code services (`@codingame/monaco-vscode-*`). Theme is "Default Dark Modern" via VS Code's `userConfiguration`. Language detection via `lang-map.ts`.
+- **LSP integration**: On file open, `lsp-context.tsx` determines the language and connects a `LanguageClientWrapper` via a custom Socket.io transport (`lsp-transport.ts`). LSP messages flow: dashboard → Socket.io `lsp_data` → NestJS relay → bridge → LSP server (stdio), and back via `lsp_response`. One language client per language, shared across all open files. Per-language status (starting/ready/error) is tracked in `lsp-store.ts` via `lsp_status` events.
 - **Save flow**: Ctrl/Cmd+S → `editor.save` command → `writeFile(path, content)` → socket `file_write` → gateway → `SandboxManager.writeFile()` → `sandbox.fs.uploadFile()`. On success, gateway emits `file_write_result { ok: true }` → `useEditorStore.markClean()` clears the dirty indicator.
 - **Snippet copy**: Ctrl/Cmd+C in the editor attaches `CodeSelection` metadata (file path, line/char range) to the clipboard alongside the plain text. This metadata is used by the prompt input for `@`-referenced code snippets.
 - Dirty files are tracked in `useEditorStore.dirtyFiles` (a `Set<string>`). Unsaved changes show a dot in the file tab bar.
+
+## LSP (Language Server Protocol)
+
+The bridge inside each sandbox manages LSP servers for language intelligence (completions, hover, go-to-definition, diagnostics). Two consumers: the dashboard editor (real-time) and the agent (via MCP tools).
+
+### Bridge LSP Manager
+
+`bridge-script.ts` contains an LSP process manager:
+
+- **On-demand activation**: LSP servers spawn lazily on the first request for a language. No servers run at boot.
+- **Language → command mapping**: `typescript`/`javascript` → `typescript-language-server --stdio`, `python` → `pylsp`, `go` → `gopls`, `rust` → `rust-analyzer`, `java` → `jdtls`
+- Sends `initialize` handshake with the correct `rootUri`
+- Emits `lsp_status` messages (starting/ready/error/stopped) over the bridge WebSocket
+- Handles restart-on-crash and cleanup on disconnect
+- Two interfaces:
+  1. **Streaming** (dashboard): WebSocket `lsp_data`/`lsp_response` message forwarding of raw JSON-RPC
+  2. **Request/response** (agent MCP): `POST /internal/lsp-request` sends a single LSP request and returns the response
+
+### MCP LSP Server (Agent)
+
+`mcp-lsp-script.ts` exposes LSP operations as MCP tools for the agent:
+
+| MCP Tool | Description |
+|---|---|
+| `lsp_hover` | Get hover info at file:line:col |
+| `lsp_definition` | Go to definition |
+| `lsp_references` | Find all references |
+| `lsp_diagnostics` | Get diagnostics for a file |
+| `lsp_completions` | Get completions at position |
+| `lsp_symbols` | List document or workspace symbols |
+
+Each tool calls `POST /internal/lsp-request` on the bridge. Registered in `opencode.json` alongside the terminal MCP server.
+
+### Dashboard LSP Client
+
+- `lsp-transport.ts`: Custom `MessageTransport` bridging Socket.io events to JSON-RPC reader/writer
+- `lsp-context.tsx`: React context managing language client lifecycle per open file
+- `lsp-store.ts`: Zustand store tracking per-language LSP status from `lsp_status` events
+- `use-lsp-socket.ts`: Socket.io hook for LSP + status event handling
 
 ## Project Status Bar
 A single-line bottom bar displays project info and git controls (VS Code-style).
@@ -336,7 +377,8 @@ apps/api/src/modules/projects/projects.service.ts – Project CRUD + sandbox pro
 libs/orchestrator/src/lib/sandbox-manager.ts    – Sandbox lifecycle + bridge WS + terminal methods
 libs/orchestrator/src/lib/bridge-script.ts      – JS code uploaded into sandbox (OpenCode adapter + PTY terminals + HTTP API)
 libs/orchestrator/src/lib/mcp-terminal-script.ts – MCP server script for agent-driven terminals
-libs/orchestrator/src/lib/types.ts              – Bridge message types (agent + terminal)
+libs/orchestrator/src/lib/mcp-lsp-script.ts      – MCP server script for agent LSP tools (hover, definition, references, diagnostics, completions, symbols)
+libs/orchestrator/src/lib/types.ts              – Bridge message types (agent + terminal + LSP)
 apps/dashboard/src/hooks/use-agent-socket.ts    – Socket.io hook for real-time streaming
 apps/dashboard/src/hooks/use-terminal-socket.ts – Socket.io hook for terminal events + XtermRegistry
 apps/dashboard/src/hooks/use-layout-socket.ts   – Socket.io hook for layout persistence (debounced save/restore + localStorage fallback)
@@ -355,9 +397,12 @@ apps/dashboard/src/components/agent/thread-stats-bar.tsx – Aggregated thread s
 apps/dashboard/src/lib/model-context.ts             – Model context window sizes + token formatting helpers
 apps/dashboard/src/components/agent/plan-block.tsx     – Inline plan card (markdown + Build button)
 apps/dashboard/src/components/agent/markdown-block.tsx  – Inline collapsible markdown card (summaries)
-apps/dashboard/src/components/editor/code-viewer.tsx      – Monaco-based file editor (syntax highlighting, save, snippet copy)
-apps/dashboard/src/components/editor/apex-theme.ts        – Custom Monaco dark theme
+apps/dashboard/src/components/editor/code-viewer.tsx      – Monaco-based file editor (LSP-enabled, syntax highlighting, save, snippet copy)
+apps/dashboard/src/components/editor/lsp-transport.ts     – Socket.io → JSON-RPC message transport for language clients
+apps/dashboard/src/components/editor/lsp-context.tsx      – React context managing per-language LSP client lifecycle
 apps/dashboard/src/components/editor/lang-map.ts          – File extension → Monaco language ID mapping
+apps/dashboard/src/stores/lsp-store.ts                     – Zustand store — per-language LSP server status
+apps/dashboard/src/hooks/use-lsp-socket.ts                 – Socket.io hook for LSP data/status events
 apps/dashboard/src/components/terminal/terminal-panel.tsx  – Resizable bottom panel with tabs
 apps/dashboard/src/components/terminal/terminal-tab.tsx    – Single xterm.js terminal renderer
 apps/dashboard/src/components/terminal/terminal-tabs.tsx   – Tab bar (names, +, x)
