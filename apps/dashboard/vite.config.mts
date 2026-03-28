@@ -2,6 +2,8 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import vsixPlugin from '@codingame/monaco-vscode-rollup-vsix-plugin';
+import importMetaUrlPlugin from '@codingame/esbuild-import-meta-url-plugin';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -29,7 +31,15 @@ export default defineConfig(() => ({
     port: 4200,
     host: '0.0.0.0',
   },
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), vsixPlugin()],
+  optimizeDeps: {
+    esbuildOptions: {
+      plugins: [importMetaUrlPlugin],
+    },
+  },
+  worker: {
+    format: 'es' as const,
+  },
   define: {
     __APP_VERSION__: JSON.stringify(version),
   },

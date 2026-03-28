@@ -215,6 +215,11 @@ func (m *Manager) installBridge(ctx context.Context, sandbox *daytona.Sandbox, p
 		return fmt.Errorf("upload mcp-terminal-server.js: %w", err)
 	}
 
+	mcpLspJS := GenerateMCPLspScript(bridgePort)
+	if err := sandbox.FileSystem.UploadFile(ctx, []byte(mcpLspJS), bridgeDir+"/mcp-lsp-server.js"); err != nil {
+		return fmt.Errorf("upload mcp-lsp-server.js: %w", err)
+	}
+
 	// Pre-warm OpenCode (triggers one-time DB migration)
 	exec(ctx, sandbox, fmt.Sprintf(
 		"cd %s && HOME=/home/daytona /home/daytona/.opencode/bin/opencode session list 2>&1; echo opencode pre-warm done",
@@ -257,6 +262,11 @@ func (m *Manager) installBridge(ctx context.Context, sandbox *daytona.Sandbox, p
 			"terminal-server": map[string]interface{}{
 				"type":    "local",
 				"command": []string{"node", bridgeDir + "/mcp-terminal-server.js"},
+				"timeout": 300000,
+			},
+			"lsp-server": map[string]interface{}{
+				"type":    "local",
+				"command": []string{"node", bridgeDir + "/mcp-lsp-server.js"},
 				"timeout": 300000,
 			},
 		},

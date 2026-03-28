@@ -16,6 +16,7 @@ import { useFileTreeSocket } from '../hooks/use-file-tree-socket';
 import { useSearchSocket } from '../hooks/use-search-socket';
 import { useGitSocket } from '../hooks/use-git-socket';
 import { usePortsSocket } from '../hooks/use-ports-socket';
+import { useLspSocket } from '../hooks/use-lsp-socket';
 import { useThreadsStore } from '../stores/tasks-store';
 import { useProjectCommands } from '../hooks/use-project-commands';
 import { useEditorStore, type CodeSelection } from '../stores/editor-store';
@@ -37,6 +38,7 @@ export function ProjectPage() {
   const { search: searchFiles } = useSearchSocket(projectId, socket);
   const gitActions = useGitSocket(projectId, socket);
   const { requestPreviewUrl, forwardPort } = usePortsSocket(projectId, socket);
+  useLspSocket(projectId, socket);
   const addMessage = useThreadsStore((s) => s.addMessage);
   const createThread = useThreadsStore((s) => s.createThread);
   const fetchThreads = useThreadsStore((s) => s.fetchThreads);

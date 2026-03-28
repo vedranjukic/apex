@@ -36,6 +36,7 @@ import {
 } from "./types.js";
 import { getBridgeScript } from "./bridge-script.js";
 import { getMcpTerminalScript } from "./mcp-terminal-script.js";
+import { getMcpLspScript } from "./mcp-lsp-script.js";
 
 const BRIDGE_PORT = 8080;
 const VSCODE_PORT = 9090;
@@ -796,6 +797,18 @@ export class SandboxManager extends EventEmitter {
   async listTerminals(sandboxId: string): Promise<void> {
     const session = await this.ensureConnected(sandboxId);
     session.ws!.send(JSON.stringify({ type: "terminal_list" }));
+  }
+
+  /** Forward LSP JSON-RPC data to the bridge for a specific language */
+  async sendLspData(
+    sandboxId: string,
+    language: string,
+    jsonrpc: Record<string, unknown>,
+  ): Promise<void> {
+    const session = await this.ensureConnected(sandboxId);
+    session.ws!.send(
+      JSON.stringify({ type: "lsp_data", language, jsonrpc }),
+    );
   }
 
   // ── VS Code (code-server) methods ─────────────────
@@ -1871,15 +1884,33 @@ export class SandboxManager extends EventEmitter {
             command: ["node", `${bridgeDir}/mcp-terminal-server.cjs`],
             timeout: 300000,
           },
+          "lsp-server": {
+            type: "local",
+            command: ["node", `${bridgeDir}/mcp-lsp-server.cjs`],
+            timeout: 300000,
+          },
         },
       };
       const ocConfigDir = `${homeDir}/.config/opencode`;
       await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}'`);
-      await sandbox.fs.uploadFile(
-        Buffer.from(JSON.stringify(openCodeConfig)),
-        `${ocConfigDir}/opencode.json`,
-      );
-      console.log(`[bridge:${sid}] wrote ${ocConfigDir}/opencode.json`);
+      // Upload MCP server scripts alongside config on reconnect
+      const mcpLspCodeR = getMcpLspScript(BRIDGE_PORT);
+      const mcpTermCodeR = getMcpTerminalScript(BRIDGE_PORT);
+      await Promise.all([
+        sandbox.fs.uploadFile(
+          Buffer.from(JSON.stringify(openCodeConfig)),
+          `${ocConfigDir}/opencode.json`,
+        ),
+        sandbox.fs.uploadFile(
+          Buffer.from(mcpTermCodeR),
+          `${bridgeDir}/mcp-terminal-server.cjs`,
+        ),
+        sandbox.fs.uploadFile(
+          Buffer.from(mcpLspCodeR),
+          `${bridgeDir}/mcp-lsp-server.cjs`,
+        ),
+      ]);
+      console.log(`[bridge:${sid}] wrote ${ocConfigDir}/opencode.json + MCP scripts`);
 
       // Write agent prompt files under HOME (not in projectDir — keep the repo clean)
       await sandbox.process.executeCommand(`mkdir -p '${homeDir}/.opencode/agents'`);
@@ -2056,6 +2087,7 @@ export class SandboxManager extends EventEmitter {
 
     const bridgeCode = getBridgeScript(BRIDGE_PORT, projectDir);
     const mcpCode = getMcpTerminalScript(BRIDGE_PORT);
+    const mcpLspCode = getMcpLspScript(BRIDGE_PORT);
 
     const isLocalProvider = this.config.provider === "local";
     const homeDir = isLocalProvider ? os.homedir() : HOME_DIR;
@@ -2122,6 +2154,11 @@ export class SandboxManager extends EventEmitter {
           command: ["node", `${bridgeDir}/mcp-terminal-server.cjs`],
           timeout: 300000,
         },
+        "lsp-server": {
+          type: "local",
+          command: ["node", `${bridgeDir}/mcp-lsp-server.cjs`],
+          timeout: 300000,
+        },
       },
     };
 
@@ -2136,6 +2173,7 @@ export class SandboxManager extends EventEmitter {
     const alwaysWriteFiles: { path: string; content: string }[] = [
       { path: `${bridgeDir}/bridge.cjs`, content: bridgeCode },
       { path: `${bridgeDir}/mcp-terminal-server.cjs`, content: mcpCode },
+      { path: `${bridgeDir}/mcp-lsp-server.cjs`, content: mcpLspCode },
       { path: `${ocConfigDir}/opencode.json`, content: JSON.stringify(openCodeConfig) },
     ];
     const skipIfExistsFiles: { path: string; content: string }[] = [
@@ -2383,6 +2421,10 @@ export class SandboxManager extends EventEmitter {
           } else if (msg.type === "ports_update") {
             this.lastPortsBySandbox.set(session.sandboxId, msg);
             this.emit("ports_update", session.sandboxId, msg);
+          } else if (msg.type === "lsp_response") {
+            this.emit("lsp_response", session.sandboxId, msg);
+          } else if (msg.type === "lsp_status") {
+            this.emit("lsp_status", session.sandboxId, msg);
           } else if (msg.type === "ask_user_pending") {
             session.status = "waiting_for_input";
           } else if (msg.type === "ask_user_resolved") {

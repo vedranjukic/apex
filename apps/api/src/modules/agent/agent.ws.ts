@@ -151,6 +151,14 @@ function attachTerminalListeners(sandboxId: string, provider?: string) {
     lastPortsBySandbox.set(sandboxId, { ports: msg.ports });
     emitToSubscribers(sandboxId, 'ports_update', { ports: msg.ports });
   });
+  manager.on('lsp_response', (sid: string, msg: any) => {
+    if (sid !== sandboxId) return;
+    emitToSubscribers(sandboxId, 'lsp_response', { language: msg.language, jsonrpc: msg.jsonrpc });
+  });
+  manager.on('lsp_status', (sid: string, msg: any) => {
+    if (sid !== sandboxId) return;
+    emitToSubscribers(sandboxId, 'lsp_status', { language: msg.language, status: msg.status, error: msg.error });
+  });
 }
 
 const CONTEXT_MAX_CHARS = 4_000;
@@ -903,6 +911,12 @@ async function handleMessage(client: WsClient, message: unknown) {
           new Promise<null>((r) => setTimeout(() => r(null), 10_000)),
         ]);
         emitTo(client, 'layout_data', { data });
+        break;
+      }
+      case 'lsp_data': {
+        const resolved = await tryResolveProject(payload.projectId);
+        if (!resolved) { emitTo(client, 'lsp_status', { language: payload.language, status: 'error', error: 'Sandbox not ready' }); break; }
+        await resolved.manager.sendLspData(resolved.sandboxId, payload.language, payload.jsonrpc);
         break;
       }
     }

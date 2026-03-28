@@ -181,6 +181,29 @@ export interface BridgeTerminalList {
   terminals: BridgeTerminalListEntry[];
 }
 
+// ── LSP bridge messages ─────────────────────────────
+
+export interface BridgeLspData {
+  type: 'lsp_data';
+  language: string;
+  jsonrpc: Record<string, unknown>;
+}
+
+export interface BridgeLspResponse {
+  type: 'lsp_response';
+  language: string;
+  jsonrpc: Record<string, unknown>;
+}
+
+export type LspServerStatus = 'starting' | 'ready' | 'error' | 'stopped';
+
+export interface BridgeLspStatus {
+  type: 'lsp_status';
+  language: string;
+  status: LspServerStatus;
+  error?: string;
+}
+
 // ── Port scanning types ─────────────────────────────
 
 export interface PortInfo {
@@ -294,7 +317,10 @@ export type BridgeMessage =
   | BridgeLayoutSaved
   | BridgeLayoutData
   | BridgeFileChanged
-  | BridgePortsUpdate;
+  | BridgePortsUpdate
+  | BridgeLspData
+  | BridgeLspResponse
+  | BridgeLspStatus;
 
 // ── Sandbox session tracking ─────────────────────────
 export type SandboxSessionStatus =

@@ -88,6 +88,13 @@ ENV PATH="/usr/local/go/bin:${PATH}" \
 # Install Go language server
 RUN go install golang.org/x/tools/gopls@latest
 
+# Install Eclipse JDT Language Server (Java LSP)
+RUN mkdir -p /opt/jdtls \
+    && curl -fsSL "https://download.eclipse.org/jdtls/milestones/1.57.0/jdt-language-server-1.57.0-202602261110.tar.gz" \
+       | tar -xzf - -C /opt/jdtls \
+    && printf '#!/bin/sh\nexec java \\\n  -Declipse.application=org.eclipse.jdt.ls.core.id1 \\\n  -Dosgi.bundles.defaultStartLevel=4 \\\n  -Xmx1G \\\n  --add-modules=ALL-SYSTEM \\\n  --add-opens java.base/java.util=ALL-UNNAMED \\\n  --add-opens java.base/java.lang=ALL-UNNAMED \\\n  -jar /opt/jdtls/plugins/org.eclipse.equinox.launcher_*.jar \\\n  -configuration /opt/jdtls/config_linux \\\n  -data "${1:-/tmp/jdtls-workspace}" "$@"\n' > /usr/local/bin/jdtls \
+    && chmod +x /usr/local/bin/jdtls
+
 # Install Rust (system-wide so all users can access it)
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo

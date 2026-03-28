@@ -1,15 +1,20 @@
-import { useRef, useCallback, useEffect } from 'react';
-import { Loader2, FileText } from 'lucide-react';
-import Editor, { type OnMount } from '@monaco-editor/react';
-import type { editor as monacoEditor, Monaco } from 'monaco-editor';
+import { useRef, useCallback, useMemo } from 'react';
+import { Loader2, FileText, Zap } from 'lucide-react';
+import { MonacoEditorReactComp } from '@typefox/monaco-editor-react';
+import { configureDefaultWorkerFactory } from 'monaco-languageclient/workerFactory';
+import type { MonacoVscodeApiConfig } from 'monaco-languageclient/vscodeApiWrapper';
+import type { EditorAppConfig } from 'monaco-languageclient/editorApp';
 import { useEditorStore, type CodeSelection } from '../../stores/editor-store';
 import { useThemeStore } from '../../stores/theme-store';
+import { useLspStore, type LspServerStatus } from '../../stores/lsp-store';
 import { getLanguageFromPath } from './lang-map';
-import { getMonacoThemeName, getMonacoThemeData } from './apex-theme';
-import { ensureMonacoTsDefaults } from './monaco-ts-defaults';
-import { themeIds } from '../../lib/themes';
+import { cn } from '../../lib/cn';
 
 const SNIPPET_MIME = 'application/x-codeany-snippet';
+
+const LSP_SUPPORTED_LANGUAGES = new Set([
+  'typescript', 'javascript', 'python', 'go', 'rust', 'java',
+]);
 
 interface CodeViewerProps {
   filePath: string;
@@ -17,106 +22,70 @@ interface CodeViewerProps {
   onSave?: (path: string, content: string) => void;
 }
 
+function getVscodeThemeName(themeId: string): string {
+  switch (themeId) {
+    case 'light': return 'Default Light Modern';
+    case 'dark': return 'Default Dark Modern';
+    case 'midnight-blue':
+    default:
+      return 'Default Dark Modern';
+  }
+}
+
 export function CodeViewer({ filePath, content, onSave }: CodeViewerProps) {
   const fileName = filePath.split('/').pop() ?? filePath;
   const isLoading = content === undefined;
-  const editorRef = useRef<monacoEditor.IStandaloneCodeEditor | null>(null);
   const isDirty = useEditorStore((s) => s.dirtyFiles.has(filePath));
   const themeId = useThemeStore((s) => s.themeId);
-  const monacoRef = useRef<Monaco | null>(null);
+  const language = getLanguageFromPath(filePath);
+  const lspStatus = useLspStore((s) => s.languages[language]);
+  const onSaveRef = useRef(onSave);
+  onSaveRef.current = onSave;
+  const filePathRef = useRef(filePath);
+  filePathRef.current = filePath;
 
-  const handleMount: OnMount = useCallback(
-    (editor, monaco) => {
-      editorRef.current = editor;
-      monacoRef.current = monaco;
-
-      ensureMonacoTsDefaults(monaco);
-
-      for (const id of themeIds) {
-        monaco.editor.defineTheme(getMonacoThemeName(id), getMonacoThemeData(id));
-      }
-      const currentTheme = useThemeStore.getState().themeId;
-      monaco.editor.setTheme(getMonacoThemeName(currentTheme));
-
-      // Snippet copy: override Ctrl/Cmd+C to attach CodeSelection metadata
-      editor.addAction({
-        id: 'apex.copyWithSnippet',
-        label: 'Copy with snippet metadata',
-        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyC],
-        run: (ed) => {
-          const selection = ed.getSelection();
-          if (!selection || selection.isEmpty()) return;
-          const model = ed.getModel();
-          if (!model) return;
-
-          const selectedText = model.getValueInRange(selection);
-          const snippet: CodeSelection = {
-            filePath,
-            startLine: selection.startLineNumber,
-            endLine: selection.endLineNumber,
-            startChar: selection.startColumn - 1,
-            endChar: selection.endColumn - 1,
-          };
-
-          navigator.clipboard
-            .write([
-              new ClipboardItem({
-                'text/plain': new Blob([selectedText], { type: 'text/plain' }),
-                [SNIPPET_MIME]: new Blob([JSON.stringify(snippet)], { type: SNIPPET_MIME }),
-              }),
-            ])
-            .catch(() => {
-              navigator.clipboard.writeText(selectedText);
-            });
-
-          useEditorStore.getState().setCodeSelection(snippet, selectedText);
-        },
-      });
-
-      // Save: Ctrl/Cmd+S
-      editor.addAction({
-        id: 'apex.saveFile',
-        label: 'Save File',
-        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
-        run: (ed) => {
-          const model = ed.getModel();
-          if (!model || !onSave) return;
-          onSave(filePath, model.getValue());
-        },
-      });
-
-      // Reveal line when opened from diff/Edit block
-      const reveal = useEditorStore.getState().revealLineAt;
-      if (reveal && reveal.filePath === filePath) {
-        const line = Math.max(1, Math.min(reveal.line, editor.getModel()?.getLineCount() ?? 1));
-        editor.revealLineInCenter(line);
-        editor.setSelection({
-          startLineNumber: line,
-          startColumn: 1,
-          endLineNumber: line,
-          endColumn: 1,
-        });
-        useEditorStore.getState().clearRevealLineAt();
-      }
+  const vscodeApiConfig = useMemo<MonacoVscodeApiConfig>(() => ({
+    $type: 'extended',
+    viewsConfig: {
+      $type: 'EditorService',
     },
-    [filePath, onSave],
-  );
+    userConfiguration: {
+      json: JSON.stringify({
+        'workbench.colorTheme': getVscodeThemeName(themeId),
+        'editor.wordBasedSuggestions': 'off',
+        'editor.minimap.enabled': false,
+        'editor.fontSize': 13,
+        'editor.fontFamily': "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
+        'editor.lineNumbers': 'on',
+        'editor.renderLineHighlight': 'line',
+        'editor.folding': true,
+        'editor.wordWrap': 'off',
+        'editor.scrollBeyondLastLine': false,
+        'editor.padding.top': 8,
+        'editor.contextmenu': false,
+      }),
+    },
+    monacoWorkerFactory: configureDefaultWorkerFactory,
+  }), [themeId]);
 
-  useEffect(() => {
-    if (monacoRef.current) {
-      monacoRef.current.editor.setTheme(getMonacoThemeName(themeId));
+  const editorAppConfig = useMemo<EditorAppConfig>(() => ({
+    codeResources: {
+      modified: {
+        text: content ?? '',
+        uri: `/workspace${filePath}`,
+        enforceLanguageId: language,
+      },
+    },
+  }), [content, filePath, language]);
+
+  const handleEditorStartDone = useCallback(() => {
+    const reveal = useEditorStore.getState().revealLineAt;
+    if (reveal && reveal.filePath === filePathRef.current) {
+      useEditorStore.getState().clearRevealLineAt();
     }
-  }, [themeId]);
+  }, []);
 
-  const handleChange = useCallback(
-    (value: string | undefined) => {
-      if (value === undefined) return;
-      const store = useEditorStore.getState();
-      store.setFileContent(filePath, value);
-      store.markDirty(filePath);
-    },
-    [filePath],
-  );
+  const showLspStatus = lspStatus && LSP_SUPPORTED_LANGUAGES.has(language);
 
   return (
     <div className="flex flex-col h-full bg-surface text-text-primary">
@@ -131,6 +100,8 @@ export function CodeViewer({ filePath, content, onSave }: CodeViewerProps) {
         <span className="text-xs text-text-secondary truncate ml-1 hidden sm:inline">
           {filePath}
         </span>
+        <span className="flex-1" />
+        {showLspStatus && <LspStatusIndicator status={lspStatus.status} error={lspStatus.error} />}
       </div>
 
       {isLoading ? (
@@ -139,35 +110,45 @@ export function CodeViewer({ filePath, content, onSave }: CodeViewerProps) {
         </div>
       ) : (
         <div className="flex-1 overflow-hidden">
-          <Editor
-            path={filePath}
-            defaultValue={content}
-            language={getLanguageFromPath(filePath)}
-            theme={getMonacoThemeName(themeId)}
-            onMount={handleMount}
-            onChange={handleChange}
-            loading={
-              <div className="flex-1 flex items-center justify-center">
-                <Loader2 className="w-5 h-5 animate-spin text-text-muted" />
-              </div>
-            }
-            options={{
-              readOnly: false,
-              minimap: { enabled: false },
-              scrollBeyondLastLine: false,
-              fontSize: 13,
-              fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
-              lineNumbers: 'on',
-              renderLineHighlight: 'line',
-              contextmenu: false,
-              folding: true,
-              wordWrap: 'off',
-              automaticLayout: true,
-              padding: { top: 8 },
-            }}
+          <MonacoEditorReactComp
+            vscodeApiConfig={vscodeApiConfig}
+            editorAppConfig={editorAppConfig}
+            style={{ height: '100%' }}
+            onEditorStartDone={handleEditorStartDone}
+            onError={(e) => console.error('[CodeViewer] Monaco error:', e)}
           />
         </div>
       )}
     </div>
   );
+}
+
+function LspStatusIndicator({ status, error }: { status: LspServerStatus; error?: string }) {
+  if (status === 'ready') {
+    return (
+      <span className="flex items-center gap-1 text-[10px] text-green-400" title="LSP connected">
+        <Zap className="w-3 h-3" />
+      </span>
+    );
+  }
+  if (status === 'starting') {
+    return (
+      <span className="flex items-center gap-1 text-[10px] text-text-muted animate-pulse" title="LSP initializing...">
+        <Loader2 className="w-3 h-3 animate-spin" />
+        <span className="hidden sm:inline">LSP</span>
+      </span>
+    );
+  }
+  if (status === 'error') {
+    return (
+      <span
+        className={cn('flex items-center gap-1 text-[10px] text-yellow-500')}
+        title={error ?? 'LSP error'}
+      >
+        <Zap className="w-3 h-3" />
+        <span className="hidden sm:inline">LSP err</span>
+      </span>
+    );
+  }
+  return null;
 }
