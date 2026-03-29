@@ -68,6 +68,7 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   multiedit: 'MultiEdit',
   multi_edit: 'MultiEdit',
   askuserquestion: 'AskUserQuestion',
+  question: 'AskUserQuestion',
   'terminal-server_ask_user': 'AskUserQuestion',
   'mcp__terminal-server__ask_user': 'AskUserQuestion',
 };

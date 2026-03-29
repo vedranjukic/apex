@@ -1,9 +1,10 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus, FolderOpen, Trash2, ExternalLink, Loader2, CheckCircle2,
   CircleHelp, CirclePause, XCircle, Circle, GitBranch, ChevronDown, ChevronRight, Settings, Shield,
   Play, Square, RotateCw, MoreHorizontal, GitFork, CircleDot, GitPullRequest, Github,
+  Search, SlidersHorizontal, X,
 } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { useProjectsStore } from '../../stores/projects-store';
@@ -23,6 +24,17 @@ const STATUS_LABELS: Record<string, string> = {
   error: 'error',
 };
 
+const STATUS_DOT_COLORS: Record<string, string> = {
+  creating: 'bg-yellow-400',
+  pulling_image: 'bg-yellow-400',
+  starting: 'bg-yellow-400',
+  stopping: 'bg-yellow-400',
+  deleting: 'bg-yellow-400',
+  running: 'bg-green-400',
+  stopped: 'bg-gray-400',
+  error: 'bg-red-400',
+};
+
 function ThreadStatusIcon({ status, className }: { status: string; className?: string }) {
   const size = className ?? 'w-3 h-3';
   switch (status) {
@@ -39,6 +51,24 @@ function ThreadStatusIcon({ status, className }: { status: string; className?: s
     default:
       return <Circle className={cn(size, 'text-text-muted shrink-0')} />;
   }
+}
+
+const THREAD_STATUS_PRIORITY: Record<string, number> = {
+  waiting_for_user_action: 0,
+  waiting_for_input: 1,
+  running: 2,
+  error: 3,
+  completed: 4,
+};
+
+function pickTopThreadStatus(threads: Thread[]): string | null {
+  if (!threads.length) return null;
+  let best: Thread | null = null;
+  for (const t of threads) {
+    const p = THREAD_STATUS_PRIORITY[t.status] ?? 99;
+    if (!best || p < (THREAD_STATUS_PRIORITY[best.status] ?? 99)) best = t;
+  }
+  return best?.status ?? null;
 }
 
 function timeAgo(dateStr: string): string {
@@ -166,6 +196,52 @@ function groupByForkFamily(projects: Project[]): ForkGroup[] {
   return groups;
 }
 
+const THREAD_STATUS_OPTIONS = [
+  { value: 'running', label: 'Running', icon: Loader2, color: 'text-yellow-400' },
+  { value: 'waiting_for_input', label: 'Waiting for input', icon: CircleHelp, color: 'text-yellow-400' },
+  { value: 'waiting_for_user_action', label: 'Waiting for action', icon: CirclePause, color: 'text-yellow-400' },
+  { value: 'completed', label: 'Completed', icon: CheckCircle2, color: 'text-green-400' },
+  { value: 'error', label: 'Error', icon: XCircle, color: 'text-red-400' },
+] as const;
+
+function projectMatchesText(project: Project, query: string): boolean {
+  const q = query.toLowerCase();
+  if (project.name.toLowerCase().includes(q)) return true;
+  if (project.description?.toLowerCase().includes(q)) return true;
+  if (project.gitRepo?.toLowerCase().includes(q)) return true;
+  return false;
+}
+
+function projectMatchesThreadStatus(project: Project, statuses: Set<string>): boolean {
+  if (statuses.size === 0) return true;
+  const threads = project.threads ?? [];
+  return threads.some((t) => statuses.has(t.status));
+}
+
+function filterGroups(groups: ForkGroup[], query: string, statuses: Set<string>): ForkGroup[] {
+  const hasQuery = query.trim().length > 0;
+  const hasStatus = statuses.size > 0;
+  if (!hasQuery && !hasStatus) return groups;
+
+  const result: ForkGroup[] = [];
+  for (const group of groups) {
+    const rootTextMatch = !hasQuery || projectMatchesText(group.root, query);
+    const rootStatusMatch = !hasStatus || projectMatchesThreadStatus(group.root, statuses);
+    const rootMatch = rootTextMatch && rootStatusMatch;
+
+    const matchingForks = group.forks.filter((fork) => {
+      const textMatch = !hasQuery || projectMatchesText(fork, query);
+      const statusMatch = !hasStatus || projectMatchesThreadStatus(fork, statuses);
+      return textMatch && statusMatch;
+    });
+
+    if (rootMatch || matchingForks.length > 0) {
+      result.push({ root: group.root, forks: rootMatch ? group.forks : matchingForks });
+    }
+  }
+  return result;
+}
+
 interface Props {
   onOpenProject: (id: string) => void;
   onSelectThread?: (projectId: string, threadId: string, projectName: string) => void;
@@ -179,6 +255,9 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [ghUser, setGhUser] = useState<GitHubUser | null>(null);
   const [ghLoaded, setGhLoaded] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
   const navigate = useNavigate();
 
   useProjectsSocket();
@@ -192,6 +271,27 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
   }, [fetchProjects]);
 
   const groups = useMemo(() => groupByForkFamily(projects), [projects]);
+  const filteredGroups = useMemo(
+    () => filterGroups(groups, searchQuery, statusFilters),
+    [groups, searchQuery, statusFilters],
+  );
+
+  const toggleStatus = useCallback((status: string) => {
+    setStatusFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      return next;
+    });
+  }, []);
+
+  const clearFilters = useCallback(() => {
+    setSearchQuery('');
+    setStatusFilters(new Set());
+    setShowFilters(false);
+  }, []);
+
+  const hasActiveFilters = searchQuery.trim().length > 0 || statusFilters.size > 0;
 
   return (
     <div className="flex-1 p-4 overflow-y-auto">
@@ -258,6 +358,75 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
           </div>
         </div>
 
+        {projects.length > 0 && (
+          <div className="mb-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search by name, description, or repo..."
+                  className="w-full pl-8 pr-8 py-1.5 text-sm bg-surface border border-border rounded-lg text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary/50 transition-colors"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-surface-secondary text-text-muted hover:text-text-secondary transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={() => setShowFilters((v) => !v)}
+                className={cn(
+                  'p-1.5 rounded-lg hover:bg-surface-secondary text-text-secondary hover:text-primary transition-colors',
+                  showFilters && 'bg-surface-secondary text-primary',
+                  statusFilters.size > 0 && !showFilters && 'text-primary',
+                )}
+                title="Filter by thread status"
+              >
+                <SlidersHorizontal className="w-4 h-4" />
+              </button>
+              {hasActiveFilters && (
+                <button
+                  onClick={clearFilters}
+                  className="px-2 py-1 rounded-lg text-xs text-text-muted hover:text-text-secondary hover:bg-surface-secondary transition-colors"
+                  title="Clear all filters"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            {showFilters && (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] text-text-muted mr-0.5">Thread status:</span>
+                {THREAD_STATUS_OPTIONS.map((opt) => {
+                  const Icon = opt.icon;
+                  const active = statusFilters.has(opt.value);
+                  return (
+                    <button
+                      key={opt.value}
+                      onClick={() => toggleStatus(opt.value)}
+                      className={cn(
+                        'flex items-center gap-1 px-2 py-0.5 rounded-md text-xs transition-colors border',
+                        active
+                          ? 'border-primary/40 bg-primary/10 text-text-primary'
+                          : 'border-border bg-surface hover:bg-surface-secondary text-text-secondary',
+                      )}
+                    >
+                      <Icon className={cn('w-3 h-3', active ? opt.color : 'text-text-muted', opt.value === 'running' && active && 'animate-spin')} />
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {loading && projects.length === 0 ? (
           <div className="flex items-center justify-center py-16">
             <Loader2 className="w-6 h-6 animate-spin text-text-muted" />
@@ -268,9 +437,15 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
             <p className="text-lg font-medium">No projects yet</p>
             <p className="text-sm mt-1">Create your first project to get started</p>
           </div>
+        ) : filteredGroups.length === 0 ? (
+          <div className="text-center py-12 text-text-secondary">
+            <Search className="w-8 h-8 mx-auto mb-2 text-text-muted" />
+            <p className="text-sm font-medium">No matching projects</p>
+            <p className="text-xs mt-1 text-text-muted">Try adjusting your search or filters</p>
+          </div>
         ) : (
           <div className="grid gap-2">
-            {groups.map((group) =>
+            {filteredGroups.map((group) =>
               group.forks.length === 0 ? (
                 <ProjectCard
                   key={group.root.id}
@@ -466,17 +641,6 @@ function ForkRow({
   onNewThread?: (projectId: string, projectName: string) => void;
   activeProjectId?: string | null;
 }) {
-  const statusColors: Record<string, string> = {
-    creating: 'text-yellow-400 bg-yellow-400/10',
-    pulling_image: 'text-yellow-400 bg-yellow-400/10',
-    starting: 'text-yellow-400 bg-yellow-400/10',
-    stopping: 'text-yellow-400 bg-yellow-400/10',
-    deleting: 'text-red-400 bg-red-400/10',
-    running: 'text-green-400 bg-green-400/10',
-    stopped: 'text-gray-400 bg-gray-400/10',
-    error: 'text-red-400 bg-red-400/10',
-  };
-
   const threads = project.threads ?? [];
   const name = project.branchName || project.name;
 
@@ -488,22 +652,12 @@ function ForkRow({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium truncate">{name}</span>
             <span
-              className={cn(
-                'text-[10px] px-1.5 py-0.5 rounded-full font-medium',
-                statusColors[project.status] || 'text-gray-400 bg-gray-400/10',
-              )}
-            >
-              {STATUS_LABELS[project.status] || project.status}
-            </span>
-            {threads.length > 0 && (
-              <span className="flex items-center gap-0.5">
-                {threads.map((c) => (
-                  <ThreadStatusIcon key={c.id} status={c.status} className="w-2.5 h-2.5" />
-                ))}
-              </span>
-            )}
+              className={cn('w-1.5 h-1.5 rounded-full shrink-0 opacity-70', STATUS_DOT_COLORS[project.status] || 'bg-gray-400')}
+              title={STATUS_LABELS[project.status] || project.status}
+            />
+            <span className="text-sm font-medium truncate">{name}</span>
+            {(() => { const s = pickTopThreadStatus(threads); return s ? <ThreadStatusIcon status={s} className="w-2.5 h-2.5" /> : null; })()}
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -572,17 +726,6 @@ function ProjectCard({
   const [showMore, setShowMore] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const statusColors: Record<string, string> = {
-    creating: 'text-yellow-400 bg-yellow-400/10',
-    pulling_image: 'text-yellow-400 bg-yellow-400/10',
-    starting: 'text-yellow-400 bg-yellow-400/10',
-    stopping: 'text-yellow-400 bg-yellow-400/10',
-    deleting: 'text-red-400 bg-red-400/10',
-    running: 'text-green-400 bg-green-400/10',
-    stopped: 'text-gray-400 bg-gray-400/10',
-    error: 'text-red-400 bg-red-400/10',
-  };
-
   const threads = project.threads ?? [];
 
   return (
@@ -593,15 +736,12 @@ function ProjectCard({
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h3 className="font-semibold text-sm truncate hover:text-primary transition-colors cursor-pointer" onClick={onOpen}>{project.name}</h3>
             <span
-              className={cn(
-                'text-xs px-2 py-0.5 rounded-full font-medium',
-                statusColors[project.status] || 'text-gray-400 bg-gray-400/10',
-              )}
-            >
-              {STATUS_LABELS[project.status] || project.status}
-            </span>
+              className={cn('w-2 h-2 rounded-full shrink-0 opacity-70', STATUS_DOT_COLORS[project.status] || 'bg-gray-400')}
+              title={STATUS_LABELS[project.status] || project.status}
+            />
+            <h3 className="font-semibold text-sm truncate hover:text-primary transition-colors cursor-pointer" onClick={onOpen}>{project.name}</h3>
+            {(() => { const s = pickTopThreadStatus(threads); return s ? <ThreadStatusIcon status={s} className="w-3 h-3" /> : null; })()}
           </div>
           {project.description && (
             <p className="text-xs text-text-secondary mt-0.5 truncate">

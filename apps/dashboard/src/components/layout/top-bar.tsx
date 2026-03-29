@@ -24,8 +24,10 @@ export function TopBar({ title, projectName, showLayoutToggles = true }: TopBarP
 
   return (
     <header
-      className="h-[38px] bg-sidebar border-b border-panel-border flex items-center px-2 shrink-0 select-none relative"
-      style={isElectron ? { WebkitAppRegion: 'drag' } as React.CSSProperties : undefined}
+      className={cn(
+        "h-[38px] bg-sidebar border-b border-panel-border flex items-center px-2 shrink-0 select-none relative",
+        isElectron && "electrobun-webkit-app-region-drag",
+      )}
     >
       <div className="flex-1" />
 
@@ -36,7 +38,7 @@ export function TopBar({ title, projectName, showLayoutToggles = true }: TopBarP
       )}
 
       {showLayoutToggles && (
-        <div className="flex items-center gap-1" style={isElectron ? { WebkitAppRegion: 'no-drag' } as React.CSSProperties : undefined}>
+        <div className={cn("flex items-center gap-1", isElectron && "electrobun-webkit-app-region-no-drag")}>
           <ToggleButton
             icon={PanelLeft}
             active={leftOpen}

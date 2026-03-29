@@ -235,23 +235,71 @@ function getUserDataPath(): string {
   return path.join(os.homedir(), '.config/apex');
 }
 
+function isPackaged(): boolean {
+  const execDir = path.dirname(process.execPath);
+  const macResources = path.resolve(execDir, '..', 'Resources');
+  const linuxResources = path.resolve(execDir, 'Resources');
+  return (
+    fs.existsSync(path.join(macResources, 'apps')) ||
+    fs.existsSync(path.join(linuxResources, 'apps'))
+  );
+}
+
+function loadDotEnv(): Record<string, string> {
+  const envPaths = [
+    resolveAppPath('.env'),
+    path.join(getUserDataPath(), '.env'),
+  ];
+  for (const envPath of envPaths) {
+    if (!fs.existsSync(envPath)) continue;
+    const vars: Record<string, string> = {};
+    const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx === -1) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      let val = trimmed.slice(eqIdx + 1).trim();
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      vars[key] = val;
+    }
+    console.log(`Loaded ${Object.keys(vars).length} env var(s) from ${envPath}`);
+    return vars;
+  }
+  return {};
+}
+
 async function startApi(port: number): Promise<void> {
   const apiMain = resolveAppPath('apps', 'api', 'dist', 'main.js');
   const dashboardDir = resolveAppPath('apps', 'dashboard', 'dist');
-  const userDataDir = getUserDataPath();
 
-  if (!fs.existsSync(userDataDir)) {
-    fs.mkdirSync(userDataDir, { recursive: true });
+  let dbPath: string;
+  if (isPackaged()) {
+    const userDataDir = getUserDataPath();
+    if (!fs.existsSync(userDataDir)) {
+      fs.mkdirSync(userDataDir, { recursive: true });
+    }
+    dbPath = path.join(userDataDir, 'apex.sqlite');
+  } else {
+    const devDbDir = resolveAppPath('apps', 'api', 'data');
+    if (!fs.existsSync(devDbDir)) {
+      fs.mkdirSync(devDbDir, { recursive: true });
+    }
+    dbPath = path.join(devDbDir, 'apex.sqlite');
   }
-
-  const dbPath = path.join(userDataDir, 'apex.sqlite');
 
   console.log(`Starting API: ${apiMain} (exists: ${fs.existsSync(apiMain)})`);
   console.log(`Dashboard dir: ${dashboardDir} (exists: ${fs.existsSync(dashboardDir)})`);
   console.log(`DB path: ${dbPath}`);
 
+  const dotEnvVars = loadDotEnv();
+
   apiProcess = Bun.spawn([process.execPath, apiMain], {
     env: {
+      ...dotEnvVars,
       ...process.env,
       PORT: String(port),
       HOST: '0.0.0.0',

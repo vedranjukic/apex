@@ -145,21 +145,33 @@ ENV PATH="${GOPATH}/bin:${JAVA_HOME}/bin:${PATH}"
 # Switch to Daytona user
 USER daytona
 
-# Configure zsh prompt with git branch display
+# Configure zsh prompt with git branch display (branch truncated to 30 chars)
 RUN cat << 'ZSHRC' > ~/.zshrc
 autoload -Uz vcs_info
-precmd() { vcs_info }
 zstyle ':vcs_info:git:*' formats ' (%b)'
+zstyle ':vcs_info:git*+set-message:*' hooks git-truncate
++vi-git-truncate() {
+    local max=30
+    if (( ${#hook_com[branch]} > max )); then
+        hook_com[branch]="${hook_com[branch]:0:$max}…"
+    fi
+}
+precmd() { vcs_info }
 setopt PROMPT_SUBST
 PROMPT='%F{green}%n%f %F{cyan}➜%f %F{blue}%~%f%F{yellow}${vcs_info_msg_0_}%f $ '
 ZSHRC
 
-# Configure bash prompt with git branch display
+# Configure bash prompt with git branch display (branch truncated to 30 chars)
 RUN cat << 'BASHRC' >> ~/.bashrc
 __git_branch() {
-    local branch
+    local branch max=30
     branch=$(git branch --show-current 2>/dev/null)
-    [ -n "$branch" ] && echo " ($branch)"
+    if [ -n "$branch" ]; then
+        if [ ${#branch} -gt $max ]; then
+            branch="${branch:0:$max}…"
+        fi
+        echo " ($branch)"
+    fi
 }
 PS1='\[\033[32m\]\u\[\033[0m\] \[\033[36m\]➜\[\033[0m\] \[\033[34m\]\w\[\033[0m\]\[\033[33m\]$(__git_branch)\[\033[0m\] $ '
 BASHRC

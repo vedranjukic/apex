@@ -190,6 +190,7 @@ export function ProjectPage() {
   // Re-subscribe to the agent socket when the sandbox becomes available
   // (handles the case where the page loaded while the sandbox was still provisioning)
   const prevSandboxIdRef = useRef<string | null>(null);
+  const prevSandboxReadyRef = useRef(false);
   useEffect(() => {
     const sandboxId = project?.sandboxId ?? null;
     const prev = prevSandboxIdRef.current;
@@ -197,7 +198,15 @@ export function ProjectPage() {
     if (sandboxId && !prev && projectId && socket.current) {
       socket.current.send('subscribe_project', { projectId });
     }
-  }, [project?.sandboxId, projectId, socket]);
+
+    const sandboxReady = project?.status === 'running' && !!sandboxId;
+    const wasReady = prevSandboxReadyRef.current;
+    prevSandboxReadyRef.current = sandboxReady;
+    if (sandboxReady && !wasReady) {
+      useTerminalStore.getState().resetBridgeResponded();
+      terminal.requestTerminalList();
+    }
+  }, [project?.sandboxId, project?.status, projectId, socket, terminal]);
 
   useEffect(() => {
     const s = socket.current;

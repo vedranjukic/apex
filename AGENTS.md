@@ -25,7 +25,7 @@ All UI state is in Zustand stores under `apps/dashboard/src/stores/`:
 - `tasks-store.ts` -- threads, messages, active thread, per-thread session info (MCP servers, model, tools) (exported as `useThreadsStore`)
 - `command-store.ts` -- command registry, keybindings, palette state
 - `file-tree-store.ts` -- directory cache for the file explorer
-- `projects-store.ts` -- project list
+- `projects-store.ts` -- project list, `setThreadStatus()` keeps embedded thread statuses in sync with agent events
 - `plan-store.ts` -- plan mode state: plan text accumulation, completion, content-based detection
 - `agent-settings-store.ts` -- agent type (build/plan/sisyphus) and model selection
 - `theme-store.ts` -- color theme selection (midnight-blue, dark, light), persisted to localStorage
