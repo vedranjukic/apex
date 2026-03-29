@@ -63,10 +63,28 @@ A 10-second health check interval runs alongside every active agent execution:
 3. Emits "Lost connection to sandbox. Reconnecting…" system message to the client
 4. If recovery fails, marks the thread as `error` immediately
 
+### Thread Status Lifecycle
+
+Thread statuses and their transitions:
+
+| Status | Meaning | Set by |
+|--------|---------|--------|
+| `running` | Agent is actively working | `executeAgainstSandbox`, `ask_user_resolved` |
+| `waiting_for_input` | Agent asked user a question via `ask_user` MCP tool | `ask_user_pending` bridge event |
+| `waiting_for_user_action` | Agent finished but needs user to act (plan review or pending todos) | `save_plan` handler, or frontend pending-todos detection |
+| `completed` | Agent finished successfully | `result`/`exit` bridge events |
+| `error` | Agent crashed or timed out | `claude_error`, timeout, failed retry |
+
+**Status protection**: The `result` and `exit` handlers skip overwriting to `completed` if the thread is already in `waiting_for_input` or `waiting_for_user_action`, preventing race conditions where a plan save or ask_user arrives just before the process exits.
+
+**Pending todos detection**: When the agent completes, the frontend checks the last 3 assistant messages for `TodoWrite` tool calls with `pending`/`in_progress` items. If found, overrides the status to `waiting_for_user_action` and notifies the server via `update_thread_status`. The 3-message window prevents stale todos from deep in the history from triggering false positives.
+
+**Status sync across stores**: Thread status lives in two frontend stores — the projects store (embedded in project objects, used by the project list) and the threads store (used by thread detail views). When `agent_status` events arrive, `use-agent-socket.ts` updates both stores to keep them in sync.
+
 ### Stale Thread Reconciliation
 On server startup and client subscription, threads stuck in active states are cleaned up:
 
-1. **Server startup** (`init()`): resets all `running`/`waiting_for_input`/`idle` threads to `completed`, clears stale `claudeSessionId`
+1. **Server startup** (`init()`): resets all `running`/`waiting_for_input`/`idle` threads to `completed`, clears stale `claudeSessionId`. Does NOT touch `waiting_for_user_action` threads (plans/pending todos survive restarts).
 2. **Client subscribe** (`subscribe_project`): synchronously reconciles stale threads (checks `activeHandlers` map) before sending `subscribed` response, ensuring `fetchThreads` reads clean data
 
 ### AskUserQuestion (waiting_for_input)
@@ -121,7 +139,7 @@ Example: user asks *"start the dev server so I can watch it"* → agent calls `o
 - Server: NestJS `@WebSocketGateway` at namespace `/ws/agent`, path `/ws/socket.io`
 - Client: `socket.io-client` connects with same path
 - Vite proxy: `/ws` → `http://localhost:6000` with `ws: true`
-- Thread events: `subscribe_project`, `execute_thread`, `send_prompt`, `user_answer` (client→server); `agent_message`, `agent_status`, `agent_error` (server→client). `send_prompt` and `execute_thread` accept optional `agentType` to override the project default per-thread. `send_prompt` also accepts an optional `images` array (base64-encoded `{ type, media_type, data }` objects) for multimodal prompts. `agent_status` values: `running`, `waiting_for_input`, `retrying`, `completed`, `error`. `agent_message` carries `system`/`init` (MCP servers, tools, model), `assistant` (content blocks + usage), and `result` (cost, tokens, duration, turns) subtypes.
+- Thread events: `subscribe_project`, `execute_thread`, `send_prompt`, `user_answer`, `update_thread_status`, `save_plan` (client→server); `agent_message`, `agent_status`, `agent_error` (server→client). `send_prompt` and `execute_thread` accept optional `agentType` to override the project default per-thread. `send_prompt` also accepts an optional `images` array (base64-encoded `{ type, media_type, data }` objects) for multimodal prompts. `agent_status` values: `running`, `waiting_for_input`, `waiting_for_user_action`, `retrying`, `completed`, `error`. `update_thread_status` allows the frontend to set a thread's status (e.g. `waiting_for_user_action` when pending todos are detected). `agent_message` carries `system`/`init` (MCP servers, tools, model), `assistant` (content blocks + usage), and `result` (cost, tokens, duration, turns) subtypes.
 - Terminal events: `terminal_create`, `terminal_input`, `terminal_resize`, `terminal_close`, `terminal_list` (client→server); `terminal_created`, `terminal_output`, `terminal_exit`, `terminal_error`, `terminal_list` (server→client)
 - File events: `file_list`, `file_create`, `file_rename`, `file_delete`, `file_move`, `file_read`, `file_write` (client→server); `file_list_result`, `file_op_result`, `file_changed`, `file_read_result`, `file_write_result` (server→client)
 - Project info events: `project_info` (client→server + server→client) – returns `{ gitBranch, projectDir }` for the status bar and file tree root

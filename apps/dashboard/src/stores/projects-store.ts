@@ -21,6 +21,7 @@ interface ProjectsState {
   }) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
   setProjectStatus: (id: string, status: string) => void;
+  setThreadStatus: (threadId: string, status: string) => void;
   fetchForks: (projectId: string) => Promise<void>;
   forkProject: (id: string, branchName: string) => Promise<Project>;
 }
@@ -66,6 +67,16 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       projects: get().projects.map((p) =>
         p.id === id ? { ...p, status } : p,
       ),
+    });
+  },
+
+  setThreadStatus: (threadId, status) => {
+    set({
+      projects: get().projects.map((p) => {
+        const threads = p.threads;
+        if (!threads?.some((t) => t.id === threadId)) return p;
+        return { ...p, threads: threads.map((t) => t.id === threadId ? { ...t, status } : t) };
+      }),
     });
   },
 

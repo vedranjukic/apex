@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { ReconnectingWebSocket } from '../lib/reconnecting-ws';
 import { useThreadsStore } from '../stores/tasks-store';
+import { useProjectsStore } from '../stores/projects-store';
 import { usePlanStore, isPlanContent } from '../stores/plan-store';
 
 export function useAgentSocket(projectId: string | undefined) {
@@ -141,18 +142,45 @@ export function useAgentSocket(projectId: string | undefined) {
             }
           }
         }
+
+        if (!msg.is_error) {
+          const allMessages = useThreadsStore.getState().messages;
+          let assistantCount = 0;
+          outer: for (let i = allMessages.length - 1; i >= 0; i--) {
+            const m = allMessages[i];
+            if (m.role !== 'assistant') continue;
+            assistantCount++;
+            if (assistantCount > 3) break;
+            for (let j = (m.content?.length ?? 0) - 1; j >= 0; j--) {
+              const block = m.content[j] as any;
+              const bName = (block.name ?? '').toLowerCase();
+              if (block.type === 'tool_use' && (bName === 'todowrite' || bName === 'todo_write') && block.input) {
+                const todos = block.input.todos;
+                if (Array.isArray(todos) && todos.some((t: any) => t.status === 'pending' || t.status === 'in_progress') && !todos.every((t: any) => t.status === 'completed')) {
+                  updateThreadStatus(threadId, 'waiting_for_user_action');
+                  useProjectsStore.getState().setThreadStatus(threadId, 'waiting_for_user_action');
+                  ws.send('update_thread_status', { threadId, status: 'waiting_for_user_action' });
+                }
+                break outer;
+              }
+            }
+          }
+        }
       }
     });
 
     ws.on('agent_status', (data) => {
       console.log('[ws] agent_status:', data.payload);
-      updateThreadStatus(data.payload.threadId, data.payload.status === 'retrying' ? 'running' : data.payload.status);
+      const resolvedStatus = data.payload.status === 'retrying' ? 'running' : data.payload.status;
+      updateThreadStatus(data.payload.threadId, resolvedStatus);
+      useProjectsStore.getState().setThreadStatus(data.payload.threadId, resolvedStatus);
     });
 
     ws.on('agent_error', (data) => {
       console.error('[ws] agent_error:', data.payload);
       if (data.payload.threadId) {
         updateThreadStatus(data.payload.threadId, 'error');
+        useProjectsStore.getState().setThreadStatus(data.payload.threadId, 'error');
         addMessage({
           id: crypto.randomUUID(),
           taskId: data.payload.threadId,

@@ -217,9 +217,9 @@ export class SandboxManager extends EventEmitter {
       githubToken:
         config.githubToken || process.env["GITHUB_TOKEN"] || "",
       snapshot:
-        config.snapshot || process.env["DAYTONA_SNAPSHOT"] || "apex-default-0.1.1",
+        config.snapshot || process.env["DAYTONA_SNAPSHOT"] || "apex-default-0.2.1-m",
       image:
-        config.image || process.env["SANDBOX_IMAGE"] || "daytonaio/apex-default:0.1.1",
+        config.image || process.env["SANDBOX_IMAGE"] || "daytonaio/apex-default:0.2.1-m",
       timeoutMs: config.timeoutMs || 600000,
       provider:
         (config.provider as SandboxProviderType) ||

@@ -6,7 +6,7 @@ Sandbox providers are the abstraction layer that lets the orchestrator create, m
 
 The key architectural pattern: every sandbox container image ships with the **Daytona daemon** binary (`/usr/local/bin/daytona-daemon`), which starts at container boot. The daemon isn't used directly by the Docker provider (which uses `docker exec` instead), but it's part of the base image. The **bridge** (`bridge.js`) is uploaded and started by `SandboxManager.installBridge()` at sandbox creation time, which is uniform across all providers.
 
-Default image: `docker.io/daytonaio/apex-default:0.1.0`
+Default image: `docker.io/daytonaio/apex-default:0.2.1-m`
 
 ---
 
@@ -222,7 +222,7 @@ switch (type) {
 |---|---|---|
 | `provider` | `'daytona'` (or `SANDBOX_PROVIDER` env) | Which provider backend to use |
 | `snapshot` | `'daytona-apex-3'` (or `DAYTONA_SNAPSHOT` env) | Daytona snapshot name |
-| `image` | `'docker.io/daytonaio/apex-default:0.1.0'` (or `SANDBOX_IMAGE` env) | Docker/Apple Container image |
+| `image` | `'docker.io/daytonaio/apex-default:0.2.1-m'` (or `SANDBOX_IMAGE` env) | Docker/Apple Container image |
 | `anthropicApiKey` | `ANTHROPIC_API_KEY` env | Passed to bridge for agent CLIs |
 | `openaiApiKey` | `OPENAI_API_KEY` env | Passed to bridge for agent CLIs |
 | `githubToken` | `GITHUB_TOKEN` env | Used for git credential setup in sandboxes |

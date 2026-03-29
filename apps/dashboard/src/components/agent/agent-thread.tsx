@@ -191,9 +191,12 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
   );
 
   const taskInfo = useMemo(() => {
+    let assistantCount = 0;
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (msg.role !== 'assistant') continue;
+      assistantCount++;
+      if (assistantCount > 3) break;
       for (let j = msg.content.length - 1; j >= 0; j--) {
         const block = msg.content[j];
         const bName = (block.name ?? '').toLowerCase();

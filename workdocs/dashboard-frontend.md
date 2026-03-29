@@ -207,7 +207,7 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 | Component                | Purpose |
 | ------------------------ | ------- |
 | **ProjectList**          | Centered card list (max-width 768px). Fetches projects on mount via `useProjectsStore`. Shows loading spinner, empty state, or grid of `ProjectCard`s. "New Project" button toggles `CreateProjectDialog`. Accepts `activeProjectId` prop — when a thread preview panel is open for a project, the `ThreadList` inside that project's card auto-expands. Header includes a GitHub auth indicator: shows avatar + login (linking to GitHub profile) when a token is configured, or a muted "GitHub not connected" button linking to settings when no token is set. Fetches `GET /api/github/user` on mount. |
-| **ProjectCard**          | Bordered card displaying: project name, color-coded status badge, description, repo info (`RepoInfo` — owner/repo link + issue/PR context with icons), agent type label (Build / Plan / Sisyphus), creation date, per-project thread list (`ThreadList`), open (external link), new thread, and delete (with confirm) buttons. When `activeProjectId` matches, the thread list auto-expands. |
+| **ProjectCard**          | Bordered card displaying: colored circle dot (container status indicator: green=running, yellow=creating/starting/stopping, gray=stopped, red=error, with tooltip), project name, priority-based thread status icon (shows the most important thread state — `waiting_for_user_action` > `waiting_for_input` > `running` > `error` > `completed`), description, repo info (`RepoInfo` — owner/repo link + issue/PR context with icons), agent type label (Build / Plan / Sisyphus), creation date, per-project thread list (`ThreadList`), open (external link), new thread, and delete (with confirm) buttons. When `activeProjectId` matches, the thread list auto-expands. |
 | **ThreadList**           | Collapsible per-project thread sublist. Shows thread count, running/waiting/error badges. Each thread row: status icon, ID prefix, agent type badge, title, timestamp. Clicking a thread opens the `ThreadPreviewPanel` on the home page. |
 | **ThreadPreviewPanel**   | Fixed-width (480px) right panel on the home page. Renders a full `AgentThread` for the selected thread, allowing prompt input and agent interaction without leaving the project list. Expandable to full screen. |
 | **CreateProjectDialog**  | Modal overlay (`fixed inset-0 z-50`). Form fields: **Name** (auto-generated from GitHub issue/PR title or repo name, with dedup suffix; manual edits disable auto-generation), **Sandbox Provider** (Daytona / Docker / Apple Container / Local grid selector with availability status), **Project Folder** (local provider only, with folder browser), **Description**, **Git Repository** (optional, supports GitHub issue/PR/branch/commit URLs — auto-resolves via `/api/github/resolve` with preview showing clone target and branch). Cancel + Create buttons. |
@@ -249,6 +249,8 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 | `fetchProjects()`  | GET `/api/projects` |
 | `createProject(…)` | POST `/api/projects` — prepends to list |
 | `deleteProject(id)`| DELETE `/api/projects/:id` — removes from list |
+| `setProjectStatus(id, status)` | Optimistically updates a project's container status in the store |
+| `setThreadStatus(threadId, status)` | Updates a thread's status within its parent project's embedded threads — keeps project list indicators in sync with `agent_status` events |
 
 ### 5.2 `useThreadsStore` (`stores/tasks-store.ts`)
 
@@ -264,7 +266,7 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 | `startNewThread()`        | Clears active, enters compose mode |
 | `createThread(…)`         | POST `/api/projects/:id/threads` |
 | `addMessage(msg)`       | Appends message (if for active thread) |
-| `updateThreadStatus(…)`   | Updates a thread's status in the list |
+| `updateThreadStatus(…)`   | Updates a thread's status in the threads list |
 | `threadSessionInfo`     | `Record<string, ThreadSessionInfo>` — per-thread init data (model, tools, MCP servers) from bridge `system`/`init` messages |
 | `setThreadSessionInfo(…)` | Stores session init data for a thread (called by `useAgentSocket` on `system`/`init` message) |
 | `deleteThread(id)`        | DELETE `/api/threads/:id` |
@@ -422,7 +424,8 @@ All hooks share **one Socket.io connection** created by `useAgentSocket` (namesp
 
 - **Emits**: `subscribe_project`, `send_prompt` (with optional `agentType` and `images`), `execute_thread` (with optional `agentType`), `stop_agent` (abort running agent), `user_answer`
 - **Listens**: `subscribed`, `prompt_accepted`, `agent_message` (assistant turns, result summaries, system info/retry), `agent_status`, `agent_error`
-- Pushes received messages into `useThreadsStore` and updates thread statuses.
+- Pushes received messages into `useThreadsStore` and updates thread statuses in both `useThreadsStore` and `useProjectsStore` (via `setThreadStatus`) to keep the project list indicators in sync.
+- On `result` messages: detects pending todos (last 3 assistant messages with `TodoWrite` having `pending`/`in_progress` items) and overrides thread status to `waiting_for_user_action` via `update_thread_status` WebSocket message.
 - Handles `system`/`init` messages: captures MCP servers, tools, model, permission mode, and agent version into `useThreadsStore.setThreadSessionInfo()`.
 - Result messages include full token data: `inputTokens`, `outputTokens`, `cacheCreationInputTokens`, `cacheReadInputTokens`, `durationApiMs`.
 

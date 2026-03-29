@@ -51,6 +51,8 @@ interface TerminalState {
   nextTerminalNumber: number;
   /** Increment counter and return the new value */
   getNextTerminalNumber: () => number;
+  /** Reset bridgeResponded so auto-create waits for a real bridge terminal_list */
+  resetBridgeResponded: () => void;
   /** Reset state (e.g. when navigating away from a project) */
   reset: () => void;
 }
@@ -191,6 +193,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set({ nextTerminalNumber: next });
     return next;
   },
+
+  resetBridgeResponded: () => set({ bridgeResponded: false }),
 
   reset: () =>
     set({

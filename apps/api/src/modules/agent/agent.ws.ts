@@ -161,7 +161,30 @@ function attachTerminalListeners(sandboxId: string, provider?: string) {
   });
 }
 
-const CONTEXT_MAX_CHARS = 4_000;
+const CONTEXT_DIR = '/tmp/.apex-thread-context';
+const CONTEXT_INLINE_MAX_CHARS = 40_000;
+const CONTEXT_FILE_RESULT_MAX = 2_000;
+
+function extractToolResultText(block: any): string {
+  if (!block.content) return '';
+  if (typeof block.content === 'string') return block.content;
+  if (Array.isArray(block.content)) {
+    return block.content
+      .filter((b: any) => b.type === 'text' && b.text)
+      .map((b: any) => b.text)
+      .join('\n');
+  }
+  return '';
+}
+
+function summarizeToolUse(block: any): string {
+  const name = block.name || 'unknown';
+  const input = block.input;
+  if (!input || typeof input !== 'object') return name;
+  const key = input.path || input.command || input.file_path || input.query || input.pattern || input.url;
+  if (key) return `${name}(${String(key).slice(0, 120)})`;
+  return name;
+}
 
 function buildConversationContext(threadMessages: { role: string; content: any; metadata?: any }[]): string {
   const parts: string[] = [];
@@ -172,21 +195,24 @@ function buildConversationContext(threadMessages: { role: string; content: any; 
     if (!Array.isArray(msg.content)) continue;
     const role = msg.role === 'user' ? 'User' : 'Assistant';
     const textBlocks: string[] = [];
-    const toolNames: string[] = [];
+    const toolSummaries: string[] = [];
+    const toolResults: string[] = [];
     for (const block of msg.content) {
       if (block.type === 'text' && block.text) {
         textBlocks.push(block.text);
-      } else if (block.type === 'tool_use' && block.name) {
-        toolNames.push(block.name);
+      } else if (block.type === 'tool_use') {
+        toolSummaries.push(summarizeToolUse(block));
       } else if (block.type === 'tool_result') {
-        continue;
+        const text = extractToolResultText(block);
+        if (text) toolResults.push(text.length > 500 ? text.slice(0, 500) + '…' : text);
       }
     }
-    if (textBlocks.length === 0 && toolNames.length === 0) continue;
+    if (textBlocks.length === 0 && toolSummaries.length === 0 && toolResults.length === 0) continue;
     let line = `[${role}]: `;
     if (textBlocks.length > 0) line += textBlocks.join('\n');
-    if (toolNames.length > 0) line += `\n(Used tools: ${toolNames.join(', ')})`;
-    if (totalLen + line.length > CONTEXT_MAX_CHARS) {
+    if (toolSummaries.length > 0) line += `\n(Tools: ${toolSummaries.join(', ')})`;
+    if (toolResults.length > 0) line += `\n(Results: ${toolResults.join(' | ')})`;
+    if (totalLen + line.length > CONTEXT_INLINE_MAX_CHARS) {
       parts.push('[... earlier messages truncated ...]');
       break;
     }
@@ -194,6 +220,81 @@ function buildConversationContext(threadMessages: { role: string; content: any; 
     totalLen += line.length;
   }
   return parts.reverse().join('\n\n');
+}
+
+function buildContextFileContent(messages: { role: string; content: any; metadata?: any }[]): string {
+  const lines: string[] = ['# Thread Conversation History\n'];
+  let turnNum = 0;
+
+  for (const msg of messages) {
+    if (msg.role === 'system') {
+      if (msg.metadata?.numTurns || msg.metadata?.costUsd) {
+        lines.push(`---\n*Agent session: ${msg.metadata.numTurns ?? '?'} turns, $${msg.metadata.costUsd?.toFixed(4) ?? '?'}*\n`);
+      }
+      continue;
+    }
+    if (!Array.isArray(msg.content)) continue;
+
+    turnNum++;
+    const role = msg.role === 'user' ? 'User' : 'Assistant';
+    lines.push(`## Turn ${turnNum} [${role}]\n`);
+
+    for (const block of msg.content) {
+      if (block.type === 'text' && block.text) {
+        lines.push(block.text + '\n');
+      } else if (block.type === 'tool_use') {
+        const name = block.name || 'unknown';
+        lines.push(`**Tool: ${name}**`);
+        if (block.input && typeof block.input === 'object') {
+          const inp = block.input;
+          const target = inp.path || inp.command || inp.file_path || inp.query || inp.pattern || inp.url;
+          if (target) {
+            lines.push(`Target: \`${String(target).slice(0, 300)}\``);
+          }
+          const inputStr = JSON.stringify(inp, null, 2);
+          if (inputStr.length <= 1200) {
+            lines.push('```json\n' + inputStr + '\n```');
+          } else if (!target) {
+            lines.push('```json\n' + inputStr.slice(0, 1000) + '\n... [truncated]\n```');
+          }
+        }
+        lines.push('');
+      } else if (block.type === 'tool_result') {
+        const text = extractToolResultText(block);
+        if (text) {
+          const truncated = text.length > CONTEXT_FILE_RESULT_MAX
+            ? text.slice(0, CONTEXT_FILE_RESULT_MAX) + '\n... [truncated]'
+            : text;
+          lines.push('**Result:**\n```\n' + truncated + '\n```\n');
+        }
+      } else if (block.type === 'image') {
+        lines.push('*[image attachment]*\n');
+      }
+    }
+  }
+
+  return lines.join('\n');
+}
+
+async function writeThreadContext(
+  manager: { createFolder: (sid: string, dir: string) => Promise<void>; writeFile: (sid: string, path: string, content: string) => Promise<void> },
+  sandboxId: string,
+  threadId: string,
+  messages: any[],
+): Promise<string> {
+  const filePath = `${CONTEXT_DIR}/${threadId}.md`;
+  const content = buildContextFileContent(messages);
+  try {
+    await manager.createFolder(sandboxId, CONTEXT_DIR);
+    await manager.writeFile(sandboxId, filePath, content);
+  } catch (err) {
+    console.warn(`[agent-ws] Failed to write context file for ${threadId.slice(0, 8)}:`, err);
+  }
+  return filePath;
+}
+
+function contextFileHint(filePath: string): string {
+  return `\n\nIMPORTANT: Full conversation history from this thread is saved at ${filePath} — read it to restore complete context of prior work.`;
 }
 
 async function executeAgainstSandbox(
@@ -241,6 +342,21 @@ async function executeAgainstSandbox(
   let receivedFirstMessage = false;
   let retryCount = 0;
 
+  const buildRetryPrompt = async (reason: string): Promise<string> => {
+    const freshThread = await threadsService.findById(threadId);
+    const allMessages = freshThread.messages || [];
+    let resumeText = receivedFirstMessage
+      ? `Continue from where you left off. ${reason}`
+      : prompt;
+    if (allMessages.length > 0) {
+      try {
+        const ctxPath = await writeThreadContext(manager, project.sandboxId!, threadId, allMessages);
+        resumeText += contextFileHint(ctxPath);
+      } catch { /* best-effort */ }
+    }
+    return resumeText;
+  };
+
   const cleanupHandler = () => {
     manager.removeListener('message', messageHandler);
     activeHandlers.delete(threadId);
@@ -262,9 +378,7 @@ async function executeAgainstSandbox(
         });
         try {
           await threadsService.updateClaudeSessionId(threadId, null);
-          const resumePrompt = receivedFirstMessage
-            ? 'Continue from where you left off. You had stopped responding after a long pause.'
-            : prompt;
+          const resumePrompt = await buildRetryPrompt('You had stopped responding after a long pause.');
           await manager.sendPrompt(project.sandboxId!, resumePrompt, threadId,
             null, mode, model, effectiveAgentType, true);
           receivedFirstMessage = false;
@@ -307,9 +421,7 @@ async function executeAgainstSandbox(
           });
           try {
             await threadsService.updateClaudeSessionId(threadId, null);
-            const resumePrompt = receivedFirstMessage
-              ? 'Continue from where you left off. The sandbox connection was lost and restored.'
-              : prompt;
+            const resumePrompt = await buildRetryPrompt('The sandbox connection was lost and restored.');
             await manager.sendPrompt(project.sandboxId!, resumePrompt, threadId,
               null, mode, model, effectiveAgentType, true);
             receivedFirstMessage = false;
@@ -382,7 +494,7 @@ async function executeAgainstSandbox(
           },
         });
         const currentThread = await threadsService.findById(threadId);
-        if (currentThread.status !== 'waiting_for_input') {
+        if (currentThread.status !== 'waiting_for_input' && currentThread.status !== 'waiting_for_user_action') {
           const finalStatus = data.is_error ? 'error' : 'completed';
           await updateThreadStatusAndNotify(threadId, finalStatus);
           emitToSubscribers(project.sandboxId!, 'agent_status', { threadId, status: finalStatus });
@@ -400,9 +512,7 @@ async function executeAgainstSandbox(
         });
         try {
           await threadsService.updateClaudeSessionId(threadId, null);
-          const resumePrompt = receivedFirstMessage
-            ? 'Continue from where you left off. You had crashed and were restarted.'
-            : prompt;
+          const resumePrompt = await buildRetryPrompt('You had crashed and were restarted.');
           await manager.sendPrompt(project.sandboxId!, resumePrompt, threadId,
             null, mode, model, effectiveAgentType, true);
           receivedFirstMessage = false;
@@ -416,7 +526,7 @@ async function executeAgainstSandbox(
         });
       }
       const exitThread = await threadsService.findById(threadId);
-      if (exitThread.status !== 'waiting_for_input') {
+      if (exitThread.status !== 'waiting_for_input' && exitThread.status !== 'waiting_for_user_action') {
         await updateThreadStatusAndNotify(threadId, status);
         emitToSubscribers(project.sandboxId!, 'agent_status', { threadId, status });
         cleanupHandler();
@@ -457,11 +567,16 @@ async function executeAgainstSandbox(
 
   let effectivePrompt = prompt;
   const priorMessages = (thread.messages || []).slice(0, -1);
+  let contextFilePath: string | undefined;
   if (priorMessages.length > 0) {
     const context = buildConversationContext(priorMessages as any);
     if (context) {
       effectivePrompt = `<conversation_history>\n${context}\n</conversation_history>\n\n${prompt}`;
     }
+    try {
+      contextFilePath = await writeThreadContext(manager, project.sandboxId, threadId, priorMessages);
+      effectivePrompt += contextFileHint(contextFilePath);
+    } catch { /* best-effort */ }
   }
 
   try {
@@ -603,6 +718,13 @@ async function handleMessage(client: WsClient, message: unknown) {
         emitToSubscribers(project.sandboxId, 'agent_status', { threadId, status: 'completed' });
         break;
       }
+      case 'update_thread_status': {
+        const { threadId, status } = payload;
+        if (threadId && status) {
+          await updateThreadStatusAndNotify(threadId, status);
+        }
+        break;
+      }
       case 'crash_agent': {
         if (process.env.APEX_E2E_TEST !== '1') break;
         const { threadId } = payload;
@@ -652,9 +774,10 @@ async function handleMessage(client: WsClient, message: unknown) {
             new Promise<boolean>((r) => setTimeout(() => r(true), 10_000)),
           ]);
           if (timedOut) emitTo(client, 'terminal_list', { terminals: [] });
-        } else {
-          emitTo(client, 'terminal_list', { terminals: [] });
         }
+        // When sandbox isn't ready, don't respond — the client's timeout
+        // will set terminalsLoaded without bridgeResponded, preventing
+        // premature auto-create that would hit "Sandbox not ready".
         break;
       }
       case 'port_preview_url': {
