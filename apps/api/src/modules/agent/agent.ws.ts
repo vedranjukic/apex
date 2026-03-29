@@ -981,6 +981,11 @@ async function reconcileAndReconnect(
   } catch { /* ignore */ }
 }
 
+export async function autoExecuteThread(threadId: string, prompt: string): Promise<void> {
+  const noopClient: WsClient = { id: `__auto_${threadId}__`, wsSend: () => {} };
+  await executeAgainstSandbox(noopClient, threadId, prompt);
+}
+
 export const agentWs = new Elysia()
   .ws('/ws/agent', {
     open(ws) {

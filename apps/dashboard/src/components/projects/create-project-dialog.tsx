@@ -68,6 +68,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[]>([]);
   const nameManuallyEdited = useRef(false);
 
+  const [autoStart, setAutoStart] = useState(true);
   const [resolving, setResolving] = useState(false);
   const [resolved, setResolved] = useState<GitHubResolveResult | null>(null);
   const [resolveError, setResolveError] = useState<string | null>(null);
@@ -156,6 +157,16 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
     if (isLocal && !localDir.trim()) return;
     setSubmitting(true);
     try {
+      let autoStartPrompt: string | undefined;
+      if (autoStart && githubContext) {
+        const ctxType = githubContext.type === 'issue' ? 'Issue' : 'Pull Request';
+        const header = `GitHub ${ctxType} #${githubContext.number}: ${githubContext.title}\n${githubContext.url}\n\n${githubContext.body}`;
+        const instruction = githubContext.type === 'issue'
+          ? 'ulw Solve this GitHub issue. Analyze the codebase, understand the problem, and implement a solution.'
+          : 'ulw Review this pull request. Analyze the code changes, identify potential issues, and provide a comprehensive review.';
+        autoStartPrompt = `${header}\n\n---\n\n${instruction}\n\nIMPORTANT: Work fully autonomously. Do NOT use the ask_user tool or ask for user confirmation or clarification. Make your best judgment and proceed.`;
+      }
+
       const project = await createProject({
         name: name.trim(),
         description: description.trim(),
@@ -164,6 +175,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
         gitBranch: gitBranch || undefined,
         localDir: isLocal ? localDir.trim() : undefined,
         githubContext,
+        autoStartPrompt,
       });
       onCreated(project.id);
       setName('');
@@ -171,6 +183,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
       setProvider(providerStatuses.find((p) => p.available)?.type ?? '');
       setGitRepo('');
       setLocalDir('');
+      setAutoStart(true);
       setResolved(null);
       setResolveError(null);
       lastResolvedUrl.current = '';
@@ -307,6 +320,22 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
               <p className="text-xs text-text-muted mt-1">Optional. Paste a repo, issue, PR, or branch URL. For private repos, add a GitHub token in <a href="/settings" className="underline hover:text-text-primary">Settings</a>.</p>
             )}
           </div>
+
+          {resolved && !resolving && githubContext && (
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoStart}
+                onChange={(e) => setAutoStart(e.target.checked)}
+                className="w-4 h-4 rounded border-border text-primary focus:ring-primary accent-primary"
+              />
+              <span className="text-sm text-text-secondary">
+                {githubContext.type === 'issue'
+                  ? 'Start solving issue when ready'
+                  : 'Start reviewing PR when ready'}
+              </span>
+            </label>
+          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <button

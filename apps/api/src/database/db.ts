@@ -88,5 +88,6 @@ sqlite.exec(`
 try { sqlite.exec(`ALTER TABLE projects ADD COLUMN provider TEXT NOT NULL DEFAULT 'daytona'`); } catch { /* column already exists */ }
 try { sqlite.exec(`ALTER TABLE projects ADD COLUMN local_dir TEXT`); } catch { /* column already exists */ }
 try { sqlite.exec(`ALTER TABLE projects ADD COLUMN github_context TEXT`); } catch { /* column already exists */ }
+try { sqlite.exec(`ALTER TABLE projects ADD COLUMN auto_start_prompt TEXT`); } catch { /* column already exists */ }
 
 export const db = drizzle(sqlite, { schema });

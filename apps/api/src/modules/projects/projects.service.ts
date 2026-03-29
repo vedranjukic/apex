@@ -10,6 +10,7 @@ import { getCACertPem } from '../secrets-proxy/ca-manager';
 import { getSecretsProxyPort } from '../secrets-proxy/secrets-proxy';
 import { secretsService } from '../secrets/secrets.service';
 import { settingsService } from '../settings/settings.service';
+import { threadsService } from '../tasks/tasks.service';
 
 export type Project = typeof projects.$inferSelect & { threads?: (typeof tasks.$inferSelect)[] };
 
@@ -28,12 +29,19 @@ function canExec(cmd: string, args: string[]): Promise<boolean> {
   });
 }
 
+type AutoStartHandler = (threadId: string, prompt: string) => Promise<void>;
+
 class ProjectsService {
   private sandboxManagers = new Map<string, SandboxManager>();
   private providerStatuses: ProviderStatus[] = [];
+  private autoStartHandler: AutoStartHandler | null = null;
 
   async init() {
     await this.initSandboxManagers();
+  }
+
+  registerAutoStartHandler(handler: AutoStartHandler) {
+    this.autoStartHandler = handler;
   }
 
   /** Run lightweight dependency checks for every provider (once at startup). */
@@ -314,6 +322,7 @@ class ProjectsService {
       localDir?: string;
       agentConfig?: Record<string, unknown>;
       githubContext?: Record<string, unknown>;
+      autoStartPrompt?: string;
     },
   ): Promise<Project> {
     const id = crypto.randomUUID();
@@ -367,6 +376,7 @@ class ProjectsService {
       agentConfig: data.agentConfig || null,
       githubContext: (githubContext as any) || null,
       branchName: createBranch || null,
+      autoStartPrompt: data.autoStartPrompt || null,
       status: 'creating',
     });
     const saved = await this.findById(id);
@@ -513,6 +523,24 @@ class ProjectsService {
     return this.sandboxManagers.get(project.provider) ?? this.getSandboxManager();
   }
 
+  private async triggerAutoStart(project: Project): Promise<void> {
+    if (!project.autoStartPrompt || !this.autoStartHandler) return;
+    try {
+      const thread = await threadsService.create(project.id, {
+        prompt: project.autoStartPrompt,
+        agentType: 'sisyphus',
+      });
+      await db.update(projects).set({ autoStartPrompt: null }).where(eq(projects.id, project.id));
+      projectsWsBroadcast('project_updated', await this.findById(project.id));
+      this.autoStartHandler(thread.id, project.autoStartPrompt).catch((err) => {
+        console.error(`[projects] Auto-start execution failed for project ${project.id}:`, err);
+      });
+      console.log(`[projects] Auto-started thread ${thread.id} for project ${project.id}`);
+    } catch (err) {
+      console.error(`[projects] Failed to auto-start for project ${project.id}:`, err);
+    }
+  }
+
   private async provisionSandbox(
     projectId: string, snapshot: string, provider: ProviderType,
     projectName?: string, gitRepo?: string | null, agentType?: string,
@@ -533,7 +561,9 @@ class ProjectsService {
         snapshot, projectName, gitRepo || undefined, agentType, projectId, onStatusChange, localDir, gitBranch, createBranch,
       );
       await db.update(projects).set({ sandboxId, status: 'running', statusError: null }).where(eq(projects.id, projectId));
-      projectsWsBroadcast('project_updated', await this.findById(projectId));
+      const readyProject = await this.findById(projectId);
+      projectsWsBroadcast('project_updated', readyProject);
+      await this.triggerAutoStart(readyProject);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await db.update(projects).set({ status: 'error', statusError: message }).where(eq(projects.id, projectId));

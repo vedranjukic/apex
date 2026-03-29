@@ -17,6 +17,7 @@ interface ProjectsState {
     gitBranch?: string;
     localDir?: string;
     githubContext?: GitHubContextData;
+    autoStartPrompt?: string;
   }) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
   setProjectStatus: (id: string, status: string) => void;
@@ -43,7 +44,10 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
 
   createProject: async (data) => {
     const project = await projectsApi.create(data);
-    set({ projects: [project, ...get().projects] });
+    const existing = get().projects;
+    if (!existing.some((p) => p.id === project.id)) {
+      set({ projects: [project, ...existing] });
+    }
     return project;
   },
 
