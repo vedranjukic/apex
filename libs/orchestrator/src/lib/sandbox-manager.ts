@@ -1364,6 +1364,25 @@ export class SandboxManager extends EventEmitter {
     "multiple task tool calls in the same response.",
   ].join("\n");
 
+  /**
+   * Markdown agent file for sisyphus. Placed in .opencode/agents/sisyphus.md
+   * so it has higher precedence than any project-level opencode.json config.
+   */
+  private static readonly SISYPHUS_AGENT_MD = [
+    "---",
+    "description: Orchestration agent for complex multi-step tasks",
+    "mode: primary",
+    "model: anthropic/claude-sonnet-4-20250514",
+    "steps: 50",
+    "permission:",
+    "  edit: allow",
+    "  bash: allow",
+    "  webfetch: allow",
+    "---",
+    "",
+    ...SandboxManager.SISYPHUS_PROMPT.split("\n"),
+  ].join("\n");
+
   private static buildSandboxInstructions(projectDir: string, isLocal: boolean): string {
     return [
       "# Sandbox Environment",
@@ -1839,68 +1858,73 @@ export class SandboxManager extends EventEmitter {
         "gpt-5.2": gpt52Fix,
         "gpt-5.2-chat-latest": gpt52Fix,
       };
-      const openCodeConfig: Record<string, unknown> = {
-        $schema: "https://opencode.ai/config.json",
-        model: "anthropic/claude-opus-4-20250514",
-        default_agent: "build",
-        plugin: ["oh-my-openagent"],
-        provider: {
-          ...(useProxy ? {
-            anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
-            openai: {
-              options: { baseURL: "{env:OPENAI_BASE_URL}" },
-              models: gpt52ModelOverrides,
-            },
-          } : {
-            openai: {
-              models: gpt52ModelOverrides,
-            },
-          }),
+    const openCodeConfig: Record<string, unknown> = {
+      $schema: "https://opencode.ai/config.json",
+      model: "anthropic/claude-sonnet-4-20250514",
+      default_agent: "build",
+      provider: {
+        ...(useProxy ? {
+          anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
+          openai: {
+            options: { baseURL: "{env:OPENAI_BASE_URL}" },
+            models: gpt52ModelOverrides,
+          },
+        } : {
+          openai: {
+            models: gpt52ModelOverrides,
+          },
+        }),
+      },
+      agent: {
+        build: {
+          description: "Full development agent with all tools enabled",
+          mode: "primary",
+          prompt: `{file:${homeDir}/AGENTS.md}`,
+          permission: { "*": { "*": "allow" } },
         },
-        agent: {
-          build: {
-            description: "Full development agent with all tools enabled",
-            mode: "primary",
-            prompt: `{file:${homeDir}/AGENTS.md}`,
-            permission: { "*": { "*": "allow" } },
-          },
-          plan: {
-            description: "Analysis and planning without making changes",
-            mode: "primary",
-            tools: { write: false, edit: false, bash: false },
-            permission: { "*": { "*": "allow" } },
-          },
-          sisyphus: {
-            description: "Orchestration agent for complex multi-step tasks",
-            mode: "primary",
-            prompt: `{file:${homeDir}/.opencode/agents/sisyphus-prompt.txt}`,
-            steps: 50,
-            permission: { "*": { "*": "allow" } },
-          },
+        plan: {
+          description: "Analysis and planning without making changes",
+          mode: "primary",
+          tools: { write: false, edit: false, bash: false },
+          permission: { "*": { "*": "allow" } },
         },
-        experimental: { mcp_timeout: 300000 },
-        mcp: {
-          "terminal-server": {
-            type: "local",
-            command: ["node", `${bridgeDir}/mcp-terminal-server.cjs`],
-            timeout: 300000,
-          },
-          "lsp-server": {
-            type: "local",
-            command: ["node", `${bridgeDir}/mcp-lsp-server.cjs`],
-            timeout: 300000,
-          },
+        sisyphus: {
+          description: "Orchestration agent for complex multi-step tasks",
+          mode: "primary",
+          model: "anthropic/claude-sonnet-4-20250514",
+          prompt: SandboxManager.SISYPHUS_PROMPT,
+          steps: 50,
+          permission: { "*": { "*": "allow" } },
         },
-      };
-      const ocConfigDir = `${homeDir}/.config/opencode`;
-      await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}'`);
+      },
+      experimental: { mcp_timeout: 300000 },
+      mcp: {
+        "terminal-server": {
+          type: "local",
+          command: ["node", `${bridgeDir}/mcp-terminal-server.cjs`],
+          timeout: 300000,
+        },
+        "lsp-server": {
+          type: "local",
+          command: ["node", `${bridgeDir}/mcp-lsp-server.cjs`],
+          timeout: 300000,
+        },
+      },
+    };
+    const ocConfigDir = `${homeDir}/.config/opencode`;
+      await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}/agents'`);
       // Upload MCP server scripts alongside config on reconnect
       const mcpLspCodeR = getMcpLspScript(BRIDGE_PORT);
       const mcpTermCodeR = getMcpTerminalScript(BRIDGE_PORT);
+      const agentsMd = SandboxManager.buildSandboxInstructions(projectDir, this.config.provider === "local");
       await Promise.all([
         sandbox.fs.uploadFile(
           Buffer.from(JSON.stringify(openCodeConfig)),
           `${ocConfigDir}/opencode.json`,
+        ),
+        sandbox.fs.uploadFile(
+          Buffer.from(SandboxManager.SISYPHUS_AGENT_MD),
+          `${ocConfigDir}/agents/sisyphus.md`,
         ),
         sandbox.fs.uploadFile(
           Buffer.from(mcpTermCodeR),
@@ -1910,21 +1934,9 @@ export class SandboxManager extends EventEmitter {
           Buffer.from(mcpLspCodeR),
           `${bridgeDir}/mcp-lsp-server.cjs`,
         ),
+        sandbox.fs.uploadFile(Buffer.from(agentsMd), `${homeDir}/AGENTS.md`).catch(() => {}),
       ]);
-      console.log(`[bridge:${sid}] wrote ${ocConfigDir}/opencode.json + MCP scripts`);
-
-      // Write agent prompt files under HOME (not in projectDir — keep the repo clean)
-      await sandbox.process.executeCommand(`mkdir -p '${homeDir}/.opencode/agents'`);
-      await Promise.all([
-        sandbox.fs.uploadFile(
-          Buffer.from(SandboxManager.SISYPHUS_PROMPT),
-          `${homeDir}/.opencode/agents/sisyphus-prompt.txt`,
-        ).catch(() => { /* best-effort */ }),
-        sandbox.fs.uploadFile(
-          Buffer.from(SandboxManager.buildSandboxInstructions(projectDir, this.config.provider === "local")),
-          `${homeDir}/AGENTS.md`,
-        ).catch(() => { /* best-effort */ }),
-      ]);
+      console.log(`[bridge:${sid}] wrote ${ocConfigDir}/opencode.json + agents + MCP scripts`);
     }
 
     // Ensure CA cert is installed (containers only — local provider uses host certs)
@@ -2112,9 +2124,8 @@ export class SandboxManager extends EventEmitter {
     };
     const openCodeConfig: Record<string, unknown> = {
       $schema: "https://opencode.ai/config.json",
-      model: "anthropic/claude-opus-4-20250514",
+      model: "anthropic/claude-sonnet-4-20250514",
       default_agent: "build",
-      plugin: ["oh-my-openagent"],
       provider: {
         ...(useProxyI ? {
           anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
@@ -2144,7 +2155,8 @@ export class SandboxManager extends EventEmitter {
         sisyphus: {
           description: "Orchestration agent for complex multi-step tasks with retry logic",
           mode: "primary",
-          prompt: `{file:${homeDir}/.opencode/agents/sisyphus-prompt.txt}`,
+          model: "anthropic/claude-sonnet-4-20250514",
+          prompt: SandboxManager.SISYPHUS_PROMPT,
           steps: 50,
           permission: { "*": { "*": "allow" } },
         },
@@ -2168,12 +2180,13 @@ export class SandboxManager extends EventEmitter {
       this.config.proxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
 
-    // ── Exec 1: Write all non-project files (bridge, config, agent prompts under HOME) ──
+    // ── Exec 1: Write infra files (bridge, config, agents) ──
+    // All config goes under HOME — never write to the project working directory.
     const ocConfigDir = `${homeDir}/.config/opencode`;
-    await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}' '${bridgeDir}' '${homeDir}/.opencode/agents'`);
+    await sandbox.process.executeCommand(
+      `mkdir -p '${ocConfigDir}/agents' '${bridgeDir}'`,
+    );
 
-    // Split large files into separate batches to avoid exceeding Daytona exec limits.
-    // bridge.cjs alone is ~50KB base64; adding MCP scripts would exceed the limit.
     const bridgeFiles: { path: string; content: string }[] = [
       { path: `${bridgeDir}/bridge.cjs`, content: bridgeCode },
     ];
@@ -2183,10 +2196,10 @@ export class SandboxManager extends EventEmitter {
     ];
     const configFiles: { path: string; content: string }[] = [
       { path: `${ocConfigDir}/opencode.json`, content: JSON.stringify(openCodeConfig) },
+      { path: `${ocConfigDir}/agents/sisyphus.md`, content: SandboxManager.SISYPHUS_AGENT_MD },
     ];
     const skipIfExistsFiles: { path: string; content: string }[] = [
       { path: `${homeDir}/AGENTS.md`, content: sandboxInstructions },
-      { path: `${homeDir}/.opencode/agents/sisyphus-prompt.txt`, content: SandboxManager.SISYPHUS_PROMPT },
     ];
     const existCheck = await sandbox.process.executeCommand(
       skipIfExistsFiles.map(f => `test -f '${f.path}' && echo '${f.path}'`).join("; ") + " || true",

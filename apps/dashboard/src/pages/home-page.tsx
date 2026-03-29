@@ -15,6 +15,7 @@ export function HomePage() {
   const [previewProjectName, setPreviewProjectName] = useState<string>('');
 
   const projects = useProjectsStore((s) => s.projects);
+  const previewProject = projects.find((p) => p.id === previewProjectId);
 
   useEffect(() => {
     resetProjectStores();
@@ -140,6 +141,7 @@ export function HomePage() {
             onExecuteThread={handleExecuteThread}
             onSendUserAnswer={sendUserAnswer}
             onStopAgent={stopAgent}
+            githubContext={previewProject?.githubContext}
           />
         )}
         <span className="absolute bottom-2 right-3 text-[10px] text-panel-text-muted/50 select-none pointer-events-none">

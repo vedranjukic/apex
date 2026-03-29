@@ -91,6 +91,7 @@ function emitAgentError(threadId, error) {
 // ── OpenCode Serve Adapter ──────────────────────────
 // ══════════════════════════════════════════════════════
 const OC_PORT = 4096;
+const OC_DEFAULT_MODEL = { providerID: "anthropic", modelID: "claude-sonnet-4-20250514" };
 const TOOL_NAME_MAP = { bash: "Bash", read: "Read", glob: "Glob", grep: "Grep", apply_patch: "Write", write: "Write", edit: "Edit", todowrite: "TodoWrite", todo_write: "TodoWrite", websearch: "WebSearch", web_search: "WebSearch", webfetch: "WebFetch", web_fetch: "WebFetch", task: "Task" };
 
 function ocFetch(method, urlPath, body, timeoutMs) {
@@ -338,6 +339,12 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images) {
   let ocSessionId = threadToSession.get(threadId);
   if (!ocSessionId && sessionId) {
     try {
+      // Verify the session actually exists in the current OpenCode serve instance
+      // by checking the status endpoint. After an OC restart, old sessions vanish.
+      var allStatuses = await ocFetch("GET", "/session/status", null, 5000);
+      if (!allStatuses || !allStatuses[sessionId]) {
+        throw new Error("session not in status (OC may have restarted)");
+      }
       const checkMsgs = await ocFetch("GET", "/session/" + sessionId + "/message?limit=50", null, 10000);
       ocSessionId = sessionId;
       log("\\u{1F504}", "Reusing stored session " + ocSessionId + " for thread " + threadId);
@@ -405,6 +412,8 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images) {
   if (ocModel && ocModel.includes("/")) {
     const si = ocModel.indexOf("/");
     modelObj = { providerID: ocModel.substring(0, si), modelID: ocModel.substring(si + 1) };
+  } else {
+    modelObj = OC_DEFAULT_MODEL;
   }
 
   const parts = [];
@@ -421,11 +430,10 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images) {
     agent: ocAgent,
     model: modelObj,
   }, 60000);
-  log("\\u{1F916}", "Prompt dispatched to session " + ocSessionId);
-  pollSession(threadId, ocSessionId);
+  pollSession(threadId, ocSessionId, ocAgent, ocModel);
 }
 
-function pollSession(threadId, sessionId) {
+function pollSession(threadId, sessionId, agentName, modelName) {
   if (!sessionEmittedParts.has(sessionId)) sessionEmittedParts.set(sessionId, new Set());
   const emittedParts = sessionEmittedParts.get(sessionId);
   const pendingText = new Map();
@@ -597,6 +605,8 @@ function pollSession(threadId, sessionId) {
             log("\\u{1F916}", "Session " + sessionId + " idle (seenBusy=" + seenBusy + " idleCount=" + idleCount + " age=" + Math.round(pollAge/1000) + "s + parts=" + emittedParts.size + ")");
             activeThreads.delete(threadId);
             if (!seenBusy && emittedParts.size === 0) {
+              var diag = "agent=" + (agentName || "?") + " model=" + (modelName || "auto") + " session=" + sessionId + " polls=" + idleCount + " age=" + Math.round(pollAge/1000) + "s oc=" + (ocServeProc ? "alive" : "dead");
+              log("\\u{274C}", "No output diagnostics: " + diag);
               emitAgentError(threadId, "Agent produced no output — the agent or model may not be configured correctly. Check that the selected agent exists in the OpenCode config and the model is available.");
             } else {
               emitAgentExit(threadId, 0);
