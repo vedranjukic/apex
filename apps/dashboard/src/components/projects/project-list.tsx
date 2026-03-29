@@ -300,7 +300,7 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
       <CreateProjectDialog
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
-        onCreated={(id) => onOpenProject(id)}
+        onCreated={() => fetchProjects()}
       />
     </div>
   );

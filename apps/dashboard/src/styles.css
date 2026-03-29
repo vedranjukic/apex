@@ -509,3 +509,39 @@ body {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(400%); }
 }
+
+/* ── Monaco peek view (Go to References, etc.) ────── */
+.peekview-widget,
+.peekview-widget .monaco-scrollable-element {
+  background: var(--vscode-peekViewResult-background) !important;
+}
+.peekview-widget .peekview-title {
+  background: var(--t-surface-secondary, #171a2a) !important;
+}
+.peekview-widget .ref-tree {
+  background: var(--vscode-peekViewResult-background) !important;
+  font-size: 12px !important;
+  padding: 6px 0;
+}
+.peekview-widget .ref-tree .monaco-list-row {
+  padding: 2px 10px !important;
+  height: 26px !important;
+}
+.peekview-widget .ref-tree .monaco-list-row .monaco-tl-row {
+  display: flex !important;
+  align-items: center !important;
+  height: 100% !important;
+}
+.peekview-widget .ref-tree .monaco-tl-contents {
+  position: relative !important;
+  top: -3px;
+  margin-left: 10px !important;
+}
+.peekview-widget .ref-tree .monaco-tl-twistie {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+.peekview-widget .zone-widget .overlay-widget {
+  display: none !important;
+}

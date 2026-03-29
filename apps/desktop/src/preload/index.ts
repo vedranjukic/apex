@@ -61,4 +61,13 @@ window.open = function (
   }) => {
     return electroview.rpc.request.openInIDE(params);
   },
+  showContextMenu: (items: Array<{
+    label?: string;
+    action?: string;
+    type?: 'separator';
+    accelerator?: string;
+    enabled?: boolean;
+  }>) => {
+    return electroview.rpc.request.showContextMenu({ items });
+  },
 };

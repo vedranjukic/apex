@@ -1,45 +1,14 @@
 import type { ITheme } from '@xterm/xterm';
-import type { editor } from 'monaco-editor';
 
 export type ThemeId = 'midnight-blue' | 'dark' | 'light';
 
 export interface AppTheme {
   id: ThemeId;
   label: string;
-  monacoBase: 'vs-dark' | 'vs';
-  monacoTheme: editor.IStandaloneThemeData;
   terminalTheme: ITheme;
 }
 
 // ── Midnight Blue (default) ─────────────────────────────
-
-const midnightBlueMonaco: editor.IStandaloneThemeData = {
-  base: 'vs-dark',
-  inherit: true,
-  rules: [],
-  colors: {
-    'editor.background': '#1e2132',
-    'editor.foreground': '#e2e4eb',
-    'editor.lineHighlightBackground': '#171a2a',
-    'editor.lineHighlightBorder': '#00000000',
-    'editorLineNumber.foreground': '#6b7280',
-    'editorLineNumber.activeForeground': '#9ca3b4',
-    'editorCursor.foreground': '#6366f1',
-    'editor.selectionBackground': '#6366f133',
-    'editor.inactiveSelectionBackground': '#6366f11a',
-    'editorWidget.background': '#171a2a',
-    'editorWidget.border': '#2e3348',
-    'editorIndentGuide.background': '#2e334844',
-    'editorIndentGuide.activeBackground': '#2e3348',
-    'editorBracketMatch.background': '#6366f122',
-    'editorBracketMatch.border': '#6366f155',
-    'editorGutter.background': '#1e2132',
-    'scrollbar.shadow': '#00000000',
-    'scrollbarSlider.background': '#37415166',
-    'scrollbarSlider.hoverBackground': '#4b556366',
-    'scrollbarSlider.activeBackground': '#4b5563aa',
-  },
-};
 
 const midnightBlueTerminal: ITheme = {
   background: '#151929',
@@ -67,34 +36,6 @@ const midnightBlueTerminal: ITheme = {
 
 // ── Dark (Cursor Dark Modern inspired) ──────────────────
 
-const darkMonaco: editor.IStandaloneThemeData = {
-  base: 'vs-dark',
-  inherit: true,
-  rules: [],
-  colors: {
-    'editor.background': '#141414',
-    'editor.foreground': '#cccccc',
-    'editor.lineHighlightBackground': '#ffffff08',
-    'editor.lineHighlightBorder': '#00000000',
-    'editorLineNumber.foreground': '#6e7681',
-    'editorLineNumber.activeForeground': '#cccccc',
-    'editorCursor.foreground': '#aeafad',
-    'editor.selectionBackground': '#264f78',
-    'editor.inactiveSelectionBackground': '#3a3d41',
-    'editorWidget.background': '#1a1a1a',
-    'editorWidget.border': '#232323',
-    'editorIndentGuide.background': '#23232344',
-    'editorIndentGuide.activeBackground': '#4b4b4b',
-    'editorBracketMatch.background': '#0064001a',
-    'editorBracketMatch.border': '#666666',
-    'editorGutter.background': '#141414',
-    'scrollbar.shadow': '#00000000',
-    'scrollbarSlider.background': '#2b2b2b66',
-    'scrollbarSlider.hoverBackground': '#36363666',
-    'scrollbarSlider.activeBackground': '#42424288',
-  },
-};
-
 const darkTerminal: ITheme = {
   background: '#0f0f0f',
   foreground: '#cccccc',
@@ -120,34 +61,6 @@ const darkTerminal: ITheme = {
 };
 
 // ── Light (VS Code Light+ inspired) ────────────────────
-
-const lightMonaco: editor.IStandaloneThemeData = {
-  base: 'vs',
-  inherit: true,
-  rules: [],
-  colors: {
-    'editor.background': '#ffffff',
-    'editor.foreground': '#333333',
-    'editor.lineHighlightBackground': '#f5f5f5',
-    'editor.lineHighlightBorder': '#00000000',
-    'editorLineNumber.foreground': '#999999',
-    'editorLineNumber.activeForeground': '#0b216f',
-    'editorCursor.foreground': '#000000',
-    'editor.selectionBackground': '#add6ff',
-    'editor.inactiveSelectionBackground': '#e5ebf1',
-    'editorWidget.background': '#f3f3f3',
-    'editorWidget.border': '#c8c8c8',
-    'editorIndentGuide.background': '#d3d3d344',
-    'editorIndentGuide.activeBackground': '#939393',
-    'editorBracketMatch.background': '#0064001a',
-    'editorBracketMatch.border': '#b9b9b9',
-    'editorGutter.background': '#ffffff',
-    'scrollbar.shadow': '#00000000',
-    'scrollbarSlider.background': '#64646466',
-    'scrollbarSlider.hoverBackground': '#64646488',
-    'scrollbarSlider.activeBackground': '#646464aa',
-  },
-};
 
 const lightTerminal: ITheme = {
   background: '#ffffff',
@@ -179,22 +92,16 @@ export const themes: Record<ThemeId, AppTheme> = {
   'midnight-blue': {
     id: 'midnight-blue',
     label: 'Midnight Blue',
-    monacoBase: 'vs-dark',
-    monacoTheme: midnightBlueMonaco,
     terminalTheme: midnightBlueTerminal,
   },
   dark: {
     id: 'dark',
     label: 'Dark Modern',
-    monacoBase: 'vs-dark',
-    monacoTheme: darkMonaco,
     terminalTheme: darkTerminal,
   },
   light: {
     id: 'light',
     label: 'Light',
-    monacoBase: 'vs',
-    monacoTheme: lightMonaco,
     terminalTheme: lightTerminal,
   },
 };

@@ -4,6 +4,7 @@ import { useEditorStore } from '../stores/editor-store';
 import { useFileTreeStore } from '../stores/file-tree-store';
 import { usePortsStore } from '../stores/ports-store';
 import { usePanelsStore } from '../stores/panels-store';
+import { useReferencesStore } from '../stores/references-store';
 
 /**
  * Reset all project-specific Zustand stores to their default state.
@@ -17,4 +18,5 @@ export function resetProjectStores(): void {
   useFileTreeStore.getState().reset();
   usePortsStore.getState().reset();
   usePanelsStore.getState().reset();
+  useReferencesStore.getState().clear();
 }

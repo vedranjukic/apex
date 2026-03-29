@@ -41,6 +41,7 @@ export const projects = sqliteTable('projects', {
   forkedFromId: text('forked_from_id'),
   branchName: text('branch_name'),
   localDir: text('local_dir'),
+  autoStartPrompt: text('auto_start_prompt'),
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()).$onUpdateFn(() => new Date().toISOString()),
   deletedAt: text('deleted_at'),

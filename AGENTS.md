@@ -29,6 +29,8 @@ All UI state is in Zustand stores under `apps/dashboard/src/stores/`:
 - `plan-store.ts` -- plan mode state: plan text accumulation, completion, content-based detection
 - `agent-settings-store.ts` -- agent type (build/plan/sisyphus) and model selection
 - `theme-store.ts` -- color theme selection (midnight-blue, dark, light), persisted to localStorage
+- `lsp-store.ts` -- per-language LSP server status (starting/ready/error/stopped) from bridge
+- `references-store.ts` -- Find All References/Implementations results for the sidebar panel
 Access store actions outside React components with `useXxxStore.getState().action()`.
 
 ## Conventions
@@ -63,6 +65,7 @@ Additional docs live in `workdocs/`. Read these only when working on the relevan
 - `workdocs/electron-desktop.md` -- Electrobun desktop app, settings system, packaging
 - `workdocs/secrets.md` -- secrets management UI, CRUD API, MITM proxy integration
 - `workdocs/open-in-ide.md` -- Open in IDE button, SSH remote connection, IDE detection, SSH config management
+- `workdocs/lsp-integration.md` -- LSP architecture, bridge LSP manager, MCP LSP server, dashboard language client, Monaco editor migration
 
 ## LLM API Key Proxy
 

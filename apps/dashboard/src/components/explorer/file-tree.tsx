@@ -84,6 +84,8 @@ export function FileTree({ projectId, actions }: FileTreeProps) {
   const cache = useFileTreeStore((s) => s.cache);
   const changedDirs = useFileTreeStore((s) => s.changedDirs);
   const clearChangedDirs = useFileTreeStore((s) => s.clearChangedDirs);
+  const expandedFolders = useFileTreeStore((s) => s.expandedFolders);
+  const setExpandedFolders = useFileTreeStore((s) => s.setExpandedFolders);
 
   const cacheRef = useRef(cache);
   cacheRef.current = cache;
@@ -142,6 +144,12 @@ export function FileTree({ projectId, actions }: FileTreeProps) {
     });
   }, [rootPath]);
 
+  const handleExpandedChange = useCallback((updater: string[] | ((old: string[]) => string[])) => {
+    const current = useFileTreeStore.getState().expandedFolders;
+    const next = typeof updater === 'function' ? updater(current) : updater;
+    setExpandedFolders(next);
+  }, [setExpandedFolders]);
+
   const handleDrop = useCallback((items: { getId: () => string; getItemData: () => FileEntry }[], target: { item: { getId: () => string; getItemData: () => FileEntry } }) => {
     const destDir = target.item.getItemData().isDirectory
       ? target.item.getId()
@@ -165,6 +173,8 @@ export function FileTree({ projectId, actions }: FileTreeProps) {
     indent: 12,
     canDropInbetween: false,
     onDrop: handleDrop as any,
+    state: { expandedItems: expandedFolders },
+    setExpandedItems: handleExpandedChange,
     dataLoader: {
       getItem,
       getChildren,

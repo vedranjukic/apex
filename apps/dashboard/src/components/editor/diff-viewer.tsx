@@ -1,42 +1,85 @@
-import { useCallback, useRef, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Loader2, X, GitCommitHorizontal } from 'lucide-react';
-import { DiffEditor, type DiffOnMount } from '@monaco-editor/react';
-import type { Monaco } from 'monaco-editor';
-import { useEditorStore, type DiffData } from '../../stores/editor-store';
-import { useThemeStore } from '../../stores/theme-store';
+import { MonacoEditorReactComp } from '@typefox/monaco-editor-react';
+import { configureDefaultWorkerFactory } from 'monaco-languageclient/workerFactory';
+import type { MonacoVscodeApiConfig } from 'monaco-languageclient/vscodeApiWrapper';
+import type { EditorAppConfig } from 'monaco-languageclient/editorApp';
+import { useEditorStore } from '../../stores/editor-store';
 import { getLanguageFromPath } from './lang-map';
-import { getMonacoThemeName, getMonacoThemeData } from './apex-theme';
-import { ensureMonacoTsDefaults } from './monaco-ts-defaults';
-import { themeIds } from '../../lib/themes';
+import { setSyntheticFile, clearSyntheticFile } from './sandbox-fs-provider';
 import { cn } from '../../lib/cn';
+
+const vscodeApiConfig: MonacoVscodeApiConfig = {
+  $type: 'extended',
+  viewsConfig: {
+    $type: 'EditorService',
+  },
+  userConfiguration: {
+    json: JSON.stringify({
+      'workbench.colorTheme': 'Default Dark Modern',
+      'editor.minimap.enabled': false,
+      'editor.fontSize': 13,
+      'editor.fontFamily': "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
+      'editor.lineNumbers': 'on',
+      'editor.scrollBeyondLastLine': false,
+      'editor.padding.top': 8,
+      'editor.contextmenu': false,
+      'editor.readOnly': true,
+      'diffEditor.renderSideBySide': true,
+      'diffEditor.renderOverviewRuler': true,
+    }),
+  },
+  monacoWorkerFactory: configureDefaultWorkerFactory,
+};
 
 export function DiffViewer() {
   const diff = useEditorStore((s) => s.activeDiff);
   const closeDiff = useEditorStore((s) => s.closeDiff);
-  const themeId = useThemeStore((s) => s.themeId);
-  const monacoRef = useRef<Monaco | null>(null);
+  const [ready, setReady] = useState(false);
 
-  useEffect(() => {
-    if (monacoRef.current) {
-      monacoRef.current.editor.setTheme(getMonacoThemeName(themeId));
-    }
-  }, [themeId]);
-
-  const handleMount: DiffOnMount = useCallback(
-    (editor, monaco) => {
-      monacoRef.current = monaco;
-      ensureMonacoTsDefaults(monaco);
-      for (const id of themeIds) {
-        monaco.editor.defineTheme(getMonacoThemeName(id), getMonacoThemeData(id));
-      }
-      monaco.editor.setTheme(getMonacoThemeName(useThemeStore.getState().themeId));
-    },
-    [],
-  );
+  const handleEditorStartDone = useCallback(() => {
+    setReady(true);
+  }, []);
 
   if (!diff) return null;
 
   const fileName = diff.filePath.split('/').pop() ?? diff.filePath;
+  const language = getLanguageFromPath(diff.filePath);
+
+  const normalizedPath = diff.filePath.startsWith('/') ? diff.filePath : `/${diff.filePath}`;
+  const originalUri = `${normalizedPath}.diff-original`;
+  const modifiedUri = `${normalizedPath}.diff-modified`;
+
+  if (!diff.loading) {
+    setSyntheticFile(originalUri, diff.original ?? '');
+    setSyntheticFile(modifiedUri, diff.modified ?? '');
+  }
+
+  useEffect(() => {
+    return () => {
+      clearSyntheticFile(originalUri);
+      clearSyntheticFile(modifiedUri);
+    };
+  }, [originalUri, modifiedUri]);
+
+  const editorAppConfig: EditorAppConfig | null =
+    diff.loading
+      ? null
+      : {
+          codeResources: {
+            original: {
+              text: diff.original ?? '',
+              uri: `file://${originalUri}`,
+              enforceLanguageId: language,
+            },
+            modified: {
+              text: diff.modified ?? '',
+              uri: `file://${modifiedUri}`,
+              enforceLanguageId: language,
+            },
+          },
+          useDiffEditor: true,
+        };
 
   return (
     <div className="flex flex-col h-full bg-surface text-text-primary">
@@ -66,36 +109,18 @@ export function DiffViewer() {
         </button>
       </div>
 
-      {diff.loading ? (
+      {diff.loading || !editorAppConfig ? (
         <div className="flex-1 flex items-center justify-center">
           <Loader2 className="w-5 h-5 animate-spin text-text-muted" />
         </div>
       ) : (
         <div className="flex-1 overflow-hidden">
-          <DiffEditor
-            original={diff.original}
-            modified={diff.modified}
-            language={getLanguageFromPath(diff.filePath)}
-            theme={getMonacoThemeName(themeId)}
-            onMount={handleMount}
-            loading={
-              <div className="flex-1 flex items-center justify-center">
-                <Loader2 className="w-5 h-5 animate-spin text-text-muted" />
-              </div>
-            }
-            options={{
-              readOnly: true,
-              minimap: { enabled: false },
-              scrollBeyondLastLine: false,
-              fontSize: 13,
-              fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
-              lineNumbers: 'on',
-              renderSideBySide: true,
-              contextmenu: false,
-              automaticLayout: true,
-              padding: { top: 8 },
-              renderOverviewRuler: false,
-            }}
+          <MonacoEditorReactComp
+            vscodeApiConfig={vscodeApiConfig}
+            editorAppConfig={editorAppConfig}
+            style={{ height: '100%' }}
+            onEditorStartDone={handleEditorStartDone}
+            onError={(e) => console.error('[DiffViewer] Monaco error:', e)}
           />
         </div>
       )}

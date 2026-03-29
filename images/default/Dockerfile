@@ -76,6 +76,15 @@ RUN python3 -m pip install --no-cache-dir \
     ollama==0.6.1 \
     claude-agent-sdk==0.1.22
 
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y gh \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create the Daytona user and configure sudo access
 RUN useradd -m daytona && echo "daytona ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/91-daytona
 
@@ -88,6 +97,13 @@ ENV PATH="/usr/local/go/bin:${PATH}" \
 # Install Go language server
 RUN go install golang.org/x/tools/gopls@latest
 
+# Install Eclipse JDT Language Server (Java LSP)
+RUN mkdir -p /opt/jdtls \
+    && curl -fsSL "https://download.eclipse.org/jdtls/milestones/1.57.0/jdt-language-server-1.57.0-202602261110.tar.gz" \
+       | tar -xzf - -C /opt/jdtls \
+    && printf '#!/bin/sh\nexec java \\\n  -Declipse.application=org.eclipse.jdt.ls.core.id1 \\\n  -Dosgi.bundles.defaultStartLevel=4 \\\n  -Xmx1G \\\n  --add-modules=ALL-SYSTEM \\\n  --add-opens java.base/java.util=ALL-UNNAMED \\\n  --add-opens java.base/java.lang=ALL-UNNAMED \\\n  -jar /opt/jdtls/plugins/org.eclipse.equinox.launcher_*.jar \\\n  -configuration /opt/jdtls/config_linux \\\n  -data "${1:-/tmp/jdtls-workspace}" "$@"\n' > /usr/local/bin/jdtls \
+    && chmod +x /usr/local/bin/jdtls
+
 # Install Rust (system-wide so all users can access it)
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo
@@ -99,6 +115,8 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 # Install latest Node.js using nvm
 RUN bash -c "source /usr/local/share/nvm/nvm.sh && nvm install 25 && nvm use 25 && nvm alias default 25" \
   && chown -R daytona:daytona /usr/local/share/nvm
+
+RUN corepack enable && corepack prepare yarn@stable --activate
 
 RUN npm install -g ts-node@10.9.2 typescript@5.9.3 typescript-language-server@5.1.3 bun@1.3.6 @anthropic-ai/claude-code@2.1.19 openclaw@2026.2.1 opencode-ai@1.3.2 oh-my-openagent
 

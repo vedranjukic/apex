@@ -5,8 +5,11 @@ import { ThreadPreviewPanel } from '../components/projects/thread-preview-panel'
 import { openProject } from '../lib/open-project';
 import { resetProjectStores } from '../lib/reset-project-stores';
 import { useAgentSocket } from '../hooks/use-agent-socket';
+import { useGitSocket } from '../hooks/use-git-socket';
+import { useProjectInfoSocket } from '../hooks/use-project-info-socket';
 import { useThreadsStore } from '../stores/tasks-store';
 import { useProjectsStore } from '../stores/projects-store';
+import { useGitStore } from '../stores/git-store';
 import type { CodeSelection } from '../stores/editor-store';
 
 export function HomePage() {
@@ -15,6 +18,7 @@ export function HomePage() {
   const [previewProjectName, setPreviewProjectName] = useState<string>('');
 
   const projects = useProjectsStore((s) => s.projects);
+  const previewProject = projects.find((p) => p.id === previewProjectId);
 
   useEffect(() => {
     resetProjectStores();
@@ -27,9 +31,24 @@ export function HomePage() {
     }
   }, [projects, previewProjectId]);
 
-  const { sendPrompt, executeThread, sendUserAnswer, stopAgent } = useAgentSocket(
+  const { sendPrompt, executeThread, sendUserAnswer, stopAgent, socket } = useAgentSocket(
     previewProjectId ?? undefined,
   );
+  useGitSocket(previewProjectId ?? undefined, socket);
+  const projectInfo = useProjectInfoSocket(previewProjectId ?? undefined, socket);
+
+  const gitBranch = useGitStore((s) => s.branch);
+  const gitStaged = useGitStore((s) => s.staged);
+  const gitUnstaged = useGitStore((s) => s.unstaged);
+  const gitUntracked = useGitStore((s) => s.untracked);
+  const gitAhead = useGitStore((s) => s.ahead);
+
+  const canCreatePr = (() => {
+    if (!previewProjectId || !gitBranch) return false;
+    const branchLower = gitBranch.toLowerCase();
+    if (branchLower === 'main' || branchLower === 'master') return false;
+    return gitStaged.length + gitUnstaged.length + gitUntracked.length > 0 || gitAhead > 0;
+  })();
 
   const addMessage = useThreadsStore((s) => s.addMessage);
 
@@ -140,6 +159,9 @@ export function HomePage() {
             onExecuteThread={handleExecuteThread}
             onSendUserAnswer={sendUserAnswer}
             onStopAgent={stopAgent}
+            githubContext={previewProject?.githubContext}
+            canCreatePr={canCreatePr}
+            projectDir={projectInfo.projectDir}
           />
         )}
         <span className="absolute bottom-2 right-3 text-[10px] text-panel-text-muted/50 select-none pointer-events-none">

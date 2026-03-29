@@ -16,14 +16,17 @@ import { useFileTreeSocket } from '../hooks/use-file-tree-socket';
 import { useSearchSocket } from '../hooks/use-search-socket';
 import { useGitSocket } from '../hooks/use-git-socket';
 import { usePortsSocket } from '../hooks/use-ports-socket';
+import { useLspSocket } from '../hooks/use-lsp-socket';
 import { useThreadsStore } from '../stores/tasks-store';
 import { useProjectCommands } from '../hooks/use-project-commands';
 import { useEditorStore, type CodeSelection } from '../stores/editor-store';
 import type { ImageAttachment } from '../components/agent/prompt-input';
 import { useAgentSettingsStore, type AgentTypeId } from '../stores/agent-settings-store';
 import { useTerminalStore } from '../stores/terminal-store';
+import { useGitStore } from '../stores/git-store';
 import { CodeViewer } from '../components/editor/code-viewer';
 import { DiffViewer } from '../components/editor/diff-viewer';
+import { LspProvider } from '../components/editor/lsp-context';
 
 export function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -37,6 +40,7 @@ export function ProjectPage() {
   const { search: searchFiles } = useSearchSocket(projectId, socket);
   const gitActions = useGitSocket(projectId, socket);
   const { requestPreviewUrl, forwardPort } = usePortsSocket(projectId, socket);
+  useLspSocket(projectId, socket);
   const addMessage = useThreadsStore((s) => s.addMessage);
   const createThread = useThreadsStore((s) => s.createThread);
   const fetchThreads = useThreadsStore((s) => s.fetchThreads);
@@ -44,6 +48,19 @@ export function ProjectPage() {
   const resetTerminals = useTerminalStore((s) => s.reset);
   const pollRef = useRef<ReturnType<typeof setInterval>>();
   const [provisionMsg, setProvisionMsg] = useState<string | null>(null);
+
+  const gitBranch = useGitStore((s) => s.branch);
+  const gitStaged = useGitStore((s) => s.staged);
+  const gitUnstaged = useGitStore((s) => s.unstaged);
+  const gitUntracked = useGitStore((s) => s.untracked);
+  const gitAhead = useGitStore((s) => s.ahead);
+
+  const canCreatePr = (() => {
+    if (!gitBranch) return false;
+    const branchLower = gitBranch.toLowerCase();
+    if (branchLower === 'main' || branchLower === 'master') return false;
+    return gitStaged.length + gitUnstaged.length + gitUntracked.length > 0 || gitAhead > 0;
+  })();
 
   useEffect(() => {
     resetEditor();
@@ -301,19 +318,23 @@ export function ProjectPage() {
       {(project.status === 'creating' || project.status === 'pulling_image' || project.status === 'starting' || project.status === 'stopping' || project.status === 'stopped' || project.status === 'error' || !layoutReady) && (
         <SandboxOverlay project={project} provisionMsg={provisionMsg} onStart={handleStartSandbox} onRestart={handleRestartSandbox} />
       )}
-      <CentralPanel
-        projectId={projectId}
-        projectAgentType={project.agentType}
-        githubContext={project.githubContext}
-        onSendPrompt={handleSendPrompt}
-        onSendSilentPrompt={sendPrompt}
-        onExecuteThread={handleExecuteThread}
-        onSendUserAnswer={sendUserAnswer}
-        onStopAgent={stopAgent}
-        readFile={fileActions.readFile}
-        writeFile={fileActions.writeFile}
-        requestListing={fileActions.requestListing}
-      />
+      <LspProvider socket={socket} projectId={projectId}>
+        <CentralPanel
+          projectId={projectId}
+          projectAgentType={project.agentType}
+          githubContext={project.githubContext}
+          onSendPrompt={handleSendPrompt}
+          onSendSilentPrompt={sendPrompt}
+          onExecuteThread={handleExecuteThread}
+          onSendUserAnswer={sendUserAnswer}
+          onStopAgent={stopAgent}
+          readFile={fileActions.readFile}
+          writeFile={fileActions.writeFile}
+          requestListing={fileActions.requestListing}
+          canCreatePr={canCreatePr}
+          projectDir={projectInfo.projectDir}
+        />
+      </LspProvider>
     </AppShell>
   );
 }
@@ -330,6 +351,8 @@ function CentralPanel({
   readFile,
   writeFile,
   requestListing,
+  canCreatePr,
+  projectDir,
 }: {
   projectId: string;
   projectAgentType?: string;
@@ -342,6 +365,8 @@ function CentralPanel({
   readFile: (path: string) => void;
   writeFile: (path: string, content: string) => void;
   requestListing: (path: string) => void;
+  canCreatePr?: boolean;
+  projectDir?: string | null;
 }) {
   const activeView = useEditorStore((s) => s.activeView);
   const activeFilePath = useEditorStore((s) => s.activeFilePath);
@@ -378,6 +403,8 @@ function CentralPanel({
       onSendUserAnswer={onSendUserAnswer}
       onStopAgent={onStopAgent}
       requestListing={requestListing}
+      canCreatePr={canCreatePr}
+      projectDir={projectDir}
     />
   );
 }

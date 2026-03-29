@@ -5,6 +5,7 @@ export type {
 export * from './lib/types.js';
 export { getBridgeScript } from './lib/bridge-script.js';
 export { getMcpTerminalScript } from './lib/mcp-terminal-script.js';
+export { getMcpLspScript } from './lib/mcp-lsp-script.js';
 
 // Sandbox provider abstraction
 export { createSandboxProvider } from './lib/providers/index.js';

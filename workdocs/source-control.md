@@ -15,7 +15,7 @@
 | **Socket hook** | `apps/dashboard/src/hooks/use-git-socket.ts` | `useGitSocket` — polls `git_status` every 5s, exposes action callbacks including branch operations and `requestDiff` |
 | **Config** | `apps/dashboard/src/lib/git-source-control-config.ts` | `getGitFilesDisplayLimit()` — max files to display (default 100, overridable via `localStorage.git_files_display_limit`) |
 | **UI component** | `apps/dashboard/src/components/source-control/source-control-panel.tsx` | Full panel: commit input, action button, file sections (clickable to open diff), AI generate button, too-many-files warning |
-| **Diff viewer** | `apps/dashboard/src/components/editor/diff-viewer.tsx` | Monaco `DiffEditor` — side-by-side diff view in the central panel, header with file name, staged/changes badge, close button |
+| **Diff viewer** | `apps/dashboard/src/components/editor/diff-viewer.tsx` | `MonacoEditorReactComp` in diff mode — side-by-side diff view in the central panel, header with file name, staged/changes badge, close button |
 | **Branch picker** | `apps/dashboard/src/components/layout/branch-picker.tsx` | Dropdown from status bar: branch commands (create, create from, checkout detached) + scrollable branch list |
 | **Status bar** | `apps/dashboard/src/components/layout/project-status-bar.tsx` | Bottom bar: project name, clickable git branch (opens branch picker), sync status (refresh + ahead/behind counts), sandbox status, VS Code button |
 | **Wiring** | `apps/dashboard/src/pages/project-page.tsx` | Creates `useGitSocket` hook, passes actions to status bar + left sidebar |
@@ -188,7 +188,7 @@ A 30-second `Promise.race` timeout prevents hangs from misconfigured or unrespon
 
 ## Diff View
 
-Clicking any file row in the source control panel opens a side-by-side diff in the central panel using Monaco's `DiffEditor`.
+Clicking any file row in the source control panel opens a side-by-side diff in the central panel using `MonacoEditorReactComp` in diff mode (via `codeResources.original` + `codeResources.modified`).
 
 **Flow:**
 
@@ -205,7 +205,7 @@ Clicking any file row in the source control panel opens a side-by-side diff in t
 - The diff view is transient — it is not persisted in layout snapshots (`use-layout-socket.ts` normalizes `'diff'` to `'thread'` when saving).
 - Action buttons (stage/unstage/discard) use `e.stopPropagation()` so they don't also open the diff.
 - The `DiffViewer` header shows the filename, a "Staged"/"Changes" badge, the full path, and a close button that calls `closeDiff()`.
-- `DiffEditor` options: read-only, side-by-side rendering, same Monaco theme and font settings as `CodeViewer`.
+- Diff editor options: read-only, side-by-side rendering, same VS Code theme (Default Dark Modern) and font settings as `CodeViewer`.
 
 ---
 

@@ -1,9 +1,9 @@
 const EXT_TO_LANGUAGE: Record<string, string> = {
   // Web
   ts: 'typescript',
-  tsx: 'typescript',
+  tsx: 'typescriptreact',
   js: 'javascript',
-  jsx: 'javascript',
+  jsx: 'javascriptreact',
   mjs: 'javascript',
   cjs: 'javascript',
   mts: 'typescript',

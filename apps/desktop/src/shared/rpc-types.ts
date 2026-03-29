@@ -14,12 +14,24 @@ export interface OpenInIDEParams {
   remotePath: string;
 }
 
+export interface ContextMenuItem {
+  label?: string;
+  action?: string;
+  type?: 'separator';
+  accelerator?: string;
+  enabled?: boolean;
+}
+
 export type ApexRPCType = {
   bun: RPCSchema<{
     requests: {
       openInIDE: {
         params: OpenInIDEParams;
         response: { ok: boolean; error?: string };
+      };
+      showContextMenu: {
+        params: { items: ContextMenuItem[] };
+        response: { action: string | null };
       };
     };
     messages: {

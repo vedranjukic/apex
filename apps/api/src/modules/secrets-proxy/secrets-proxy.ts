@@ -18,6 +18,7 @@ import * as https from 'https';
 import * as net from 'net';
 import * as tls from 'tls';
 import { secretsService, type SecretRecord } from '../secrets/secrets.service';
+import { settingsService } from '../settings/settings.service';
 import { generateDomainCert } from './ca-manager';
 
 const DEFAULT_PORT = 6001;
@@ -26,6 +27,37 @@ let server: http.Server | null = null;
 
 function getProxyPort(): number {
   return Number(process.env['SECRETS_PROXY_PORT'] || DEFAULT_PORT);
+}
+
+const GITHUB_DOMAINS = new Set(['github.com', 'api.github.com']);
+
+/**
+ * Find a secret for the given domain. Checks user-defined secrets first,
+ * then falls back to the GitHub token from settings for GitHub domains.
+ */
+async function findSecretForDomain(host: string): Promise<SecretRecord | null> {
+  const secrets = await secretsService.findByDomain(host);
+  if (secrets.length > 0) return secrets[0];
+
+  if (GITHUB_DOMAINS.has(host)) {
+    const token = await settingsService.get('GITHUB_TOKEN');
+    if (token) {
+      return {
+        id: '_github_token',
+        userId: '',
+        projectId: null,
+        name: 'GITHUB_TOKEN',
+        value: token,
+        domain: host,
+        authType: 'bearer',
+        description: null,
+        createdAt: '',
+        updatedAt: '',
+      };
+    }
+  }
+
+  return null;
 }
 
 /** Build the auth header for a secret based on its authType. */
@@ -208,15 +240,15 @@ async function handleConnect(
     return;
   }
 
-  let secrets: SecretRecord[];
+  let secret: SecretRecord | null;
   try {
-    secrets = await secretsService.findByDomain(host);
+    secret = await findSecretForDomain(host);
   } catch (err) {
     console.error(`[secrets-proxy] DB lookup error for ${host}: ${err}`);
-    secrets = [];
+    secret = null;
   }
 
-  if (secrets.length === 0) {
+  if (!secret) {
     const upstream = net.connect(port, host, () => {
       clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
       if (head.length > 0) upstream.write(head);
@@ -231,8 +263,6 @@ async function handleConnect(
     clientSocket.on('error', () => { try { upstream.end(); } catch { /* */ } });
     return;
   }
-
-  const secret = secrets[0];
   let domainCert: { cert: string; key: string };
   try {
     domainCert = generateDomainCert(host);
@@ -270,11 +300,11 @@ async function handleHttpProxy(
     return;
   }
 
-  let secrets: SecretRecord[];
+  let secret: SecretRecord | null;
   try {
-    secrets = await secretsService.findByDomain(parsed.hostname);
+    secret = await findSecretForDomain(parsed.hostname);
   } catch {
-    secrets = [];
+    secret = null;
   }
 
   const outHeaders: Record<string, string | string[] | undefined> = {};
@@ -284,8 +314,8 @@ async function handleHttpProxy(
   }
   outHeaders['host'] = parsed.host || parsed.hostname;
 
-  if (secrets.length > 0) {
-    const auth = buildAuthHeader(secrets[0]);
+  if (secret) {
+    const auth = buildAuthHeader(secret);
     delete outHeaders['authorization'];
     delete outHeaders['x-api-key'];
     outHeaders[auth.name] = auth.value;

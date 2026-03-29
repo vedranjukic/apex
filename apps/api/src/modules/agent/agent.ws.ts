@@ -151,6 +151,14 @@ function attachTerminalListeners(sandboxId: string, provider?: string) {
     lastPortsBySandbox.set(sandboxId, { ports: msg.ports });
     emitToSubscribers(sandboxId, 'ports_update', { ports: msg.ports });
   });
+  manager.on('lsp_response', (sid: string, msg: any) => {
+    if (sid !== sandboxId) return;
+    emitToSubscribers(sandboxId, 'lsp_response', { language: msg.language, jsonrpc: msg.jsonrpc });
+  });
+  manager.on('lsp_status', (sid: string, msg: any) => {
+    if (sid !== sandboxId) return;
+    emitToSubscribers(sandboxId, 'lsp_status', { language: msg.language, status: msg.status, error: msg.error });
+  });
 }
 
 const CONTEXT_MAX_CHARS = 4_000;
@@ -905,6 +913,12 @@ async function handleMessage(client: WsClient, message: unknown) {
         emitTo(client, 'layout_data', { data });
         break;
       }
+      case 'lsp_data': {
+        const resolved = await tryResolveProject(payload.projectId);
+        if (!resolved) { emitTo(client, 'lsp_status', { language: payload.language, status: 'error', error: 'Sandbox not ready' }); break; }
+        await resolved.manager.sendLspData(resolved.sandboxId, payload.language, payload.jsonrpc);
+        break;
+      }
     }
   } catch (err) {
     console.error(`[agent-ws] Error handling ${type}:`, err);
@@ -965,6 +979,11 @@ async function reconcileAndReconnect(
     const latest = await projectsService.findById(projectId);
     emitTo(client, 'project_updated', latest);
   } catch { /* ignore */ }
+}
+
+export async function autoExecuteThread(threadId: string, prompt: string): Promise<void> {
+  const noopClient: WsClient = { id: `__auto_${threadId}__`, wsSend: () => {} };
+  await executeAgainstSandbox(noopClient, threadId, prompt);
 }
 
 export const agentWs = new Elysia()

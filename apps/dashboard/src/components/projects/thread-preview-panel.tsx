@@ -4,6 +4,7 @@ import { AgentThread } from '../agent/agent-thread';
 import { useThreadsStore } from '../../stores/tasks-store';
 import type { CodeSelection } from '../../stores/editor-store';
 import type { ImageAttachment } from '../agent/prompt-input';
+import type { GitHubContextData } from '../../api/client';
 
 interface Props {
   projectId: string;
@@ -15,6 +16,9 @@ interface Props {
   onExecuteThread: (threadId: string, mode?: string, model?: string) => void;
   onSendUserAnswer: (threadId: string, toolUseId: string, answer: string) => void;
   onStopAgent?: (threadId: string) => void;
+  githubContext?: GitHubContextData | null;
+  canCreatePr?: boolean;
+  projectDir?: string | null;
 }
 
 export function ThreadPreviewPanel({
@@ -27,6 +31,9 @@ export function ThreadPreviewPanel({
   onExecuteThread,
   onSendUserAnswer,
   onStopAgent,
+  githubContext,
+  canCreatePr,
+  projectDir,
 }: Props) {
   const fetchThreads = useThreadsStore((s) => s.fetchThreads);
   const setActiveThread = useThreadsStore((s) => s.setActiveThread);
@@ -87,6 +94,9 @@ export function ThreadPreviewPanel({
           onExecuteThread={onExecuteThread}
           onSendUserAnswer={onSendUserAnswer}
           onStopAgent={onStopAgent}
+          githubContext={githubContext}
+          canCreatePr={canCreatePr}
+          projectDir={projectDir}
         />
       </div>
     </div>

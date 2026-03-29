@@ -36,6 +36,7 @@ import {
 } from "./types.js";
 import { getBridgeScript } from "./bridge-script.js";
 import { getMcpTerminalScript } from "./mcp-terminal-script.js";
+import { getMcpLspScript } from "./mcp-lsp-script.js";
 
 const BRIDGE_PORT = 8080;
 const VSCODE_PORT = 9090;
@@ -300,6 +301,10 @@ export class SandboxManager extends EventEmitter {
       envVars["CURL_CA_BUNDLE"] = "/etc/ssl/certs/ca-certificates.crt";
     }
 
+    if (this.config.githubToken) {
+      envVars["GH_TOKEN"] = "gh-proxy-placeholder";
+    }
+
     for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
       envVars[name] = placeholder;
     }
@@ -317,6 +322,7 @@ export class SandboxManager extends EventEmitter {
     onStatusChange?: (status: string) => void,
     localDir?: string,
     gitBranch?: string,
+    createBranch?: string,
   ): Promise<string> {
     if (!this.provider) throw new Error("SandboxManager not initialized");
 
@@ -370,7 +376,7 @@ export class SandboxManager extends EventEmitter {
     };
     this.sessions.set(sandbox.id, session);
 
-    await this.installBridge(session, gitRepo, agentType, gitBranch);
+    await this.installBridge(session, gitRepo, agentType, gitBranch, createBranch);
 
     return sandbox.id;
   }
@@ -796,6 +802,18 @@ export class SandboxManager extends EventEmitter {
   async listTerminals(sandboxId: string): Promise<void> {
     const session = await this.ensureConnected(sandboxId);
     session.ws!.send(JSON.stringify({ type: "terminal_list" }));
+  }
+
+  /** Forward LSP JSON-RPC data to the bridge for a specific language */
+  async sendLspData(
+    sandboxId: string,
+    language: string,
+    jsonrpc: Record<string, unknown>,
+  ): Promise<void> {
+    const session = await this.ensureConnected(sandboxId);
+    session.ws!.send(
+      JSON.stringify({ type: "lsp_data", language, jsonrpc }),
+    );
   }
 
   // ── VS Code (code-server) methods ─────────────────
@@ -1350,6 +1368,25 @@ export class SandboxManager extends EventEmitter {
     "multiple task tool calls in the same response.",
   ].join("\n");
 
+  /**
+   * Markdown agent file for sisyphus. Placed in .opencode/agents/sisyphus.md
+   * so it has higher precedence than any project-level opencode.json config.
+   */
+  private static readonly SISYPHUS_AGENT_MD = [
+    "---",
+    "description: Orchestration agent for complex multi-step tasks",
+    "mode: primary",
+    "model: anthropic/claude-sonnet-4-20250514",
+    "steps: 50",
+    "permission:",
+    "  edit: allow",
+    "  bash: allow",
+    "  webfetch: allow",
+    "---",
+    "",
+    ...SandboxManager.SISYPHUS_PROMPT.split("\n"),
+  ].join("\n");
+
   private static buildSandboxInstructions(projectDir: string, isLocal: boolean): string {
     return [
       "# Sandbox Environment",
@@ -1825,74 +1862,85 @@ export class SandboxManager extends EventEmitter {
         "gpt-5.2": gpt52Fix,
         "gpt-5.2-chat-latest": gpt52Fix,
       };
-      const openCodeConfig: Record<string, unknown> = {
-        $schema: "https://opencode.ai/config.json",
-        model: "anthropic/claude-opus-4-20250514",
-        default_agent: "build",
-        plugin: ["oh-my-openagent"],
-        provider: {
-          ...(useProxy ? {
-            anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
-            openai: {
-              options: { baseURL: "{env:OPENAI_BASE_URL}" },
-              models: gpt52ModelOverrides,
-            },
-          } : {
-            openai: {
-              models: gpt52ModelOverrides,
-            },
-          }),
+    const openCodeConfig: Record<string, unknown> = {
+      $schema: "https://opencode.ai/config.json",
+      model: "anthropic/claude-sonnet-4-20250514",
+      default_agent: "build",
+      provider: {
+        ...(useProxy ? {
+          anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
+          openai: {
+            options: { baseURL: "{env:OPENAI_BASE_URL}" },
+            models: gpt52ModelOverrides,
+          },
+        } : {
+          openai: {
+            models: gpt52ModelOverrides,
+          },
+        }),
+      },
+      agent: {
+        build: {
+          description: "Full development agent with all tools enabled",
+          mode: "primary",
+          prompt: `{file:${homeDir}/AGENTS.md}`,
+          permission: { "*": { "*": "allow" } },
         },
-        agent: {
-          build: {
-            description: "Full development agent with all tools enabled",
-            mode: "primary",
-            prompt: `{file:${homeDir}/AGENTS.md}`,
-            permission: { "*": { "*": "allow" } },
-          },
-          plan: {
-            description: "Analysis and planning without making changes",
-            mode: "primary",
-            tools: { write: false, edit: false, bash: false },
-            permission: { "*": { "*": "allow" } },
-          },
-          sisyphus: {
-            description: "Orchestration agent for complex multi-step tasks",
-            mode: "primary",
-            prompt: `{file:${homeDir}/.opencode/agents/sisyphus-prompt.txt}`,
-            steps: 50,
-            permission: { "*": { "*": "allow" } },
-          },
+        plan: {
+          description: "Analysis and planning without making changes",
+          mode: "primary",
+          tools: { write: false, edit: false, bash: false },
+          permission: { "*": { "*": "allow" } },
         },
-        experimental: { mcp_timeout: 300000 },
-        mcp: {
-          "terminal-server": {
-            type: "local",
-            command: ["node", `${bridgeDir}/mcp-terminal-server.cjs`],
-            timeout: 300000,
-          },
+        sisyphus: {
+          description: "Orchestration agent for complex multi-step tasks",
+          mode: "primary",
+          model: "anthropic/claude-sonnet-4-20250514",
+          prompt: SandboxManager.SISYPHUS_PROMPT,
+          steps: 50,
+          permission: { "*": { "*": "allow" } },
         },
-      };
-      const ocConfigDir = `${homeDir}/.config/opencode`;
-      await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}'`);
-      await sandbox.fs.uploadFile(
-        Buffer.from(JSON.stringify(openCodeConfig)),
-        `${ocConfigDir}/opencode.json`,
-      );
-      console.log(`[bridge:${sid}] wrote ${ocConfigDir}/opencode.json`);
-
-      // Write agent prompt files under HOME (not in projectDir — keep the repo clean)
-      await sandbox.process.executeCommand(`mkdir -p '${homeDir}/.opencode/agents'`);
+      },
+      experimental: { mcp_timeout: 300000 },
+      mcp: {
+        "terminal-server": {
+          type: "local",
+          command: ["node", `${bridgeDir}/mcp-terminal-server.cjs`],
+          timeout: 300000,
+        },
+        "lsp-server": {
+          type: "local",
+          command: ["node", `${bridgeDir}/mcp-lsp-server.cjs`],
+          timeout: 300000,
+        },
+      },
+    };
+    const ocConfigDir = `${homeDir}/.config/opencode`;
+      await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}/agents'`);
+      // Upload MCP server scripts alongside config on reconnect
+      const mcpLspCodeR = getMcpLspScript(BRIDGE_PORT);
+      const mcpTermCodeR = getMcpTerminalScript(BRIDGE_PORT);
+      const agentsMd = SandboxManager.buildSandboxInstructions(projectDir, this.config.provider === "local");
       await Promise.all([
         sandbox.fs.uploadFile(
-          Buffer.from(SandboxManager.SISYPHUS_PROMPT),
-          `${homeDir}/.opencode/agents/sisyphus-prompt.txt`,
-        ).catch(() => { /* best-effort */ }),
+          Buffer.from(JSON.stringify(openCodeConfig)),
+          `${ocConfigDir}/opencode.json`,
+        ),
         sandbox.fs.uploadFile(
-          Buffer.from(SandboxManager.buildSandboxInstructions(projectDir, this.config.provider === "local")),
-          `${homeDir}/AGENTS.md`,
-        ).catch(() => { /* best-effort */ }),
+          Buffer.from(SandboxManager.SISYPHUS_AGENT_MD),
+          `${ocConfigDir}/agents/sisyphus.md`,
+        ),
+        sandbox.fs.uploadFile(
+          Buffer.from(mcpTermCodeR),
+          `${bridgeDir}/mcp-terminal-server.cjs`,
+        ),
+        sandbox.fs.uploadFile(
+          Buffer.from(mcpLspCodeR),
+          `${bridgeDir}/mcp-lsp-server.cjs`,
+        ),
+        sandbox.fs.uploadFile(Buffer.from(agentsMd), `${homeDir}/AGENTS.md`).catch(() => {}),
       ]);
+      console.log(`[bridge:${sid}] wrote ${ocConfigDir}/opencode.json + agents + MCP scripts`);
     }
 
     // Ensure CA cert is installed (containers only — local provider uses host certs)
@@ -2040,6 +2088,7 @@ export class SandboxManager extends EventEmitter {
     gitRepo?: string,
     agentType?: string,
     gitBranch?: string,
+    createBranch?: string,
   ): Promise<void> {
     session.status = "starting_bridge";
     this.emit("status", session.sandboxId, "starting_bridge");
@@ -2056,6 +2105,7 @@ export class SandboxManager extends EventEmitter {
 
     const bridgeCode = getBridgeScript(BRIDGE_PORT, projectDir);
     const mcpCode = getMcpTerminalScript(BRIDGE_PORT);
+    const mcpLspCode = getMcpLspScript(BRIDGE_PORT);
 
     const isLocalProvider = this.config.provider === "local";
     const homeDir = isLocalProvider ? os.homedir() : HOME_DIR;
@@ -2078,9 +2128,8 @@ export class SandboxManager extends EventEmitter {
     };
     const openCodeConfig: Record<string, unknown> = {
       $schema: "https://opencode.ai/config.json",
-      model: "anthropic/claude-opus-4-20250514",
+      model: "anthropic/claude-sonnet-4-20250514",
       default_agent: "build",
-      plugin: ["oh-my-openagent"],
       provider: {
         ...(useProxyI ? {
           anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
@@ -2110,7 +2159,8 @@ export class SandboxManager extends EventEmitter {
         sisyphus: {
           description: "Orchestration agent for complex multi-step tasks with retry logic",
           mode: "primary",
-          prompt: `{file:${homeDir}/.opencode/agents/sisyphus-prompt.txt}`,
+          model: "anthropic/claude-sonnet-4-20250514",
+          prompt: SandboxManager.SISYPHUS_PROMPT,
           steps: 50,
           permission: { "*": { "*": "allow" } },
         },
@@ -2122,6 +2172,11 @@ export class SandboxManager extends EventEmitter {
           command: ["node", `${bridgeDir}/mcp-terminal-server.cjs`],
           timeout: 300000,
         },
+        "lsp-server": {
+          type: "local",
+          command: ["node", `${bridgeDir}/mcp-lsp-server.cjs`],
+          timeout: 300000,
+        },
       },
     };
 
@@ -2129,18 +2184,26 @@ export class SandboxManager extends EventEmitter {
       this.config.proxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
 
-    // ── Exec 1: Write all non-project files (bridge, config, agent prompts under HOME) ──
+    // ── Exec 1: Write infra files (bridge, config, agents) ──
+    // All config goes under HOME — never write to the project working directory.
     const ocConfigDir = `${homeDir}/.config/opencode`;
-    await sandbox.process.executeCommand(`mkdir -p '${ocConfigDir}' '${bridgeDir}' '${homeDir}/.opencode/agents'`);
+    await sandbox.process.executeCommand(
+      `mkdir -p '${ocConfigDir}/agents' '${bridgeDir}'`,
+    );
 
-    const alwaysWriteFiles: { path: string; content: string }[] = [
+    const bridgeFiles: { path: string; content: string }[] = [
       { path: `${bridgeDir}/bridge.cjs`, content: bridgeCode },
+    ];
+    const mcpFiles: { path: string; content: string }[] = [
       { path: `${bridgeDir}/mcp-terminal-server.cjs`, content: mcpCode },
+      { path: `${bridgeDir}/mcp-lsp-server.cjs`, content: mcpLspCode },
+    ];
+    const configFiles: { path: string; content: string }[] = [
       { path: `${ocConfigDir}/opencode.json`, content: JSON.stringify(openCodeConfig) },
+      { path: `${ocConfigDir}/agents/sisyphus.md`, content: SandboxManager.SISYPHUS_AGENT_MD },
     ];
     const skipIfExistsFiles: { path: string; content: string }[] = [
       { path: `${homeDir}/AGENTS.md`, content: sandboxInstructions },
-      { path: `${homeDir}/.opencode/agents/sisyphus-prompt.txt`, content: SandboxManager.SISYPHUS_PROMPT },
     ];
     const existCheck = await sandbox.process.executeCommand(
       skipIfExistsFiles.map(f => `test -f '${f.path}' && echo '${f.path}'`).join("; ") + " || true",
@@ -2148,15 +2211,16 @@ export class SandboxManager extends EventEmitter {
     const existingPaths = new Set(
       (existCheck.result ?? "").split("\n").map(l => l.trim()).filter(Boolean),
     );
-    const infraFiles: { path: string; content: string }[] = [
-      ...alwaysWriteFiles,
-      ...skipIfExistsFiles.filter(f => !existingPaths.has(f.path)),
-    ];
+    const promptFiles = skipIfExistsFiles.filter(f => !existingPaths.has(f.path));
     if (this.config.secretsProxyCaCert && secretsProxyUrl && !isLocalProvider) {
-      infraFiles.push({ path: CA_CERT_PATH, content: this.config.secretsProxyCaCert });
+      configFiles.push({ path: CA_CERT_PATH, content: this.config.secretsProxyCaCert });
     }
 
-    const writeInfraTask = this.batchWriteFiles(sandbox, infraFiles).then(() => log("infra files written"));
+    const writeInfraTask = Promise.all([
+      this.batchWriteFiles(sandbox, bridgeFiles),
+      this.batchWriteFiles(sandbox, mcpFiles),
+      this.batchWriteFiles(sandbox, [...configFiles, ...promptFiles]),
+    ]).then(() => log("infra files written"));
 
     // ── Exec 2: git clone/init (parallel with infra writes, projectDir must be empty for clone) ──
     const gitTask = (async () => {
@@ -2177,12 +2241,12 @@ export class SandboxManager extends EventEmitter {
         if (isCommitSha) {
           await sandbox.process.executeCommand(`git checkout ${gitBranch}`, projectDir);
         }
+        if (createBranch) {
+          const safeBranch = createBranch.replace(/[^a-zA-Z0-9/_.-]/g, "");
+          await sandbox.process.executeCommand(`git checkout -b "${safeBranch}"`, projectDir);
+        }
       } else {
-        const gitInitCmd = `mkdir -p '${projectDir}' && git init '${projectDir}'`;
-        const credentialCmd = (this.config.githubToken && this.config.provider !== "local")
-          ? ` && git config --global credential.helper store && echo "https://x-access-token:${this.config.githubToken}@github.com" > ~/.git-credentials`
-          : "";
-        await sandbox.process.executeCommand(gitInitCmd + credentialCmd);
+        await sandbox.process.executeCommand(`mkdir -p '${projectDir}' && git init '${projectDir}'`);
       }
       if (this.config.gitUserName && this.config.gitUserEmail) {
         const safeName = this.config.gitUserName.replace(/"/g, '\\"');
@@ -2383,6 +2447,10 @@ export class SandboxManager extends EventEmitter {
           } else if (msg.type === "ports_update") {
             this.lastPortsBySandbox.set(session.sandboxId, msg);
             this.emit("ports_update", session.sandboxId, msg);
+          } else if (msg.type === "lsp_response") {
+            this.emit("lsp_response", session.sandboxId, msg);
+          } else if (msg.type === "lsp_status") {
+            this.emit("lsp_status", session.sandboxId, msg);
           } else if (msg.type === "ask_user_pending") {
             session.status = "waiting_for_input";
           } else if (msg.type === "ask_user_resolved") {

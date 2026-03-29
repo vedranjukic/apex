@@ -91,6 +91,7 @@ function emitAgentError(threadId, error) {
 // ── OpenCode Serve Adapter ──────────────────────────
 // ══════════════════════════════════════════════════════
 const OC_PORT = 4096;
+const OC_DEFAULT_MODEL = { providerID: "anthropic", modelID: "claude-sonnet-4-20250514" };
 const TOOL_NAME_MAP = { bash: "Bash", read: "Read", glob: "Glob", grep: "Grep", apply_patch: "Write", write: "Write", edit: "Edit", todowrite: "TodoWrite", todo_write: "TodoWrite", websearch: "WebSearch", web_search: "WebSearch", webfetch: "WebFetch", web_fetch: "WebFetch", task: "Task" };
 
 function ocFetch(method, urlPath, body, timeoutMs) {
@@ -338,6 +339,12 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images) {
   let ocSessionId = threadToSession.get(threadId);
   if (!ocSessionId && sessionId) {
     try {
+      // Verify the session actually exists in the current OpenCode serve instance
+      // by checking the status endpoint. After an OC restart, old sessions vanish.
+      var allStatuses = await ocFetch("GET", "/session/status", null, 5000);
+      if (!allStatuses || !allStatuses[sessionId]) {
+        throw new Error("session not in status (OC may have restarted)");
+      }
       const checkMsgs = await ocFetch("GET", "/session/" + sessionId + "/message?limit=50", null, 10000);
       ocSessionId = sessionId;
       log("\\u{1F504}", "Reusing stored session " + ocSessionId + " for thread " + threadId);
@@ -405,6 +412,8 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images) {
   if (ocModel && ocModel.includes("/")) {
     const si = ocModel.indexOf("/");
     modelObj = { providerID: ocModel.substring(0, si), modelID: ocModel.substring(si + 1) };
+  } else {
+    modelObj = OC_DEFAULT_MODEL;
   }
 
   const parts = [];
@@ -421,11 +430,10 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images) {
     agent: ocAgent,
     model: modelObj,
   }, 60000);
-  log("\\u{1F916}", "Prompt dispatched to session " + ocSessionId);
-  pollSession(threadId, ocSessionId);
+  pollSession(threadId, ocSessionId, ocAgent, ocModel);
 }
 
-function pollSession(threadId, sessionId) {
+function pollSession(threadId, sessionId, agentName, modelName) {
   if (!sessionEmittedParts.has(sessionId)) sessionEmittedParts.set(sessionId, new Set());
   const emittedParts = sessionEmittedParts.get(sessionId);
   const pendingText = new Map();
@@ -597,6 +605,8 @@ function pollSession(threadId, sessionId) {
             log("\\u{1F916}", "Session " + sessionId + " idle (seenBusy=" + seenBusy + " idleCount=" + idleCount + " age=" + Math.round(pollAge/1000) + "s + parts=" + emittedParts.size + ")");
             activeThreads.delete(threadId);
             if (!seenBusy && emittedParts.size === 0) {
+              var diag = "agent=" + (agentName || "?") + " model=" + (modelName || "auto") + " session=" + sessionId + " polls=" + idleCount + " age=" + Math.round(pollAge/1000) + "s oc=" + (ocServeProc ? "alive" : "dead");
+              log("\\u{274C}", "No output diagnostics: " + diag);
               emitAgentError(threadId, "Agent produced no output — the agent or model may not be configured correctly. Check that the selected agent exists in the OpenCode config and the model is available.");
             } else {
               emitAgentExit(threadId, 0);
@@ -777,6 +787,207 @@ function flushFileChanges() {
 startFileWatcher();
 startOpenCodeServe();
 
+// ── LSP Manager ──────────────────────────────────────
+const LSP_COMMANDS = {
+  typescript: ["typescript-language-server", ["--stdio"]],
+  typescriptreact: ["typescript-language-server", ["--stdio"]],
+  javascript: ["typescript-language-server", ["--stdio"]],
+  javascriptreact: ["typescript-language-server", ["--stdio"]],
+  python: ["pylsp", []],
+  go: ["gopls", []],
+  rust: ["rust-analyzer", []],
+  java: ["jdtls", ["/tmp/jdtls-workspace"]],
+};
+const lspServers = new Map();
+let lspRequestId = 1;
+
+function lspSend(proc, msg) {
+  const json = JSON.stringify(msg);
+  const header = "Content-Length: " + Buffer.byteLength(json) + "\\r\\n\\r\\n";
+  proc.stdin.write(header + json);
+}
+
+function createLspParser(onMessage) {
+  let buffer = Buffer.alloc(0);
+  let contentLength = -1;
+  return function feed(chunk) {
+    buffer = Buffer.concat([buffer, chunk]);
+    while (true) {
+      if (contentLength === -1) {
+        const headerEnd = buffer.indexOf("\\r\\n\\r\\n");
+        if (headerEnd === -1) break;
+        const header = buffer.slice(0, headerEnd).toString("utf8");
+        const match = header.match(/Content-Length:\\s*(\\d+)/i);
+        if (!match) { buffer = buffer.slice(headerEnd + 4); continue; }
+        contentLength = parseInt(match[1], 10);
+        buffer = buffer.slice(headerEnd + 4);
+      }
+      if (buffer.length < contentLength) break;
+      const body = buffer.slice(0, contentLength).toString("utf8");
+      buffer = buffer.slice(contentLength);
+      contentLength = -1;
+      try { onMessage(JSON.parse(body)); } catch (e) { log("\\u{274C}", "LSP parse error: " + e); }
+    }
+  };
+}
+
+function emitLspStatus(language, status, error) {
+  if (state.ws && state.ws.readyState === 1) {
+    const msg = { type: "lsp_status", language, status };
+    if (error) msg.error = error;
+    state.ws.send(JSON.stringify(msg));
+  }
+}
+
+function getOrStartLsp(language) {
+  const serverKey = normalizeLspLanguage(language);
+  const existing = lspServers.get(serverKey);
+  if (existing && existing.status !== "stopped" && existing.status !== "error") {
+    if (existing.status === "ready") return Promise.resolve(existing);
+    return existing.readyPromise;
+  }
+
+  const cmdEntry = LSP_COMMANDS[language] || LSP_COMMANDS[serverKey];
+  if (!cmdEntry) return Promise.reject(new Error("No LSP server for language: " + language));
+  const [cmd, args] = cmdEntry;
+
+  let resolveReady, rejectReady;
+  const readyPromise = new Promise((res, rej) => { resolveReady = res; rejectReady = rej; });
+
+  const entry = {
+    proc: null, status: "starting", language, readyPromise,
+    pendingRequests: new Map(),
+    capabilities: null,
+  };
+  lspServers.set(serverKey, entry);
+  emitLspStatus(language, "starting");
+  log("\\u{1F680}", "Starting LSP for " + language + ": " + cmd + " " + args.join(" "));
+
+  try {
+    const proc = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"], cwd: PROJECT_DIR });
+    entry.proc = proc;
+
+    const parser = createLspParser(function(msg) {
+      if (msg.id !== undefined && entry.pendingRequests.has(msg.id)) {
+        const cb = entry.pendingRequests.get(msg.id);
+        entry.pendingRequests.delete(msg.id);
+        cb(msg);
+      }
+      if (state.ws && state.ws.readyState === 1) {
+        state.ws.send(JSON.stringify({ type: "lsp_response", language, jsonrpc: msg }));
+      }
+    });
+
+    proc.stdout.on("data", parser);
+    proc.stderr.on("data", (d) => { log("\\u{1F4DD}", "LSP " + language + " stderr: " + d.toString().trim()); });
+    proc.on("error", (e) => {
+      log("\\u{274C}", "LSP " + language + " spawn error: " + e);
+      entry.status = "error";
+      emitLspStatus(language, "error", e.message);
+      rejectReady(e);
+    });
+    proc.on("exit", (code) => {
+      log("\\u{1F6D1}", "LSP " + language + " exited with code " + code);
+      entry.status = "stopped";
+      emitLspStatus(language, "stopped");
+      for (const [id, cb] of entry.pendingRequests) { cb({ id, error: { code: -32600, message: "LSP server exited" } }); }
+      entry.pendingRequests.clear();
+    });
+
+    const initId = lspRequestId++;
+    lspSend(proc, {
+      jsonrpc: "2.0", id: initId, method: "initialize",
+      params: {
+        processId: process.pid,
+        rootUri: "file://" + PROJECT_DIR,
+        capabilities: {
+          textDocument: {
+            hover: { contentFormat: ["markdown", "plaintext"] },
+            completion: { completionItem: { snippetSupport: false } },
+            definition: {},
+            references: {},
+            documentSymbol: {},
+            publishDiagnostics: { relatedInformation: true },
+          },
+          workspace: { workspaceFolders: true },
+        },
+        workspaceFolders: [{ uri: "file://" + PROJECT_DIR, name: "workspace" }],
+      },
+    });
+
+    entry.pendingRequests.set(initId, function(resp) {
+      if (resp.error) {
+        entry.status = "error";
+        emitLspStatus(language, "error", resp.error.message || "Init failed");
+        rejectReady(new Error(resp.error.message || "Init failed"));
+        return;
+      }
+      entry.capabilities = resp.result ? resp.result.capabilities : {};
+      lspSend(proc, { jsonrpc: "2.0", method: "initialized", params: {} });
+      entry.status = "ready";
+      emitLspStatus(language, "ready");
+      log("\\u{2705}", "LSP " + language + " ready");
+      resolveReady(entry);
+    });
+
+    setTimeout(function() {
+      if (entry.status === "starting") {
+        entry.status = "error";
+        emitLspStatus(language, "error", "Init timeout");
+        rejectReady(new Error("LSP init timeout for " + language));
+      }
+    }, 30000);
+
+  } catch (e) {
+    entry.status = "error";
+    emitLspStatus(language, "error", e.message);
+    rejectReady(e);
+  }
+
+  return readyPromise;
+}
+
+function lspRequest(language, method, params) {
+  return getOrStartLsp(language).then(function(entry) {
+    return new Promise(function(resolve) {
+      const id = lspRequestId++;
+      entry.pendingRequests.set(id, resolve);
+      lspSend(entry.proc, { jsonrpc: "2.0", id, method, params });
+      setTimeout(function() {
+        if (entry.pendingRequests.has(id)) {
+          entry.pendingRequests.delete(id);
+          resolve({ id, error: { code: -32001, message: "LSP request timeout" } });
+        }
+      }, 15000);
+    });
+  });
+}
+
+function lspNotify(language, method, params) {
+  return getOrStartLsp(language).then(function(entry) {
+    lspSend(entry.proc, { jsonrpc: "2.0", method, params });
+  });
+}
+
+function normalizeLspLanguage(lang) {
+  if (lang === "typescriptreact") return "typescript";
+  if (lang === "javascriptreact") return "javascript";
+  return lang;
+}
+
+function detectLanguageFromUri(uri) {
+  const ext = (uri.split(".").pop() || "").toLowerCase();
+  const map = {
+    ts: "typescript", tsx: "typescriptreact", mts: "typescript", cts: "typescript",
+    js: "javascript", jsx: "javascriptreact", mjs: "javascript", cjs: "javascript",
+    py: "python", pyw: "python",
+    go: "go",
+    rs: "rust",
+    java: "java",
+  };
+  return map[ext] || null;
+}
+
 // ── HTTP server ──────────────────────────────────────
 const server = http.createServer((req, res) => {
   if (req.method === "POST" && req.url === "/internal/terminal-create") {
@@ -913,6 +1124,34 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+  if (req.method === "POST" && req.url === "/internal/lsp-request") {
+    let body = ""; req.on("data", (c) => body += c); req.on("end", () => {
+      try {
+        const { language, method, params, file } = JSON.parse(body);
+        const lang = language || (file ? detectLanguageFromUri(file) : null);
+        if (!lang) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Cannot detect language" })); return; }
+        lspRequest(lang, method, params).then((resp) => {
+          res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(resp));
+        }).catch((e) => {
+          res.writeHead(500, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: e.message }));
+        });
+      } catch (e) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: e.message })); }
+    }); return;
+  }
+  if (req.method === "POST" && req.url === "/internal/lsp-notify") {
+    let body = ""; req.on("data", (c) => body += c); req.on("end", () => {
+      try {
+        const { language, method, params, file } = JSON.parse(body);
+        const lang = language || (file ? detectLanguageFromUri(file) : null);
+        if (!lang) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "Cannot detect language" })); return; }
+        lspNotify(lang, method, params).then(() => {
+          res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ ok: true }));
+        }).catch((e) => {
+          res.writeHead(500, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: e.message }));
+        });
+      } catch (e) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: e.message })); }
+    }); return;
+  }
   res.writeHead(200); res.end("bridge-ok");
 });
 
@@ -941,6 +1180,38 @@ wss.on("connection", (ws) => {
       else if (msg.type === "terminal_resize") { const e = terminals.get(msg.terminalId); if (e) { e.pty.resize(msg.cols, msg.rows); e.cols = msg.cols; e.rows = msg.rows; } }
       else if (msg.type === "terminal_close") { const e = terminals.get(msg.terminalId); if (e) { e.pty.kill(); terminals.delete(msg.terminalId); } }
       else if (msg.type === "terminal_list") { ws.send(JSON.stringify({ type: "terminal_list", terminals: getTerminalsList() })); }
+      else if (msg.type === "lsp_data") {
+        const lang = msg.language;
+        if (lang && msg.jsonrpc) {
+          const method = msg.jsonrpc.method;
+          if (method === "initialize") {
+            getOrStartLsp(lang).then(function(entry) {
+              ws.send(JSON.stringify({ type: "lsp_response", language: lang, jsonrpc: {
+                jsonrpc: "2.0", id: msg.jsonrpc.id,
+                result: { capabilities: entry.capabilities || {} },
+              }}));
+            }).catch(function(e) {
+              ws.send(JSON.stringify({ type: "lsp_response", language: lang, jsonrpc: {
+                jsonrpc: "2.0", id: msg.jsonrpc.id,
+                error: { code: -32600, message: e.message },
+              }}));
+            });
+          } else if (method === "initialized") {
+            // Already sent by bridge during init; ignore from client
+          } else {
+            getOrStartLsp(lang).then(function(entry) {
+              lspSend(entry.proc, msg.jsonrpc);
+            }).catch(function(e) {
+              if (msg.jsonrpc.id !== undefined) {
+                ws.send(JSON.stringify({ type: "lsp_response", language: lang, jsonrpc: {
+                  jsonrpc: "2.0", id: msg.jsonrpc.id,
+                  error: { code: -32600, message: e.message },
+                }}));
+              }
+            });
+          }
+        }
+      }
       else if (msg.type === "ping") { ws.send(JSON.stringify({ type: "pong" })); }
     } catch (e) {
       log("\\u{274C}", "Message handler error: " + e);

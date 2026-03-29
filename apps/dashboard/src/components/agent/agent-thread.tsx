@@ -20,12 +20,14 @@ interface Props {
   onStopAgent?: (threadId: string) => void;
   requestListing?: (path: string) => void;
   githubContext?: GitHubContextData | null;
+  canCreatePr?: boolean;
+  projectDir?: string | null;
 }
 
 const SCROLL_SAVE_DEBOUNCE_MS = 300;
 const SCROLL_FOLLOW_THRESHOLD = 150;
 
-export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendSilentPrompt, onExecuteThread, onSendUserAnswer, onStopAgent, requestListing, githubContext }: Props) {
+export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendSilentPrompt, onExecuteThread, onSendUserAnswer, onStopAgent, requestListing, githubContext, canCreatePr, projectDir }: Props) {
   const { activeThreadId, composingNew, messages, threads, createThread, threadScrollOffsets, setThreadScrollOffset } =
     useThreadsStore();
   const threadScrollOffset = activeThreadId ? (threadScrollOffsets[activeThreadId] ?? 0) : 0;
@@ -276,6 +278,8 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
         onSend={handleNewThreadPrompt}
         requestListing={requestListing}
         githubContext={githubContext}
+        canCreatePr={canCreatePr}
+        projectDir={projectDir}
       />
     );
   }
@@ -296,6 +300,8 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
           autoFocus
           requestListing={requestListing}
           githubContext={githubContext}
+          canCreatePr={canCreatePr}
+          projectDir={projectDir}
         />
       </div>
     );
@@ -439,6 +445,8 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
           onStop={handleStop}
           requestListing={requestListing}
           githubContext={githubContext}
+          canCreatePr={canCreatePr}
+          projectDir={projectDir}
         />
 
         {/* Thread stats bar */}
@@ -497,11 +505,15 @@ function WelcomePrompt({
   onSend,
   requestListing,
   githubContext,
+  canCreatePr,
+  projectDir,
 }: {
   hasThreads: boolean;
   onSend: (prompt: string, files?: string[], mode?: string, model?: string, snippets?: CodeSelection[], agentType?: string, images?: ImageAttachment[]) => void;
   requestListing?: (path: string) => void;
   githubContext?: GitHubContextData | null;
+  canCreatePr?: boolean;
+  projectDir?: string | null;
 }) {
   const suggestions = [
     'Create a REST API with Express and TypeScript',
@@ -531,6 +543,8 @@ function WelcomePrompt({
             autoFocus
             requestListing={requestListing}
             githubContext={githubContext}
+            canCreatePr={canCreatePr}
+            projectDir={projectDir}
           />
         </div>
 

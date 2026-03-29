@@ -8,7 +8,7 @@ import { projectsRoutes } from './modules/projects/projects.routes';
 import { threadsRoutes } from './modules/tasks/tasks.routes';
 import { settingsRoutes } from './modules/settings/settings.routes';
 import { configRoutes } from './modules/config/config.routes';
-import { agentWs } from './modules/agent/agent.ws';
+import { agentWs, autoExecuteThread } from './modules/agent/agent.ws';
 import { projectsWs } from './modules/projects/projects.ws';
 import { previewRoutes } from './modules/preview/preview.routes';
 import { llmProxyRoutes } from './modules/llm-proxy/llm-proxy.routes';
@@ -45,6 +45,7 @@ async function bootstrap() {
   await initCA();
   await startSecretsProxy();
   await projectsService.init();
+  projectsService.registerAutoStartHandler(autoExecuteThread);
 
   const dashboardDir = process.env.DASHBOARD_DIR || join(__dirname, '../../dashboard/dist');
 

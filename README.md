@@ -91,7 +91,7 @@ A CLI binary that makes remote sandboxed agents feel local. See the full [CLI do
 
 A desktop (Electrobun) and web development environment for building applications interactively with AI agents.
 
-- **Full IDE experience** — VS Code–inspired layout with resizable panels, file explorer, Monaco code editor, search, and Git source control
+- **Full IDE experience** — VS Code–inspired layout with resizable panels, file explorer, Monaco code editor with LSP intelligence (hover, completions, go-to-definition, references, rename, context menu), search, and Git source control
 - **Task dashboard** — home page shows all projects with inline thread lists; click any thread to interact with it in a side panel without leaving the overview
 - **Three agents** — Build (autonomous coding), Plan (read-only analysis), Sisyphus (orchestration) — selectable per-thread with models from multiple providers
 - **Live agent thread** — send prompts and watch the agent work in real time with grouped message rendering, image attachments, code snippet references, and `@issue`/`@pr` GitHub context injection
@@ -110,6 +110,7 @@ Both applications are built on top of the same sandboxing layer:
 - **OpenCode runtime** — single agent runtime with three named agents (Build, Plan, Sisyphus) and models from any configured provider
 - **WebSocket bridge** protocol — a Node.js server inside each sandbox that spawns agents, manages PTY sessions, and streams structured output
 - **MCP Terminal Server** — gives agents the ability to open, read, write to, and close terminals, discover preview URLs, list secrets, and ask users questions
+- **MCP LSP Server** — gives agents language intelligence tools (hover, definition, references, diagnostics, completions, symbols) via language servers managed by the bridge
 - **LLM API Key Proxy** — streaming reverse proxy that injects real LLM keys server-side; containers never see credentials
 - **Secrets Proxy** — MITM HTTPS proxy for user-defined API secrets; values never enter containers
 - **SQLite** database for projects, threads, and messages (shared between IDE and CLI)
@@ -215,7 +216,7 @@ apex/
 | Package | Description |
 |---|---|
 | `apps/api` | IDE backend — REST API, WebSocket gateway, sandbox orchestration, LLM proxy, secrets proxy, SQLite database |
-| `apps/dashboard` | IDE frontend — thread UI, terminal panel, file explorer, source control, Monaco editor, command palette, secrets page |
+| `apps/dashboard` | IDE frontend — thread UI, terminal panel, file explorer, source control, Monaco editor with LSP, command palette, secrets page |
 | `apps/desktop` | Desktop app — Electrobun packaging, native window management, RPC bridge, settings UI |
 | `apps/cli` | Apex CLI — wraps remote agents for a local terminal experience, direct sandbox connection ([README](apps/cli/README.md)) |
 | `libs/orchestrator` | Sandbox lifecycle (Daytona/Docker/Apple Container/Local providers), bridge script generation, WebSocket protocol types |
@@ -225,7 +226,7 @@ apex/
 
 | Layer | Technology |
 |---|---|
-| **IDE Frontend** | React 19, Vite 7, Tailwind CSS 4, Zustand, xterm.js, Monaco Editor, Lucide Icons |
+| **IDE Frontend** | React 19, Vite 7, Tailwind CSS 4, Zustand, xterm.js, Monaco Editor (monaco-languageclient + LSP), Lucide Icons |
 | **IDE Backend** | NestJS 11, TypeORM, SQLite (better-sqlite3), WebSocket, Elysia (LLM + secrets proxies) |
 | **Desktop App** | Electrobun (Bun + system WebKit) |
 | **CLI** | Go, Cobra, Gorilla WebSocket, Daytona Go SDK |

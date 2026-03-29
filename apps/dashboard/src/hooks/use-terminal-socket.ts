@@ -114,6 +114,12 @@ export function useTerminalSocket(
     const onTerminalCreated = (data: any) => {
       if (isStale()) return;
       const d = data.payload;
+      const current = useTerminalStore.getState().terminals;
+      if (current.some((t) => t.name === d.name && t.id !== d.terminalId)) {
+        ws.send('terminal_close', { projectId: boundProjectId, terminalId: d.terminalId });
+        reg.destroy(d.terminalId);
+        return;
+      }
       addTerminal({ id: d.terminalId, name: d.name, status: 'alive' });
       reg.markCreated(d.terminalId);
     };
@@ -133,7 +139,30 @@ export function useTerminalSocket(
     };
     const onTerminalList = (data: any) => {
       if (isStale()) return;
-      const terminals = data.payload.terminals || [];
+      const rawTerminals = data.payload.terminals || [];
+
+      // Deduplicate by name: if the bridge reports multiple terminals with the
+      // same name (race between auto-creation and bridge list), keep the
+      // bridge-original one and close the locally-created duplicate.
+      const seenNames = new Map<string, any>();
+      const terminals: any[] = [];
+      for (const t of rawTerminals) {
+        const existing = seenNames.get(t.name);
+        if (!existing) {
+          seenNames.set(t.name, t);
+          terminals.push(t);
+        } else {
+          const drop = t.id.startsWith('term-') ? t : existing;
+          const keep = drop === t ? existing : t;
+          if (drop === existing) {
+            const idx = terminals.indexOf(existing);
+            if (idx !== -1) terminals[idx] = keep;
+            seenNames.set(t.name, keep);
+          }
+          ws.send('terminal_close', { projectId: boundProjectId, terminalId: drop.id });
+        }
+      }
+
       const newIds = new Set(terminals.map((t: any) => t.id));
 
       // Dispose xterm instances for terminals no longer in the bridge
