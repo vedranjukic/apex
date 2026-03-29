@@ -33,6 +33,8 @@ interface Props {
   requestListing?: (path: string) => void;
   hideAgentDropdown?: boolean;
   githubContext?: GitHubContextData | null;
+  canCreatePr?: boolean;
+  projectDir?: string | null;
 }
 
 const FILE_TAG_ATTR = 'data-file-path';
@@ -40,6 +42,7 @@ const SNIPPET_TAG_ATTR = 'data-snippet';
 const GITHUB_TAG_ATTR = 'data-github-context';
 const AGENT_TAG_ATTR = 'data-agent-ref';
 const SKILL_TAG_ATTR = 'data-skill-ref';
+const CREATE_PR_TAG_ATTR = 'data-create-pr';
 const SNIPPET_MIME = 'application/x-codeany-snippet';
 
 interface HarnessItem {
@@ -93,10 +96,11 @@ function getCaretRect(): { top: number; left: number } | null {
   return { top: rect.top, left: rect.left };
 }
 
-function extractContent(el: HTMLElement): { text: string; files: string[]; snippets: CodeSelection[]; hasGithubContext: boolean } {
+function extractContent(el: HTMLElement): { text: string; files: string[]; snippets: CodeSelection[]; hasGithubContext: boolean; hasCreatePr: boolean } {
   const files: string[] = [];
   const snippets: CodeSelection[] = [];
   let hasGithubContext = false;
+  let hasCreatePr = false;
   let text = '';
 
   function walk(parent: Node) {
@@ -121,6 +125,9 @@ function extractContent(el: HTMLElement): { text: string; files: string[]; snipp
         } else if (ghContext) {
           hasGithubContext = true;
           text += element.getAttribute('data-github-label') ?? `@${ghContext}`;
+        } else if (element.hasAttribute(CREATE_PR_TAG_ATTR)) {
+          hasCreatePr = true;
+          text += '@create-pr';
         } else if (element.hasAttribute(AGENT_TAG_ATTR)) {
           const agentId = element.getAttribute(AGENT_TAG_ATTR);
           text += `@agent:${agentId}`;
@@ -142,7 +149,7 @@ function extractContent(el: HTMLElement): { text: string; files: string[]; snipp
   }
 
   walk(el);
-  return { text, files, snippets, hasGithubContext };
+  return { text, files, snippets, hasGithubContext, hasCreatePr };
 }
 
 function insertNodeAtCursor(node: Node): void {
@@ -176,6 +183,8 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
       requestListing,
       hideAgentDropdown,
       githubContext,
+      canCreatePr,
+      projectDir,
     },
     ref,
   ) {
@@ -247,7 +256,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
     const handleSubmit = useCallback(() => {
       const el = editorRef.current;
       if (!el || disabled) return;
-      const { text, files, snippets, hasGithubContext: hasGhCtx } = extractContent(el);
+      const { text, files, snippets, hasGithubContext: hasGhCtx, hasCreatePr } = extractContent(el);
       if (!text.trim() && images.length === 0) return;
       const { mode, model, agentType } = useAgentSettingsStore.getState();
 
@@ -256,6 +265,26 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
         const ctxType = githubContext.type === 'issue' ? 'Issue' : 'Pull Request';
         const header = `GitHub ${ctxType} #${githubContext.number}: ${githubContext.title}\n${githubContext.url}\n\n${githubContext.body}`;
         finalText = `${header}\n\n---\n\n${finalText}`;
+      }
+
+      if (hasCreatePr) {
+        const userInstructions = finalText.replace(/@create-pr/g, '').trim();
+        const dirNote = projectDir ? `\nThe project repository is located at: ${projectDir}\nMake sure to run all git commands from this directory.\n` : '';
+        let prInstructions = `Create a Pull Request for the current branch.
+${dirNote}
+Instructions:
+1. Review all uncommitted changes. If there are any, stage and commit them with an appropriate commit message.
+2. Push the current branch to the remote repository.
+3. Create a new Pull Request targeting the main/default branch.
+4. Generate a clear, descriptive PR title summarizing the changes.
+5. Generate a PR description that explains what changed, why, and any notable implementation details.
+6. Before writing the description, check if a pull request template exists in the repository (look for pull_request_template.md or PULL_REQUEST_TEMPLATE.md in the root, .github/, or docs/ directories). If a template is found, use it as the structure for the PR description and fill in each section.`;
+
+        if (userInstructions) {
+          prInstructions += `\n\nAdditional instructions from the user:\n${userInstructions}`;
+        }
+
+        finalText = prInstructions;
       }
 
       onSend(
@@ -335,6 +364,12 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
         setPickerMode('skills');
         return;
       }
+      if (category === 'create-pr') {
+        setPickerMode(null);
+        const tag = createCreatePrTag();
+        replaceAtTrigger(tag);
+        return;
+      }
       if (category === 'issue' && githubContext?.type === 'issue') {
         setPickerMode(null);
         const tag = createGitHubContextTag(githubContext);
@@ -368,7 +403,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
 
           const { startContainer, startOffset } = range;
           const isTag = (el: HTMLElement) =>
-            el.hasAttribute(FILE_TAG_ATTR) || el.hasAttribute(SNIPPET_TAG_ATTR) || el.hasAttribute(GITHUB_TAG_ATTR) || el.hasAttribute(AGENT_TAG_ATTR) || el.hasAttribute(SKILL_TAG_ATTR);
+            el.hasAttribute(FILE_TAG_ATTR) || el.hasAttribute(SNIPPET_TAG_ATTR) || el.hasAttribute(GITHUB_TAG_ATTR) || el.hasAttribute(AGENT_TAG_ATTR) || el.hasAttribute(SKILL_TAG_ATTR) || el.hasAttribute(CREATE_PR_TAG_ATTR);
 
           if (startContainer.nodeType === Node.TEXT_NODE && startOffset === 0) {
             const prev = startContainer.previousSibling;
@@ -564,6 +599,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
                   hasFiles={!!requestListing}
                   hasIssue={githubContext?.type === 'issue'}
                   hasPr={githubContext?.type === 'pull'}
+                  hasCreatePr={!!canCreatePr}
                   anchorRect={pickerAnchor ?? undefined}
                 />
               </div>
@@ -659,10 +695,11 @@ interface CategoryPickerProps {
   hasFiles: boolean;
   hasIssue?: boolean;
   hasPr?: boolean;
+  hasCreatePr?: boolean;
   anchorRect?: { top: number; left: number };
 }
 
-function CategoryPicker({ onSelect, onClose, hasFiles, hasIssue, hasPr, anchorRect }: CategoryPickerProps) {
+function CategoryPicker({ onSelect, onClose, hasFiles, hasIssue, hasPr, hasCreatePr, anchorRect }: CategoryPickerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [highlightIdx, setHighlightIdx] = useState(0);
 
@@ -670,6 +707,7 @@ function CategoryPicker({ onSelect, onClose, hasFiles, hasIssue, hasPr, anchorRe
   if (hasFiles) items.push({ id: 'files', label: 'Files', icon: FILE_ICON_SVG, sublabel: 'Browse project files' });
   items.push({ id: 'agents', label: 'Agents', icon: AGENT_ICON_SVG, sublabel: 'Use a specialized agent' });
   items.push({ id: 'skills', label: 'Skills', icon: SKILL_ICON_SVG, sublabel: 'Apply a skill or command' });
+  if (hasCreatePr) items.push({ id: 'create-pr', label: 'Create PR', icon: CREATE_PR_ICON_SVG, sublabel: 'Create a pull request for this branch' });
   if (hasIssue) items.push({ id: 'issue', label: 'Issue', icon: ISSUE_ICON_SVG, sublabel: 'Attach GitHub issue context' });
   if (hasPr) items.push({ id: 'pr', label: 'PR', icon: PR_ICON_SVG, sublabel: 'Attach pull request context' });
 
@@ -756,6 +794,8 @@ const PR_ICON_SVG_SM = `<svg xmlns="http://www.w3.org/2000/svg" width="12" heigh
 const FILE_ICON_SVG_SM = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>`;
 const FOLDER_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`;
 const CODE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>`;
+const CREATE_PR_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/><path d="M21 3v4h-4"/></svg>`;
+const CREATE_PR_ICON_SVG_SM = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/><path d="M21 3v4h-4"/></svg>`;
 const AGENT_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="10" x="3" y="11" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" x2="8" y1="16" y2="16"/><line x1="16" x2="16" y1="16" y2="16"/></svg>`;
 const SKILL_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>`;
 const AGENT_ICON_SVG_SM = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="10" x="3" y="11" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" x2="8" y1="16" y2="16"/><line x1="16" x2="16" y1="16" y2="16"/></svg>`;
@@ -992,6 +1032,37 @@ function createSkillTag(item: HarnessItem): HTMLSpanElement {
   close.innerHTML = CLOSE_ICON_SVG;
   close.className =
     'flex items-center cursor-pointer rounded hover:bg-violet-500/20 ml-0.5';
+  close.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    tag.remove();
+  });
+  tag.appendChild(close);
+
+  return tag;
+}
+
+function createCreatePrTag(): HTMLSpanElement {
+  const tag = document.createElement('span');
+  tag.setAttribute(CREATE_PR_TAG_ATTR, 'true');
+  tag.contentEditable = 'false';
+  tag.className =
+    'inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5 rounded-md bg-cyan-500/10 text-cyan-400 text-xs font-medium align-baseline cursor-default select-none';
+  tag.title = 'Create a pull request for the current branch';
+
+  const icon = document.createElement('span');
+  icon.innerHTML = CREATE_PR_ICON_SVG_SM;
+  icon.className = 'flex items-center';
+  tag.appendChild(icon);
+
+  const label = document.createElement('span');
+  label.textContent = 'Create PR';
+  tag.appendChild(label);
+
+  const close = document.createElement('span');
+  close.innerHTML = CLOSE_ICON_SVG;
+  close.className =
+    'flex items-center cursor-pointer rounded hover:bg-cyan-500/20 ml-0.5';
   close.addEventListener('mousedown', (e) => {
     e.preventDefault();
     e.stopPropagation();

@@ -23,6 +23,7 @@ import { useEditorStore, type CodeSelection } from '../stores/editor-store';
 import type { ImageAttachment } from '../components/agent/prompt-input';
 import { useAgentSettingsStore, type AgentTypeId } from '../stores/agent-settings-store';
 import { useTerminalStore } from '../stores/terminal-store';
+import { useGitStore } from '../stores/git-store';
 import { CodeViewer } from '../components/editor/code-viewer';
 import { DiffViewer } from '../components/editor/diff-viewer';
 import { LspProvider } from '../components/editor/lsp-context';
@@ -47,6 +48,19 @@ export function ProjectPage() {
   const resetTerminals = useTerminalStore((s) => s.reset);
   const pollRef = useRef<ReturnType<typeof setInterval>>();
   const [provisionMsg, setProvisionMsg] = useState<string | null>(null);
+
+  const gitBranch = useGitStore((s) => s.branch);
+  const gitStaged = useGitStore((s) => s.staged);
+  const gitUnstaged = useGitStore((s) => s.unstaged);
+  const gitUntracked = useGitStore((s) => s.untracked);
+  const gitAhead = useGitStore((s) => s.ahead);
+
+  const canCreatePr = (() => {
+    if (!gitBranch) return false;
+    const branchLower = gitBranch.toLowerCase();
+    if (branchLower === 'main' || branchLower === 'master') return false;
+    return gitStaged.length + gitUnstaged.length + gitUntracked.length > 0 || gitAhead > 0;
+  })();
 
   useEffect(() => {
     resetEditor();
@@ -317,6 +331,8 @@ export function ProjectPage() {
           readFile={fileActions.readFile}
           writeFile={fileActions.writeFile}
           requestListing={fileActions.requestListing}
+          canCreatePr={canCreatePr}
+          projectDir={projectInfo.projectDir}
         />
       </LspProvider>
     </AppShell>
@@ -335,6 +351,8 @@ function CentralPanel({
   readFile,
   writeFile,
   requestListing,
+  canCreatePr,
+  projectDir,
 }: {
   projectId: string;
   projectAgentType?: string;
@@ -347,6 +365,8 @@ function CentralPanel({
   readFile: (path: string) => void;
   writeFile: (path: string, content: string) => void;
   requestListing: (path: string) => void;
+  canCreatePr?: boolean;
+  projectDir?: string | null;
 }) {
   const activeView = useEditorStore((s) => s.activeView);
   const activeFilePath = useEditorStore((s) => s.activeFilePath);
@@ -383,6 +403,8 @@ function CentralPanel({
       onSendUserAnswer={onSendUserAnswer}
       onStopAgent={onStopAgent}
       requestListing={requestListing}
+      canCreatePr={canCreatePr}
+      projectDir={projectDir}
     />
   );
 }

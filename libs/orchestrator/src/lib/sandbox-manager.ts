@@ -301,6 +301,10 @@ export class SandboxManager extends EventEmitter {
       envVars["CURL_CA_BUNDLE"] = "/etc/ssl/certs/ca-certificates.crt";
     }
 
+    if (this.config.githubToken) {
+      envVars["GH_TOKEN"] = "gh-proxy-placeholder";
+    }
+
     for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
       envVars[name] = placeholder;
     }
@@ -2242,11 +2246,7 @@ export class SandboxManager extends EventEmitter {
           await sandbox.process.executeCommand(`git checkout -b "${safeBranch}"`, projectDir);
         }
       } else {
-        const gitInitCmd = `mkdir -p '${projectDir}' && git init '${projectDir}'`;
-        const credentialCmd = (this.config.githubToken && this.config.provider !== "local")
-          ? ` && git config --global credential.helper store && echo "https://x-access-token:${this.config.githubToken}@github.com" > ~/.git-credentials`
-          : "";
-        await sandbox.process.executeCommand(gitInitCmd + credentialCmd);
+        await sandbox.process.executeCommand(`mkdir -p '${projectDir}' && git init '${projectDir}'`);
       }
       if (this.config.gitUserName && this.config.gitUserEmail) {
         const safeName = this.config.gitUserName.replace(/"/g, '\\"');

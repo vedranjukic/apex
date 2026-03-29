@@ -1,13 +1,14 @@
 # Prompt Input, File References, Code Snippets & Image Attachments
 
-The thread prompt uses a `contentEditable` div instead of a plain `<textarea>` so that inline reference tags can be mixed with text. Six input types are supported:
+The thread prompt uses a `contentEditable` div instead of a plain `<textarea>` so that inline reference tags can be mixed with text. Seven input types are supported:
 
 1. **File/folder references** -- triggered by typing `@` and selecting "Files" from the category picker
 2. **GitHub issue/PR references** -- triggered by typing `@` and selecting "Issue" or "PR" from the category picker (only available when the project has `githubContext`)
 3. **Agent references** -- triggered by typing `@` and selecting "Agents" from the category picker, then picking a specialized agent (always available)
 4. **Skill references** -- triggered by typing `@` and selecting "Skills" from the category picker, then picking a skill or command (always available)
-5. **Code snippet references** -- created by copying text in the code editor and pasting into the prompt
-6. **Image attachments** -- added via the toolbar image button or by pasting/dropping images from the clipboard
+5. **Create PR** -- triggered by typing `@` and selecting "Create PR" from the category picker (only available when git branch is not main/master and there are changes or ahead commits)
+6. **Code snippet references** -- created by copying text in the code editor and pasting into the prompt
+7. **Image attachments** -- added via the toolbar image button or by pasting/dropping images from the clipboard
 
 ## Key Files
 
@@ -54,6 +55,7 @@ ProjectPage
    - Shows "Files" (if requestListing is available)
    - Shows "Agents" (always -- specialized agents from the standard harness)
    - Shows "Skills" (always -- skills and commands from the standard harness)
+   - Shows "Create PR" (if git branch ≠ main/master AND has changes or ahead commits)
    - Shows "Issue" (if project has githubContext with type 'issue')
    - Shows "PR" (if project has githubContext with type 'pull')
    - If only "Files" is available (no agents/skills/GitHub), skips directly to FilePicker
@@ -73,7 +75,13 @@ ProjectPage
     User filters and selects a skill (click/Enter)
     Inserts a <span contentEditable="false" data-skill-ref="..."> tag
 
-5d. [Issue/PR path] User selects "Issue" or "PR"
+5d. [Create PR path] User selects "Create PR"
+    handleCategorySelect() removes the "@" trigger text from the DOM
+    Inserts a <span contentEditable="false" data-create-pr="true"> tag
+    On submit, replaces the prompt with PR creation instructions (commit, push, create PR)
+    Agent is instructed to look for pull_request_template.md in the repo and use it if present
+
+5e. [Issue/PR path] User selects "Issue" or "PR"
     handleCategorySelect() removes the "@" trigger text from the DOM
     Inserts a <span contentEditable="false" data-github-context="..."> tag
     On submit, the full issue/PR content (title, body, URL) is prepended to the prompt
@@ -119,6 +127,28 @@ ProjectPage
 - `data-github-label`: Display text (`@issue` or `@pr`) used in serialized output.
 - On submit, if a GitHub tag is present and `githubContext` prop is set, `handleSubmit()` prepends the full issue/PR content (type, number, title, URL, body) to the prompt text before sending.
 - GitHub context data (`GitHubContextData`) is stored on the project row and passed down through `ProjectPage → CentralPanel → AgentThread → PromptInput` as the `githubContext` prop.
+
+### Create PR tag DOM structure
+
+```html
+<span
+  contenteditable="false"
+  data-create-pr="true"
+  title="Create a pull request for the current branch"
+  class="... bg-cyan-500/10 text-cyan-400 ..."
+>
+  <span><!-- git PR SVG icon --></span>
+  <span>Create PR</span>
+  <span><!-- X close icon --></span>
+</span>
+```
+
+- `data-create-pr`: Always `"true"` — used by `extractContent()` to detect the Create PR tag.
+- On submit, the prompt is replaced with structured PR creation instructions (commit pending changes, push, create PR with generated title/description).
+- The agent is instructed to look for a `pull_request_template.md` (or `PULL_REQUEST_TEMPLATE.md`) in the repository root, `.github/`, or `docs/` directories. If found, it uses the template as the structure for the PR description.
+- Any additional text typed by the user alongside the tag is appended as extra instructions.
+- Create PR tags use cyan/teal colors.
+- Visibility condition: `useGitStore.branch` is not `main`/`master` AND there are uncommitted changes or the branch is ahead of remote.
 
 ### Agent tag DOM structure
 
@@ -392,8 +422,8 @@ interface PromptInputHandle {
 
 ### Tag removal
 
-File, snippet, GitHub context, agent, and skill tags can be removed by:
-1. **Backspace key** at the tag boundary (checks for `FILE_TAG_ATTR`, `SNIPPET_TAG_ATTR`, `GITHUB_TAG_ATTR`, `AGENT_TAG_ATTR`, or `SKILL_TAG_ATTR`).
+File, snippet, GitHub context, agent, skill, and Create PR tags can be removed by:
+1. **Backspace key** at the tag boundary (checks for `FILE_TAG_ATTR`, `SNIPPET_TAG_ATTR`, `GITHUB_TAG_ATTR`, `AGENT_TAG_ATTR`, `SKILL_TAG_ATTR`, or `CREATE_PR_TAG_ATTR`).
 2. **X button click** via `mousedown` listener on the close span.
 
 ### Submit serialization
@@ -401,7 +431,7 @@ File, snippet, GitHub context, agent, and skill tags can be removed by:
 `extractContent(el)` returns:
 
 ```typescript
-{ text: string; files: string[]; snippets: CodeSelection[]; hasGithubContext: boolean }
+{ text: string; files: string[]; snippets: CodeSelection[]; hasGithubContext: boolean; hasCreatePr: boolean }
 ```
 
 - Text nodes concatenated as-is.
@@ -409,6 +439,7 @@ File, snippet, GitHub context, agent, and skill tags can be removed by:
 - Snippet tag spans contribute `[snippet: path:line:char-line:char]` to text, parsed `CodeSelection` to `snippets[]`.
 - Agent tag spans contribute `@agent:<id>` to text.
 - Skill tag spans contribute `@skill:<id>` to text.
+- Create PR tag spans set `hasCreatePr = true` and contribute `@create-pr` to text.
 - GitHub context tag spans set `hasGithubContext = true` and contribute `@issue` or `@pr` to text.
 - `<br>` elements become `\n`.
 
@@ -448,7 +479,7 @@ When the user submits a prompt with references and/or images:
 
 ### Adding a new reference type
 
-1. Define a new `data-*` attribute constant (like `FILE_TAG_ATTR`, `SNIPPET_TAG_ATTR`, `GITHUB_TAG_ATTR`, `AGENT_TAG_ATTR`, `SKILL_TAG_ATTR`).
+1. Define a new `data-*` attribute constant (like `FILE_TAG_ATTR`, `SNIPPET_TAG_ATTR`, `GITHUB_TAG_ATTR`, `AGENT_TAG_ATTR`, `SKILL_TAG_ATTR`, `CREATE_PR_TAG_ATTR`).
 2. Create a `createXxxTag()` function following the same pattern.
 3. Add a new entry to the `CategoryPicker` items array (or add detection logic in `handleInput` / `handlePaste`).
 4. Extend `extractContent()` to recognize the new tag type.
@@ -456,7 +487,7 @@ When the user submits a prompt with references and/or images:
 
 ### Changing tag appearance
 
-Edit the `className` string and SVG icon constants (`FILE_ICON_SVG`, `FOLDER_ICON_SVG`, `CODE_ICON_SVG`, `ISSUE_ICON_SVG`, `PR_ICON_SVG`, `AGENT_ICON_SVG`, `SKILL_ICON_SVG`, `CLOSE_ICON_SVG`). Tags are created imperatively (not JSX) because they are inserted into the contentEditable DOM directly.
+Edit the `className` string and SVG icon constants (`FILE_ICON_SVG`, `FOLDER_ICON_SVG`, `CODE_ICON_SVG`, `ISSUE_ICON_SVG`, `PR_ICON_SVG`, `CREATE_PR_ICON_SVG`, `AGENT_ICON_SVG`, `SKILL_ICON_SVG`, `CLOSE_ICON_SVG`). Tags are created imperatively (not JSX) because they are inserted into the contentEditable DOM directly.
 
 ### Changing how references are sent to the backend
 
