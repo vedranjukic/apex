@@ -85,6 +85,9 @@ class SandboxFileSystemProvider implements IFileSystemProviderWithFileReadWriteC
   async readFile(resource: URI): Promise<Uint8Array> {
     const filePath = resource.path;
 
+    const synthetic = syntheticFiles.get(filePath);
+    if (synthetic) return synthetic;
+
     const cached = this.cache.get(filePath);
     if (cached) return cached;
 
@@ -120,6 +123,13 @@ class SandboxFileSystemProvider implements IFileSystemProviderWithFileReadWriteC
 let currentOverlay: IDisposable | null = null;
 let currentProvider: SandboxFileSystemProvider | null = null;
 
+/**
+ * Module-level cache for synthetic file content (e.g. diff original/modified).
+ * Persists across provider instance replacements (React strict mode, etc.).
+ * Checked by readFile before falling through to the socket.
+ */
+const syntheticFiles = new Map<string, Uint8Array>();
+
 export function registerSandboxFs(
   socketRef: { current: ReconnectingWebSocket | null },
   projectId: string,
@@ -140,4 +150,12 @@ export function registerSandboxFs(
       currentProvider = null;
     },
   };
+}
+
+export function setSyntheticFile(path: string, content: string): void {
+  syntheticFiles.set(path, textEncoder.encode(content));
+}
+
+export function clearSyntheticFile(path: string): void {
+  syntheticFiles.delete(path);
 }

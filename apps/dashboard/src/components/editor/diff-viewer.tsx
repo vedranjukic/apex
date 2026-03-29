@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Loader2, X, GitCommitHorizontal } from 'lucide-react';
 import { MonacoEditorReactComp } from '@typefox/monaco-editor-react';
 import { configureDefaultWorkerFactory } from 'monaco-languageclient/workerFactory';
@@ -6,6 +6,7 @@ import type { MonacoVscodeApiConfig } from 'monaco-languageclient/vscodeApiWrapp
 import type { EditorAppConfig } from 'monaco-languageclient/editorApp';
 import { useEditorStore } from '../../stores/editor-store';
 import { getLanguageFromPath } from './lang-map';
+import { setSyntheticFile, clearSyntheticFile } from './sandbox-fs-provider';
 import { cn } from '../../lib/cn';
 
 const vscodeApiConfig: MonacoVscodeApiConfig = {
@@ -25,7 +26,7 @@ const vscodeApiConfig: MonacoVscodeApiConfig = {
       'editor.contextmenu': false,
       'editor.readOnly': true,
       'diffEditor.renderSideBySide': true,
-      'diffEditor.renderOverviewRuler': false,
+      'diffEditor.renderOverviewRuler': true,
     }),
   },
   monacoWorkerFactory: configureDefaultWorkerFactory,
@@ -45,6 +46,22 @@ export function DiffViewer() {
   const fileName = diff.filePath.split('/').pop() ?? diff.filePath;
   const language = getLanguageFromPath(diff.filePath);
 
+  const normalizedPath = diff.filePath.startsWith('/') ? diff.filePath : `/${diff.filePath}`;
+  const originalUri = `${normalizedPath}.diff-original`;
+  const modifiedUri = `${normalizedPath}.diff-modified`;
+
+  if (!diff.loading) {
+    setSyntheticFile(originalUri, diff.original ?? '');
+    setSyntheticFile(modifiedUri, diff.modified ?? '');
+  }
+
+  useEffect(() => {
+    return () => {
+      clearSyntheticFile(originalUri);
+      clearSyntheticFile(modifiedUri);
+    };
+  }, [originalUri, modifiedUri]);
+
   const editorAppConfig: EditorAppConfig | null =
     diff.loading
       ? null
@@ -52,15 +69,16 @@ export function DiffViewer() {
           codeResources: {
             original: {
               text: diff.original ?? '',
-              uri: `file://${diff.filePath}.original`,
+              uri: `file://${originalUri}`,
               enforceLanguageId: language,
             },
             modified: {
               text: diff.modified ?? '',
-              uri: `file://${diff.filePath}.modified`,
+              uri: `file://${modifiedUri}`,
               enforceLanguageId: language,
             },
           },
+          useDiffEditor: true,
         };
 
   return (
