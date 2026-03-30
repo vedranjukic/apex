@@ -427,6 +427,9 @@ function pollSession(threadId, sessionId) {
         if (!statuses) return;
         const st = statuses[sessionId];
         if (!st || st.type === "idle") {
+          var hasPendingAsk = false;
+          for (var [, pEntry] of pendingAskUser) { if (pEntry.threadId === threadId) { hasPendingAsk = true; break; } }
+          if (hasPendingAsk) { setTimeout(poll, 1500); return; }
           log("\u{1F916}", "Session " + sessionId + " idle, emitting exit");
           activeThreads.delete(threadId);
           emitAgentExit(threadId, 0);
@@ -734,7 +737,10 @@ const server = http.createServer((req, res) => {
       try {
         const payload = JSON.parse(body);
         const questionId = "ask-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-        const activeThreadId = payload.threadId !== "default" ? payload.threadId : (activeThreads.size > 0 ? Array.from(activeThreads).pop() : "default");
+        var activeThreadId = payload.threadId !== "default" ? payload.threadId : null;
+        if (!activeThreadId && activeThreads.size > 0) activeThreadId = Array.from(activeThreads).pop();
+        if (!activeThreadId && threadToSession.size > 0) activeThreadId = Array.from(threadToSession.keys()).pop();
+        if (!activeThreadId) activeThreadId = "default";
         if (state.ws && state.ws.readyState === 1) {
           state.ws.send(JSON.stringify({ type: "claude_message", threadId: activeThreadId, data: { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: questionId, name: "AskUserQuestion", input: payload.input || {} }], stop_reason: "tool_use" } } }));
           state.ws.send(JSON.stringify({ type: "ask_user_pending", threadId: activeThreadId, questionId: questionId }));
@@ -749,7 +755,7 @@ const server = http.createServer((req, res) => {
           res.writeHead(408, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "User did not respond in time" }));
         }, ASK_TIMEOUT_MS);
-        pendingAskUser.set(questionId, { resolve: (answer) => {
+        pendingAskUser.set(questionId, { threadId: activeThreadId, resolve: (answer) => {
           clearTimeout(entry.timer);
           pendingAskUser.delete(questionId);
           if (state.ws && state.ws.readyState === 1) {
