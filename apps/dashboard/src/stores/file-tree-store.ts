@@ -17,6 +17,7 @@ interface FileTreeState {
   setEntries: (dirPath: string, entries: FileEntry[]) => void;
   getEntries: (dirPath: string) => FileEntry[] | undefined;
   getAllCachedFiles: () => FileEntry[];
+  getAllCachedEntries: () => FileEntry[];
   markPending: (dirPath: string) => void;
   isPending: (dirPath: string) => boolean;
   invalidate: (dirPath: string) => void;
@@ -60,6 +61,20 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
       }
     }
     return files;
+  },
+
+  getAllCachedEntries: () => {
+    const seen = new Set<string>();
+    const entries: FileEntry[] = [];
+    for (const dirEntries of Object.values(get().cache)) {
+      for (const e of dirEntries) {
+        if (!seen.has(e.path)) {
+          seen.add(e.path);
+          entries.push(e);
+        }
+      }
+    }
+    return entries;
   },
 
   markPending: (dirPath: string) =>

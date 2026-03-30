@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Folder, File, ChevronLeft, Search } from 'lucide-react';
 import { useFileTreeStore, type FileEntry } from '../../stores/file-tree-store';
 import { cn } from '../../lib/cn';
@@ -10,15 +10,20 @@ interface Props {
   anchorRect?: { top: number; left: number };
 }
 
+const MAX_SEARCH_RESULTS = 50;
+
 export function FilePicker({ onSelect, onClose, requestListing, anchorRect }: Props) {
   const rootPath = useFileTreeStore((s) => s.rootPath);
   const cache = useFileTreeStore((s) => s.cache);
+  const getAllCachedEntries = useFileTreeStore((s) => s.getAllCachedEntries);
   const [currentDir, setCurrentDir] = useState(rootPath ?? '/');
   const [filter, setFilter] = useState('');
   const filterRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [highlightIdx, setHighlightIdx] = useState(0);
+
+  const isSearchMode = filter.length > 0;
 
   useEffect(() => {
     filterRef.current?.focus();
@@ -40,10 +45,23 @@ export function FilePicker({ onSelect, onClose, requestListing, anchorRect }: Pr
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [onClose]);
 
-  const entries = cache[currentDir] ?? [];
-  const filtered = entries.filter((e) =>
-    e.name.toLowerCase().includes(filter.toLowerCase()),
-  );
+  const browseEntries = cache[currentDir] ?? [];
+
+  const filtered = useMemo(() => {
+    if (!isSearchMode) {
+      return browseEntries;
+    }
+    const query = filter.toLowerCase();
+    const allEntries = getAllCachedEntries();
+    const matches = allEntries.filter((e) =>
+      e.name.toLowerCase().includes(query),
+    );
+    matches.sort((a, b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return matches.slice(0, MAX_SEARCH_RESULTS);
+  }, [isSearchMode, filter, browseEntries, getAllCachedEntries]);
 
   useEffect(() => {
     setHighlightIdx(0);
@@ -65,14 +83,16 @@ export function FilePicker({ onSelect, onClose, requestListing, anchorRect }: Pr
 
   const handleItemClick = useCallback(
     (entry: FileEntry, selectAsRef = false) => {
-      if (entry.isDirectory && !selectAsRef) {
+      if (isSearchMode) {
+        onSelect(entry.path, entry.isDirectory);
+      } else if (entry.isDirectory && !selectAsRef) {
         setCurrentDir(entry.path);
         setFilter('');
       } else {
         onSelect(entry.path, entry.isDirectory);
       }
     },
-    [onSelect],
+    [onSelect, isSearchMode],
   );
 
   const handleKeyDown = useCallback(
@@ -100,7 +120,19 @@ export function FilePicker({ onSelect, onClose, requestListing, anchorRect }: Pr
     [onClose, filtered, highlightIdx, handleItemClick, filter, navigateUp],
   );
 
-  const canGoUp = currentDir !== rootPath && currentDir !== '/';
+  const canGoUp = !isSearchMode && currentDir !== rootPath && currentDir !== '/';
+
+  const relativePath = useCallback(
+    (entry: FileEntry) => {
+      if (!rootPath) return '';
+      const full = entry.path;
+      const rel = full.startsWith(rootPath) ? full.slice(rootPath.length) : full;
+      const stripped = rel.startsWith('/') ? rel.slice(1) : rel;
+      const lastSlash = stripped.lastIndexOf('/');
+      return lastSlash >= 0 ? stripped.slice(0, lastSlash + 1) : '';
+    },
+    [rootPath],
+  );
 
   const style: React.CSSProperties = anchorRect
     ? { position: 'fixed', bottom: `calc(100vh - ${anchorRect.top}px)`, left: anchorRect.left }
@@ -109,7 +141,7 @@ export function FilePicker({ onSelect, onClose, requestListing, anchorRect }: Pr
   return (
     <div
       ref={panelRef}
-      className="z-50 w-72 border border-border rounded-xl bg-surface shadow-lg overflow-hidden"
+      className="z-50 w-80 border border-border rounded-xl bg-surface shadow-lg overflow-hidden"
       style={style}
       onKeyDown={handleKeyDown}
     >
@@ -128,7 +160,7 @@ export function FilePicker({ onSelect, onClose, requestListing, anchorRect }: Pr
           ref={filterRef}
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter files…"
+          placeholder="Search files…"
           className="flex-1 text-xs bg-transparent outline-none placeholder:text-text-muted"
         />
       </div>
@@ -136,7 +168,7 @@ export function FilePicker({ onSelect, onClose, requestListing, anchorRect }: Pr
       <div ref={listRef} className="max-h-52 overflow-y-auto p-1">
         {filtered.length === 0 ? (
           <div className="px-3 py-4 text-xs text-text-muted text-center">
-            {entries.length === 0 ? 'Loading…' : 'No matches'}
+            {isSearchMode ? 'No matches' : browseEntries.length === 0 ? 'Loading…' : 'No matches'}
           </div>
         ) : (
           filtered.map((entry, idx) => (
@@ -158,12 +190,17 @@ export function FilePicker({ onSelect, onClose, requestListing, anchorRect }: Pr
                 <File className="w-3.5 h-3.5 shrink-0 text-text-muted" />
               )}
               <span className="truncate">{entry.name}</span>
+              {isSearchMode && (
+                <span className="ml-auto text-[10px] text-text-muted truncate max-w-[40%] text-right shrink-0">
+                  {relativePath(entry)}
+                </span>
+              )}
             </button>
           ))
         )}
       </div>
 
-      {filtered.some((e) => e.isDirectory) && (
+      {!isSearchMode && filtered.some((e) => e.isDirectory) && (
         <div className="px-3 py-1.5 border-t border-border text-[10px] text-text-muted">
           <kbd className="px-1 py-0.5 rounded border border-border bg-surface-secondary text-[10px]">Shift</kbd>
           {' + '}
