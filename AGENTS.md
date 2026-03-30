@@ -31,6 +31,7 @@ All UI state is in Zustand stores under `apps/dashboard/src/stores/`:
 - `theme-store.ts` -- color theme selection (midnight-blue, dark, light), persisted to localStorage
 - `lsp-store.ts` -- per-language LSP server status (starting/ready/error/stopped) from bridge
 - `references-store.ts` -- Find All References/Implementations results for the sidebar panel
+- `tour-store.ts` -- onboarding tour state: dismissed steps persisted to localStorage, sequential tooltip flow
 Access store actions outside React components with `useXxxStore.getState().action()`.
 
 ## Conventions

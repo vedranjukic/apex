@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus, FolderOpen, Trash2, ExternalLink, Loader2, CheckCircle2,
@@ -11,7 +11,9 @@ import { useProjectsStore } from '../../stores/projects-store';
 import { useProjectsSocket } from '../../hooks/use-projects-socket';
 import { CreateProjectDialog } from './create-project-dialog';
 import { settingsApi, projectsApi, githubApi } from '../../api/client';
-import type { Project, Thread, GitHubUser } from '../../api/client';
+import type { Project, Thread, GitHubUser, SettingEntry } from '../../api/client';
+import { TourTooltip } from '../tour/tour-tooltip';
+import { useTourStore } from '../../stores/tour-store';
 
 const STATUS_LABELS: Record<string, string> = {
   creating: 'creating',
@@ -249,6 +251,22 @@ interface Props {
   activeProjectId?: string | null;
 }
 
+const TOUR_SETTINGS_KEYS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'DAYTONA_API_KEY', 'GITHUB_TOKEN'];
+
+function useActiveTourStep(
+  settingsUnconfigured: boolean,
+  hasProjects: boolean,
+  hasVisibleThreads: boolean,
+) {
+  const dismissed = useTourStore((s) => s.dismissed);
+
+  if (settingsUnconfigured && !dismissed.has('settings')) return 'settings' as const;
+  if (hasProjects && !dismissed.has('create-thread')) return 'create-thread' as const;
+  if (hasProjects && dismissed.has('create-thread') && !dismissed.has('open-project')) return 'open-project' as const;
+  if (dismissed.has('open-project') && hasVisibleThreads && !dismissed.has('thread-click')) return 'thread-click' as const;
+  return null;
+}
+
 export function ProjectList({ onOpenProject, onSelectThread, onNewThread, activeProjectId }: Props) {
   const { projects, loading, fetchProjects, deleteProject } = useProjectsStore();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -260,12 +278,37 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
   const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
   const navigate = useNavigate();
 
+  const settingsBtnRef = useRef<HTMLButtonElement>(null);
+  const newThreadBtnRef = useRef<HTMLButtonElement>(null);
+  const openProjectBtnRef = useRef<HTMLButtonElement>(null);
+  const firstThreadRef = useRef<HTMLButtonElement>(null);
+
+  const [settingsUnconfigured, setSettingsUnconfigured] = useState(false);
+  const dismissStep = useTourStore((s) => s.dismissStep);
+
+  const hasVisibleThreads = useMemo(
+    () => projects.some((p) => (p.threads?.length ?? 0) > 0),
+    [projects],
+  );
+
+  const activeTourStep = useActiveTourStep(
+    settingsUnconfigured && settingsVisible,
+    projects.length > 0,
+    hasVisibleThreads,
+  );
+
   useProjectsSocket();
 
   useEffect(() => {
     fetchProjects();
     settingsApi.visible().then((r) => setSettingsVisible(r.visible)).catch(() => {});
     githubApi.user().then((u) => { if (u) setGhUser(u); }).catch(() => {}).finally(() => setGhLoaded(true));
+
+    settingsApi.get().then((entries: Record<string, SettingEntry>) => {
+      const allNone = TOUR_SETTINGS_KEYS.every((k) => !entries[k] || entries[k].source === 'none');
+      setSettingsUnconfigured(allNone);
+    }).catch(() => {});
+
     const interval = setInterval(fetchProjects, 3000);
     return () => clearInterval(interval);
   }, [fetchProjects]);
@@ -340,6 +383,7 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
                   <Shield className="w-4 h-4" />
                 </button>
                 <button
+                  ref={settingsBtnRef}
                   onClick={() => navigate('/settings')}
                   className="p-2 rounded-lg hover:bg-surface-secondary text-text-secondary hover:text-text-primary transition-colors"
                   title="Settings"
@@ -445,7 +489,7 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
           </div>
         ) : (
           <div className="grid gap-2">
-            {filteredGroups.map((group) =>
+            {filteredGroups.map((group, gi) =>
               group.forks.length === 0 ? (
                 <ProjectCard
                   key={group.root.id}
@@ -455,6 +499,9 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
                   onSelectThread={onSelectThread}
                   onNewThread={onNewThread}
                   activeProjectId={activeProjectId}
+                  newThreadBtnRef={gi === 0 ? newThreadBtnRef : undefined}
+                  openProjectBtnRef={gi === 0 ? openProjectBtnRef : undefined}
+                  firstThreadRef={gi === 0 ? firstThreadRef : undefined}
                 />
               ) : (
                 <ForkGroupCard
@@ -465,6 +512,9 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
                   onSelectThread={onSelectThread}
                   onNewThread={onNewThread}
                   activeProjectId={activeProjectId}
+                  newThreadBtnRef={gi === 0 ? newThreadBtnRef : undefined}
+                  openProjectBtnRef={gi === 0 ? openProjectBtnRef : undefined}
+                  firstThreadRef={gi === 0 ? firstThreadRef : undefined}
                 />
               ),
             )}
@@ -477,6 +527,47 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
         onClose={() => setDialogOpen(false)}
         onCreated={() => fetchProjects()}
       />
+
+      {activeTourStep === 'settings' && settingsBtnRef.current && (
+        <TourTooltip
+          targetRef={settingsBtnRef}
+          position="bottom"
+          stepId="settings"
+          title="Welcome to Apex!"
+          description="Start by configuring your LLM API keys (Anthropic / OpenAI), Daytona key, and GitHub token in Settings."
+          onDismiss={() => dismissStep('settings')}
+        />
+      )}
+      {activeTourStep === 'create-thread' && newThreadBtnRef.current && (
+        <TourTooltip
+          targetRef={newThreadBtnRef}
+          position="left"
+          stepId="create-thread"
+          title="Create a Thread"
+          description="Click here to create a new thread and start working with the AI agent on this project."
+          onDismiss={() => dismissStep('create-thread')}
+        />
+      )}
+      {activeTourStep === 'open-project' && openProjectBtnRef.current && (
+        <TourTooltip
+          targetRef={openProjectBtnRef}
+          position="left"
+          stepId="open-project"
+          title="Open Project"
+          description="Open the full project workspace with the code editor, terminal, file explorer, and more."
+          onDismiss={() => dismissStep('open-project')}
+        />
+      )}
+      {activeTourStep === 'thread-click' && firstThreadRef.current && (
+        <TourTooltip
+          targetRef={firstThreadRef}
+          position="bottom"
+          stepId="thread-click"
+          title="View a Thread"
+          description="Click on a thread to open the conversation panel and see the agent's progress."
+          onDismiss={() => dismissStep('thread-click')}
+        />
+      )}
     </div>
   );
 }
@@ -487,12 +578,14 @@ function ThreadList({
   projectName,
   onSelectThread,
   activeProjectId,
+  firstThreadRef,
 }: {
   threads: Thread[];
   projectId: string;
   projectName: string;
   onSelectThread?: (projectId: string, threadId: string, projectName: string) => void;
   activeProjectId?: string | null;
+  firstThreadRef?: React.RefObject<HTMLButtonElement | null>;
 }) {
   if (!threads || threads.length === 0) return null;
 
@@ -535,9 +628,10 @@ function ThreadList({
       </button>
       {expanded && (
         <div className="mt-1 space-y-px">
-          {threads.map((thread) => (
+          {threads.map((thread, ti) => (
             <button
               key={thread.id}
+              ref={ti === 0 ? firstThreadRef : undefined}
               onClick={(e) => {
                 e.stopPropagation();
                 onSelectThread?.(projectId, thread.id, projectName);
@@ -572,6 +666,9 @@ function ForkGroupCard({
   onSelectThread,
   onNewThread,
   activeProjectId,
+  newThreadBtnRef,
+  openProjectBtnRef,
+  firstThreadRef,
 }: {
   group: ForkGroup;
   onOpenProject: (id: string) => void;
@@ -579,6 +676,9 @@ function ForkGroupCard({
   onSelectThread?: (projectId: string, threadId: string, projectName: string) => void;
   onNewThread?: (projectId: string, projectName: string) => void;
   activeProjectId?: string | null;
+  newThreadBtnRef?: React.RefObject<HTMLButtonElement | null>;
+  openProjectBtnRef?: React.RefObject<HTMLButtonElement | null>;
+  firstThreadRef?: React.RefObject<HTMLButtonElement | null>;
 }) {
   const [expanded, setExpanded] = useState(true);
 
@@ -592,6 +692,9 @@ function ForkGroupCard({
         onNewThread={onNewThread}
         noBorder
         activeProjectId={activeProjectId}
+        newThreadBtnRef={newThreadBtnRef}
+        openProjectBtnRef={openProjectBtnRef}
+        firstThreadRef={firstThreadRef}
       />
 
       <button
@@ -714,6 +817,9 @@ function ProjectCard({
   onNewThread,
   noBorder,
   activeProjectId,
+  newThreadBtnRef,
+  openProjectBtnRef,
+  firstThreadRef,
 }: {
   project: Project;
   onOpen: () => void;
@@ -722,6 +828,9 @@ function ProjectCard({
   onNewThread?: (projectId: string, projectName: string) => void;
   noBorder?: boolean;
   activeProjectId?: string | null;
+  newThreadBtnRef?: React.RefObject<HTMLButtonElement | null>;
+  openProjectBtnRef?: React.RefObject<HTMLButtonElement | null>;
+  firstThreadRef?: React.RefObject<HTMLButtonElement | null>;
 }) {
   const [showMore, setShowMore] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -763,11 +872,13 @@ function ProjectCard({
               projectName={project.name}
               onSelectThread={onSelectThread}
               activeProjectId={activeProjectId}
+              firstThreadRef={firstThreadRef}
             />
           )}
         </div>
         <div className="flex items-center gap-1 ml-4">
           <button
+            ref={newThreadBtnRef}
             onClick={(e) => {
               e.stopPropagation();
               onNewThread?.(project.id, project.name);
@@ -778,6 +889,7 @@ function ProjectCard({
             <Plus className="w-4 h-4" />
           </button>
           <button
+            ref={openProjectBtnRef}
             onClick={onOpen}
             className="p-1.5 rounded-lg hover:bg-surface-secondary text-text-secondary hover:text-primary transition-colors"
             title="Open in new tab"

@@ -51,10 +51,12 @@ apps/dashboard/src/
 │   │   ├── sandbox-fs-provider.ts  # VS Code file system overlay fetching sandbox files via Socket.io
 │   │   ├── references-panel.tsx    # Sidebar panel for Find All References/Implementations results
 │   │   └── lang-map.ts             # Maps file extensions / filenames to Monaco language IDs
-│   └── terminal/
-│       ├── terminal-panel.tsx      # Resizable terminal panel with drag handle & auto-create logic
-│       ├── terminal-tabs.tsx       # Tab bar for switching / creating / closing terminals
-│       └── terminal-tab.tsx        # Single xterm.js instance (mount, fit, resize, theme)
+│   ├── terminal/
+│   │   ├── terminal-panel.tsx      # Resizable terminal panel with drag handle & auto-create logic
+│   │   ├── terminal-tabs.tsx       # Tab bar for switching / creating / closing terminals
+│   │   └── terminal-tab.tsx        # Single xterm.js instance (mount, fit, resize, theme)
+│   └── tour/
+│       └── tour-tooltip.tsx        # Positioned onboarding tooltip with "do not show again" checkbox
 ├── hooks/
 │   ├── use-agent-socket.ts         # Socket.io connection to /ws/agent — agent messages & status
 │   ├── use-terminal-socket.ts      # Terminal CRUD & I/O over the shared socket
@@ -77,7 +79,8 @@ apps/dashboard/src/
 │   ├── agent-settings-store.ts     # Zustand store — agent type (build/plan/sisyphus) and model selection
 │   ├── ports-store.ts              # Zustand store — forwarded ports list from sandbox port scanning
 │   ├── git-store.ts                # Zustand store — git status, branches, optimistic staging/unstaging
-│   └── lsp-store.ts                # Zustand store — per-language LSP server status (starting/ready/error/stopped)
+│   ├── lsp-store.ts                # Zustand store — per-language LSP server status (starting/ready/error/stopped)
+│   └── tour-store.ts               # Zustand store — onboarding tour dismissed steps, localStorage persistence
 └── lib/
     ├── cn.ts                       # clsx + tailwind-merge helper
     ├── model-context.ts            # Model context window sizes + token formatting helpers
@@ -234,6 +237,21 @@ Routing is handled by **React Router v6** (`BrowserRouter` → `Routes` → `Rou
 | **TerminalPanel**   | Resizable panel at the bottom of the content area. Features: drag-to-resize handle (min 120px), collapse/expand toggle, auto-creates a default shell terminal on project open (waits for `terminalsLoaded`). When collapsed, shows a thin "Terminal" bar. |
 | **TerminalTabs**    | Horizontal tab strip. Each tab shows terminal icon + name + close button (visible on hover). "+" button to create a new terminal. |
 | **TerminalTab**     | Wraps a single **xterm.js** `Terminal` instance. Uses `FitAddon` for auto-sizing. Tokyo Night color theme. Forwards keystrokes to server via `onInput`. Uses `ResizeObserver` to re-fit on container size changes. Hidden tabs use `display: none` to preserve scrollback. |
+
+### 4.6 Tour Components (`components/tour/`)
+
+| Component          | Purpose |
+| ------------------ | ------- |
+| **TourTooltip**    | Positioned onboarding tooltip rendered via `createPortal`. Accepts a `targetRef` and `position` (top/bottom/left/right), calculates placement from `getBoundingClientRect()`, and repositions on scroll/resize via `ResizeObserver`. Shows a semi-transparent backdrop with a highlight cutout around the target element. Each tooltip has a "Do not show again" checkbox (persists dismissal to `localStorage` via `useTourStore`) and a "Got it" dismiss button. Used by `ProjectList` to guide first-time users through settings, thread creation, project opening, and thread selection. |
+
+**Tour flow** (all steps rendered in `ProjectList`):
+
+1. **Settings** — points to the Settings header button when no API keys are configured (`settingsApi.get()` returns `source: 'none'` for all key settings).
+2. **Create Thread** — points to the first project card's "New thread" button once a project exists and the settings step is dismissed.
+3. **Open Project** — points to the first project card's "Open in new tab" button after the create-thread step is dismissed.
+4. **Thread Click** — points to the first thread row when threads are visible and the open-project step is dismissed.
+
+Steps are sequential: only one tooltip shows at a time, determined by `useActiveTourStep()`. Each step can be permanently dismissed via the checkbox, persisted under `localStorage` key `apex-tour-dismissed`.
 
 ---
 
@@ -401,7 +419,25 @@ Populated by `lsp_status` events relayed from the bridge, and also by client-sid
 
 Populated by `code-viewer.tsx` when "Find All References" or "Find All Implementations" is invoked from the context menu. Results are displayed in the References sidebar panel.
 
-### 5.11 `useFileTreeStore` (`stores/file-tree-store.ts`)
+### 5.11 `useTourStore` (`stores/tour-store.ts`)
+
+| Field / Action              | Type / Description |
+| --------------------------- | ------------------ |
+| `dismissed`                 | `Set<TourStepId>` — step IDs that have been permanently dismissed |
+| `settingsConfigured`        | `boolean` — whether API key settings are configured (set by `ProjectList`) |
+| `isDismissed(id)`           | Returns true if the step has been dismissed |
+| `dismissStep(id)`           | Adds step to dismissed set and persists to `localStorage` |
+| `dismissAll()`              | Dismisses all steps at once |
+| `resetTour()`               | Clears all dismissed steps (removes `localStorage` key) |
+| `setSettingsConfigured(v)`  | Sets whether settings are configured |
+
+**`TourStepId`**: `'settings' | 'create-thread' | 'open-project' | 'thread-click'`
+
+Persisted to `localStorage` key `apex-tour-dismissed` as a JSON array of step IDs. On load, the store hydrates from `localStorage`. The active step is determined by `useActiveTourStep()` in `project-list.tsx`, which evaluates conditions (settings unconfigured, projects exist, threads visible) against the dismissed set.
+
+Debug helper: `window.__resetTour()` clears all dismissed state for testing.
+
+### 5.12 `useFileTreeStore` (`stores/file-tree-store.ts`)
 
 | Field / Action                | Type / Description |
 | ----------------------------- | ------------------ |
