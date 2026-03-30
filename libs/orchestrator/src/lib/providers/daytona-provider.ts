@@ -52,11 +52,17 @@ class DaytonaSandboxInstance implements SandboxInstance {
   async fork(
     name?: string,
   ): Promise<{ id: string; name?: string; state?: string }> {
-    const result = await this.sandbox.fork(name);
+    if (typeof (this.sandbox as any).fork !== "function") {
+      throw new Error(
+        "Fork is not available in this version of the Daytona SDK. " +
+        "Update @daytonaio/sdk to a version that supports sandbox forking.",
+      );
+    }
+    const result = await (this.sandbox as any).fork(name);
     return {
       id: result.id,
-      name: (result as any).name,
-      state: (result as any).state,
+      name: result.name,
+      state: result.state,
     };
   }
 

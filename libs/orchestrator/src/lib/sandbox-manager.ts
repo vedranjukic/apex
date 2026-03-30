@@ -24,6 +24,8 @@ import {
   BridgeTerminalError,
   BridgeTerminalList,
   BridgePortsUpdate,
+  BridgeLspResponse,
+  BridgeLspStatus,
   PortInfo,
   LayoutData,
   FileEntry,
@@ -161,6 +163,8 @@ export interface SandboxManagerEvents {
   terminal_list: (sandboxId: string, msg: BridgeTerminalList) => void;
   file_changed: (sandboxId: string, dirs: string[]) => void;
   ports_update: (sandboxId: string, msg: BridgePortsUpdate) => void;
+  lsp_response: (sandboxId: string, msg: BridgeLspResponse) => void;
+  lsp_status: (sandboxId: string, msg: BridgeLspStatus) => void;
 }
 
 export declare interface SandboxManager {
@@ -282,41 +286,26 @@ export class SandboxManager extends EventEmitter {
   private buildContainerEnvVars(): Record<string, string> {
     const proxyBase = resolveProxyBaseUrl(this.config.proxyBaseUrl, this.config.provider);
     const useProxy = !!proxyBase;
-    const isDaytona = this.config.provider === "daytona";
     const envVars: Record<string, string> = {};
-    const placeholder = this.config.proxyAuthToken || "sk-proxy-placeholder";
-
-    console.log(
-      `[sandbox] buildContainerEnvVars: provider=${this.config.provider} ` +
-      `proxyBaseUrl=${this.config.proxyBaseUrl} resolvedProxy=${proxyBase} ` +
-      `useProxy=${useProxy} hasAuthToken=${!!this.config.proxyAuthToken}`,
-    );
-
-    if (isDaytona && !useProxy) {
-      console.warn(
-        "[sandbox] Daytona provider without a reachable LLM proxy — " +
-        "real keys will NOT be sent. Agent LLM calls will fail until the proxy sandbox is available.",
-      );
-    }
 
     const isDaytona = this.config.provider === "daytona";
 
     if (this.config.anthropicApiKey) {
       if (useProxy) {
-        envVars["ANTHROPIC_API_KEY"] = placeholder;
+        envVars["ANTHROPIC_API_KEY"] = "sk-proxy-placeholder";
         envVars["ANTHROPIC_BASE_URL"] = `${proxyBase}/llm-proxy/anthropic/v1`;
       } else if (isDaytona) {
-        envVars["ANTHROPIC_API_KEY"] = placeholder;
+        envVars["ANTHROPIC_API_KEY"] = "sk-proxy-placeholder";
       } else {
         envVars["ANTHROPIC_API_KEY"] = this.config.anthropicApiKey;
       }
     }
     if (this.config.openaiApiKey) {
       if (useProxy) {
-        envVars["OPENAI_API_KEY"] = placeholder;
+        envVars["OPENAI_API_KEY"] = "sk-proxy-placeholder";
         envVars["OPENAI_BASE_URL"] = `${proxyBase}/llm-proxy/openai/v1`;
       } else if (isDaytona) {
-        envVars["OPENAI_API_KEY"] = placeholder;
+        envVars["OPENAI_API_KEY"] = "sk-proxy-placeholder";
       } else {
         envVars["OPENAI_API_KEY"] = this.config.openaiApiKey;
       }
@@ -1928,12 +1917,13 @@ export class SandboxManager extends EventEmitter {
           description: "Full development agent with all tools enabled",
           mode: "primary",
           prompt: `{file:${homeDir}/AGENTS.md}`,
+          tools: { question: false },
           permission: { "*": { "*": "allow" } },
         },
         plan: {
           description: "Analysis and planning without making changes",
           mode: "primary",
-          tools: { write: false, edit: false, bash: false },
+          tools: { write: false, edit: false, bash: false, question: false },
           permission: { "*": { "*": "allow" } },
         },
         sisyphus: {
@@ -1941,10 +1931,12 @@ export class SandboxManager extends EventEmitter {
           mode: "primary",
           model: "anthropic/claude-sonnet-4-20250514",
           prompt: SandboxManager.SISYPHUS_PROMPT,
+          tools: { question: false },
           steps: 50,
           permission: { "*": { "*": "allow" } },
         },
       },
+      tools: { question: false },
       experimental: { mcp_timeout: 300000 },
       mcp: {
         "terminal-server": {
@@ -2076,15 +2068,9 @@ export class SandboxManager extends EventEmitter {
       }
     }
 
-    // Upgrade OpenCode before starting bridge (v1.1.35 has textVerbosity bug #9969)
-    try {
-      const upgradeResult = await sandbox.process.executeCommand(
-        `${this.config.provider === "local" ? "" : 'PATH="/home/daytona/.opencode/bin:$PATH" '}opencode upgrade 2>&1 || true`,
-      );
-      console.log(`[bridge:${sid}] opencode upgrade: ${(upgradeResult.result ?? "").trim().slice(0, 200)}`);
-    } catch (e) {
-      console.log(`[bridge:${sid}] opencode upgrade skipped: ${e}`);
-    }
+    // Skip opencode upgrade — recent versions introduce a built-in `question`
+    // tool that hangs in serve mode (opencode#16664). The snapshot version works.
+    console.log(`[bridge:${sid}] opencode upgrade skipped (question tool bug in newer versions)`);
 
     await sandbox.process.executeSessionCommand(bridgeSessionId, {
       command: `cd ${bridgeDir} && ${envParts.join(" ")} node bridge.cjs > ${bridgeDir}/bridge.log 2>&1`,
@@ -2199,12 +2185,13 @@ export class SandboxManager extends EventEmitter {
           description: "Full development agent with all tools enabled",
           mode: "primary",
           prompt: `{file:${homeDir}/AGENTS.md}`,
+          tools: { question: false },
           permission: { "*": { "*": "allow" } },
         },
         plan: {
           description: "Analysis and planning without making changes",
           mode: "primary",
-          tools: { write: false, edit: false, bash: false },
+          tools: { write: false, edit: false, bash: false, question: false },
           permission: { "*": { "*": "allow" } },
         },
         sisyphus: {
@@ -2212,10 +2199,12 @@ export class SandboxManager extends EventEmitter {
           mode: "primary",
           model: "anthropic/claude-sonnet-4-20250514",
           prompt: SandboxManager.SISYPHUS_PROMPT,
+          tools: { question: false },
           steps: 50,
           permission: { "*": { "*": "allow" } },
         },
       },
+      tools: { question: false },
       experimental: { mcp_timeout: 300000 },
       mcp: {
         "terminal-server": {
@@ -2401,13 +2390,9 @@ export class SandboxManager extends EventEmitter {
       }
     }
 
-    // Upgrade OpenCode before starting bridge (v1.1.35 has textVerbosity bug #9969)
-    try {
-      const ocUpgrade = await sandbox.process.executeCommand(
-        `${isLocalProvider ? "" : 'PATH="/home/daytona/.opencode/bin:$PATH" '}opencode upgrade 2>&1 || true`,
-      );
-      log("opencode upgrade: " + (ocUpgrade.result ?? "").trim().slice(0, 200));
-    } catch { log("opencode upgrade skipped"); }
+    // Skip opencode upgrade — recent versions introduce a built-in `question`
+    // tool that hangs in serve mode (opencode#16664). The snapshot version works.
+    log("opencode upgrade skipped (question tool bug in newer versions)");
 
     await sandbox.process.executeSessionCommand(bridgeSessionId, {
       command: `cd ${bridgeDir} && ${envParts.join(" ")} node bridge.cjs > ${bridgeDir}/bridge.log 2>&1`,

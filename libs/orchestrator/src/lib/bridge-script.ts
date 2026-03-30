@@ -42,6 +42,7 @@ let lastOcExitCode = null;
 let lastOcStderr = "";
 const terminals = new Map();
 const pendingAskUser = new Map();
+let lastSeenAskTool = "";
 const sessionEmittedParts = new Map();
 const suppressedAborts = new Set();
 
@@ -166,6 +167,7 @@ function startOpenCodeServe() {
         if (ok) {
           log("\\u{2705}", "opencode serve already healthy on port " + OC_PORT + ", reconnecting SSE only");
           connectSSE();
+          startControlListener();
         } else if (!ocServeProc) {
           startOpenCodeServe();
         }
@@ -229,10 +231,66 @@ function pollHealth(attempt) {
         if (res && res.healthy) {
           log("\\u{2705}", "opencode serve healthy v=" + (res.version || "?"));
           connectSSE();
+          startControlListener();
         } else { pollHealth(attempt + 1); }
       })
       .catch(() => pollHealth(attempt + 1));
   }, attempt === 0 ? 500 : 1000);
+}
+
+// ── TUI Control listener (handles built-in question tool) ────
+let controlListenerActive = false;
+function startControlListener() {
+  if (controlListenerActive) return;
+  controlListenerActive = true;
+  log("\\u{2753}", "Starting TUI control listener");
+  function pollControl() {
+    if (!controlListenerActive) return;
+    ocFetch("GET", "/tui/control/next", null, 600000)
+      .then(function(ctrl) {
+        if (!ctrl) { setTimeout(pollControl, 500); return; }
+        log("\\u{2753}", "Control request: " + JSON.stringify(ctrl).slice(0, 500));
+        var activeThreadId = activeThreads.size > 0 ? Array.from(activeThreads).pop() : (threadToSession.size > 0 ? Array.from(threadToSession.keys()).pop() : "default");
+        var questionId = "ask-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+        var input = ctrl.input || ctrl.body || ctrl;
+        if (typeof input === "string") { try { input = JSON.parse(input); } catch {} }
+        if (!input.questions && input.question) { input = { questions: [input] }; }
+        if (!input.questions && typeof input === "string") { input = { questions: [{ question: input }] }; }
+        emitAgentMessage(activeThreadId, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: questionId, name: "AskUserQuestion", input: input }], stop_reason: "tool_use" } });
+        if (state.ws && state.ws.readyState === 1) {
+          state.ws.send(JSON.stringify({ type: "ask_user_pending", threadId: activeThreadId, questionId: questionId }));
+        }
+        var ASK_TIMEOUT_MS = 300000;
+        var entry = { timer: null };
+        entry.timer = setTimeout(function() {
+          pendingAskUser.delete(questionId);
+          if (state.ws && state.ws.readyState === 1) {
+            state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: activeThreadId, questionId: questionId }));
+          }
+          ocFetch("POST", "/tui/control/response", { body: "" }, 10000).catch(function() {});
+          setTimeout(pollControl, 100);
+        }, ASK_TIMEOUT_MS);
+        pendingAskUser.set(questionId, { threadId: activeThreadId, resolve: function(answer) {
+          clearTimeout(entry.timer); pendingAskUser.delete(questionId);
+          if (state.ws && state.ws.readyState === 1) {
+            state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: activeThreadId, questionId: questionId }));
+          }
+          ocFetch("POST", "/tui/control/response", { body: answer }, 10000)
+            .then(function() { log("\\u{2753}", "Control response sent for " + questionId); })
+            .catch(function(e) { log("\\u{274C}", "Control response failed: " + e.message); });
+          setTimeout(pollControl, 100);
+        } });
+      })
+      .catch(function(e) {
+        if (e && e.message && (e.message.includes("timeout") || e.message.includes("ECONNREFUSED"))) {
+          setTimeout(pollControl, 2000);
+        } else {
+          log("\\u{26A0}", "Control poll error: " + (e.message || String(e)));
+          setTimeout(pollControl, 3000);
+        }
+      });
+  }
+  pollControl();
 }
 
 let sseReconnectTimer = null;
@@ -429,6 +487,7 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images) {
     parts: parts,
     agent: ocAgent,
     model: modelObj,
+    tools: { question: false },
   }, 60000);
   pollSession(threadId, ocSessionId, ocAgent, ocModel);
 }
@@ -443,6 +502,7 @@ function pollSession(threadId, sessionId, agentName, modelName) {
   let seenBusy = false;
   let seenBusyFromStatus = false;
   let idleCount = 0;
+  const runningToolPids = new Set();
   const pollStartedAt = Date.now();
   const MIN_POLL_BEFORE_IDLE_EXIT_MS = 5000;
   let lastProgressAt = Date.now();
@@ -517,7 +577,45 @@ function pollSession(threadId, sessionId, agentName, modelName) {
               const tn = part.tool || "unknown";
               const nn = TOOL_NAME_MAP[tn] || tn;
               const toolId = part.callID || part.id;
+              if (tn.includes("ask") || tn.includes("question") || tn.includes("Ask") || tn.includes("Question") || nn.includes("Ask") || nn.includes("Question")) {
+                lastSeenAskTool = "tn=" + tn + " nn=" + nn + " status=" + s.status + " toolId=" + toolId;
+                log("\\u{2753}", "TOOL EVENT: " + lastSeenAskTool);
+              }
+              if (tn === "question" && s.status === "running" && !pendingAskUser.has("q-" + toolId)) {
+                var qInput = s.input || {};
+                var questionId = "q-" + toolId;
+                log("\\u{2753}", "Intercepting built-in question tool: " + toolId + " session=" + sessionId);
+                emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: questionId, name: "AskUserQuestion", input: qInput }], stop_reason: "tool_use" } });
+                if (state.ws && state.ws.readyState === 1) {
+                  state.ws.send(JSON.stringify({ type: "ask_user_pending", threadId: threadId, questionId: questionId }));
+                }
+                var qTimeout = setTimeout(function() {
+                  pendingAskUser.delete(questionId);
+                  if (state.ws && state.ws.readyState === 1) {
+                    state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: threadId, questionId: questionId }));
+                  }
+                }, 300000);
+                pendingAskUser.set(questionId, { threadId: threadId, resolve: function(answer) {
+                  clearTimeout(qTimeout); pendingAskUser.delete(questionId);
+                  if (state.ws && state.ws.readyState === 1) {
+                    state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: threadId, questionId: questionId }));
+                  }
+                  log("\\u{2753}", "Aborting session to unblock question tool, then re-prompting with answer");
+                  ocFetch("POST", "/session/" + sessionId + "/abort", {}, 10000)
+                    .then(function() {
+                      return new Promise(function(r) { setTimeout(r, 1000); });
+                    })
+                    .then(function() {
+                      return ocFetch("POST", "/session/" + sessionId + "/prompt_async", {
+                        parts: [{ type: "text", text: "The user answered your question: " + answer + "\\n\\nPlease continue based on their answer. Do NOT ask the same question again." }]
+                      }, 10000);
+                    })
+                    .then(function() { log("\\u{2753}", "Re-prompted with user answer successfully"); })
+                    .catch(function(e) { log("\\u{274C}", "Question answer flow failed: " + e.message); emitAgentError(threadId, "Failed to deliver answer: " + e.message); });
+                } });
+              }
               if (s.status === "completed") {
+                runningToolPids.delete(pid);
                 flushPendingText();
                 emittedParts.add(pid);
                 taskChildren.delete(pid);
@@ -527,6 +625,7 @@ function pollSession(threadId, sessionId, agentName, modelName) {
                   { type: "tool_result", tool_use_id: toolId, content: typeof s.output === "string" ? s.output : JSON.stringify(s.output || "") },
                 ], stop_reason: "tool_use" } });
               } else if (s.status === "running") {
+                runningToolPids.add(pid);
                 flushPendingText();
                 if (!emittedParts.has(pid + ":running")) {
                   emittedParts.add(pid + ":running");
@@ -602,7 +701,7 @@ function pollSession(threadId, sessionId, agentName, modelName) {
           var pollAge = Date.now() - pollStartedAt;
           var hasPendingAsk = false;
           for (var [, pEntry] of pendingAskUser) { if (pEntry.threadId === threadId) { hasPendingAsk = true; break; } }
-          if (hasPendingAsk) { idleCount = 0; setTimeout(poll, 1500); return; }
+          if (hasPendingAsk || runningToolPids.size > 0) { idleCount = 0; setTimeout(poll, 1500); return; }
           if ((seenBusyFromStatus || idleCount >= 5) && pollAge > MIN_POLL_BEFORE_IDLE_EXIT_MS) {
             flushPendingText();
             log("\\u{1F916}", "Session " + sessionId + " idle (seenBusy=" + seenBusy + " idleCount=" + idleCount + " age=" + Math.round(pollAge/1000) + "s + parts=" + emittedParts.size + ")");
@@ -676,14 +775,18 @@ async function handleStartAgent(msg) {
 }
 
 function handleUserAnswer(msg) {
+  log("\\u{2753}", "handleUserAnswer: toolUseId=" + msg.toolUseId + " threadId=" + msg.threadId + " pendingSize=" + pendingAskUser.size + " keys=[" + Array.from(pendingAskUser.keys()).join(",") + "]");
   let pending = pendingAskUser.get(msg.toolUseId);
   if (!pending && msg.threadId) {
     for (const [, entry] of pendingAskUser) {
       if (entry.threadId === msg.threadId) { pending = entry; break; }
     }
   }
+  if (!pending && pendingAskUser.size === 1) {
+    pending = pendingAskUser.values().next().value;
+  }
   if (pending) { pending.resolve(msg.answer); return; }
-  emitAgentError(msg.threadId, "No pending ask_user to receive answer");
+  emitAgentError(msg.threadId, "No pending ask_user to receive answer (pendingSize=" + pendingAskUser.size + " toolUseId=" + (msg.toolUseId || "none") + " activeThreads=" + activeThreads.size + " lastAskTool=[" + lastSeenAskTool + "])");
 }
 
 async function handleStopAgent(msg) {
@@ -1067,6 +1170,7 @@ const server = http.createServer((req, res) => {
     }); return;
   }
   if (req.method === "POST" && req.url === "/internal/ask-user") {
+    log("\\u{2753}", "/internal/ask-user called, activeThreads=" + activeThreads.size + " threadToSession=" + threadToSession.size);
     let body = ""; req.on("data", (c) => body += c); req.on("end", () => {
       try {
         const payload = JSON.parse(body);

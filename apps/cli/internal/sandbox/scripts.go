@@ -377,6 +377,7 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId) {
 
 function pollSession(threadId, sessionId) {
   const emittedParts = new Set();
+  const runningToolPids = new Set();
   let lastCost = 0;
   const poll = () => {
     if (!activeThreads.has(threadId)) return;
@@ -400,12 +401,14 @@ function pollSession(threadId, sessionId) {
               const nn = TOOL_NAME_MAP[tn] || tn;
               const toolId = part.callID || part.id;
               if (s.status === "completed") {
+                runningToolPids.delete(pid);
                 emittedParts.add(pid);
                 emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
                   { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
                   { type: "tool_result", tool_use_id: toolId, content: typeof s.output === "string" ? s.output : JSON.stringify(s.output || "") },
                 ], stop_reason: "tool_use" } });
               } else if (s.status === "running" && !emittedParts.has(pid + ":running")) {
+                runningToolPids.add(pid);
                 emittedParts.add(pid + ":running");
                 emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
                   { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
@@ -429,7 +432,7 @@ function pollSession(threadId, sessionId) {
         if (!st || st.type === "idle") {
           var hasPendingAsk = false;
           for (var [, pEntry] of pendingAskUser) { if (pEntry.threadId === threadId) { hasPendingAsk = true; break; } }
-          if (hasPendingAsk) { setTimeout(poll, 1500); return; }
+          if (hasPendingAsk || runningToolPids.size > 0) { setTimeout(poll, 1500); return; }
           log("\u{1F916}", "Session " + sessionId + " idle, emitting exit");
           activeThreads.delete(threadId);
           emitAgentExit(threadId, 0);
@@ -829,6 +832,9 @@ wss.on("connection", (ws) => {
           for (const [, entry] of pendingAskUser) {
             if (entry.threadId === msg.threadId) { pending = entry; break; }
           }
+        }
+        if (!pending && pendingAskUser.size === 1) {
+          pending = pendingAskUser.values().next().value;
         }
         if (pending) { pending.resolve(msg.answer); }
         else { emitAgentError(msg.threadId, "No pending ask_user to receive answer"); }
