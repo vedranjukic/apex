@@ -17,6 +17,7 @@ export function FilePicker({ onSelect, onClose, requestListing, anchorRect }: Pr
   const [filter, setFilter] = useState('');
   const filterRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const [highlightIdx, setHighlightIdx] = useState(0);
 
   useEffect(() => {
@@ -47,6 +48,13 @@ export function FilePicker({ onSelect, onClose, requestListing, anchorRect }: Pr
   useEffect(() => {
     setHighlightIdx(0);
   }, [filter, currentDir]);
+
+  useEffect(() => {
+    const container = listRef.current;
+    if (!container) return;
+    const el = container.children[highlightIdx] as HTMLElement | undefined;
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [highlightIdx]);
 
   const navigateUp = useCallback(() => {
     if (currentDir === rootPath || currentDir === '/') return;
@@ -125,7 +133,7 @@ export function FilePicker({ onSelect, onClose, requestListing, anchorRect }: Pr
         />
       </div>
 
-      <div className="max-h-52 overflow-y-auto p-1">
+      <div ref={listRef} className="max-h-52 overflow-y-auto p-1">
         {filtered.length === 0 ? (
           <div className="px-3 py-4 text-xs text-text-muted text-center">
             {entries.length === 0 ? 'Loading…' : 'No matches'}
