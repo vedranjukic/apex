@@ -12,11 +12,12 @@ export function usePortsSocket(
   const resolvedRef = useRef(new Set<number>());
 
   useEffect(() => {
-    const ws = socketRef.current;
-    if (!ws || !projectId) return;
-
+    if (!projectId) return;
     bindProject(projectId);
     resolvedRef.current.clear();
+
+    const ws = socketRef.current;
+    if (!ws) return;
 
     const resolvePreviewUrl = (port: number) => {
       if (resolvedRef.current.has(port)) return;

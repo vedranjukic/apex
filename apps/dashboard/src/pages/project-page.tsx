@@ -23,6 +23,7 @@ import { useEditorStore, type CodeSelection } from '../stores/editor-store';
 import type { ImageAttachment } from '../components/agent/prompt-input';
 import { useAgentSettingsStore, type AgentTypeId } from '../stores/agent-settings-store';
 import { useTerminalStore } from '../stores/terminal-store';
+import { usePortsStore } from '../stores/ports-store';
 import { useGitStore } from '../stores/git-store';
 import { CodeViewer } from '../components/editor/code-viewer';
 import { DiffViewer } from '../components/editor/diff-viewer';
@@ -156,9 +157,9 @@ export function ProjectPage() {
       })
       .finally(() => setLoading(false));
 
-    // Reset terminal state when switching projects
     return () => {
       resetTerminals();
+      usePortsStore.getState().reset();
     };
   }, [projectId, resetTerminals]);
 

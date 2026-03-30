@@ -193,7 +193,7 @@ The OpenCode config (`opencode.json`) uses `{env:ANTHROPIC_BASE_URL}` / `{env:OP
 The proxy URL resolution in `sandbox-manager.ts` adapts to the sandbox provider:
 
 - **Local providers** (Docker, Apple Container): `localhost` in the proxy URL is replaced with the host machine's LAN IP (via `os.networkInterfaces()`), since containers can't reach the host via `localhost`. The API server must listen on `0.0.0.0`.
-- **Daytona** (cloud): The proxy only works when `API_BASE_URL` is set to a publicly reachable URL. If the API is running locally (no public URL), falls back to sending real keys directly into the container (same as pre-proxy behavior).
+- **Daytona** (cloud): The proxy only works when `API_BASE_URL` is set to a publicly reachable URL. Real API keys are **never** sent into Daytona cloud sandboxes — containers always receive `sk-proxy-placeholder`. If the API is running locally (no public URL), the proxy is unreachable and the agent won't be able to call LLM APIs; a warning is logged at sandbox creation.
 
 ### Key Files
 
