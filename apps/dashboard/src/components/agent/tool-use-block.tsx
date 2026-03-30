@@ -162,11 +162,11 @@ function BashItemBlock({
   return (
     <div className="bg-surface-secondary">
       {description && (
-        <p className="px-3 py-2 text-xs text-text-muted italic">{description}</p>
+        <p className="px-2.5 py-1 text-xs text-text-muted italic">{description}</p>
       )}
       {description && <div className="border-t border-border" />}
 
-      <pre className="px-3 py-2 text-text-primary text-xs font-mono overflow-x-auto leading-relaxed">
+      <pre className="px-2.5 py-1.5 text-text-primary text-xs font-mono overflow-x-auto scrollbar-thin leading-snug">
         <code>{command}</code>
       </pre>
 
@@ -177,12 +177,12 @@ function BashItemBlock({
             <>
               {outputExpanded ? (
                 <div className="overflow-hidden transition-[max-height] duration-200">
-                  <pre ref={outputEndRef} className="px-3 py-2 text-text-muted text-xs font-mono overflow-x-auto leading-relaxed overflow-y-auto bg-surface max-h-[12.5rem]">
+                  <pre ref={outputEndRef} className="px-2.5 py-1.5 text-text-muted text-xs font-mono overflow-x-auto scrollbar-thin leading-snug overflow-y-auto bg-surface max-h-[12.5rem]">
                     <code>{output}</code>
                   </pre>
                 </div>
               ) : (
-                <pre className="px-3 py-2 text-text-muted text-xs font-mono overflow-x-auto leading-relaxed bg-surface">
+                <pre className="px-2.5 py-1.5 text-text-muted text-xs font-mono overflow-x-auto scrollbar-thin leading-snug bg-surface">
                   <code>{last3Lines}</code>
                 </pre>
               )}
@@ -194,13 +194,13 @@ function BashItemBlock({
               <button
                 type="button"
                 onClick={() => setOutputExpanded(!outputExpanded)}
-                className="w-full flex items-center justify-center px-3 py-1.5 bg-surface text-text-secondary text-xs hover:text-text-primary transition-colors border-t border-border"
+                className="w-full flex items-center justify-center px-2.5 py-1 bg-surface text-text-secondary text-xs hover:text-text-primary transition-colors border-t border-border"
               >
                 {outputExpanded ? '△' : '▽'}
               </button>
             </>
           ) : (
-            <div className="px-3 py-2 bg-surface flex items-center gap-2">
+            <div className="px-2.5 py-1.5 bg-surface flex items-center gap-1.5">
               <Loader2 className="w-3 h-3 text-blue-400 animate-spin" />
               <span className="text-xs text-text-muted">Running...</span>
             </div>
@@ -217,15 +217,15 @@ export function BashGroupBlock({ items }: { items: BashItem[] }) {
   const anyRunning = items.some((item) => !item.toolResult || item.toolResult._streaming);
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border">
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs">
-        <TerminalSquare className="w-3.5 h-3.5" />
-        <span className="font-medium">Bash</span>
+    <div className="rounded-md overflow-hidden border border-border">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs">
+        <TerminalSquare className="w-3 h-3 shrink-0" />
+        <span className="font-bold text-text-primary">Bash</span>
         {items.length > 1 && (
           <span className="text-text-muted">{items.length} commands</span>
         )}
         {anyRunning && (
-          <span className="ml-auto flex items-center gap-1.5 text-blue-400">
+          <span className="ml-auto flex items-center gap-1 text-blue-400">
             <Loader2 className="w-3 h-3 animate-spin" />
             <span className="text-[10px]">running</span>
           </span>
@@ -259,20 +259,17 @@ function BashBlock({ input }: { input: Input }) {
   const description = input.description ? String(input.description) : null;
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border">
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs">
-        <TerminalSquare className="w-3.5 h-3.5" />
-        <span className="font-medium">Bash</span>
+    <div className="rounded-md overflow-hidden border border-border">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs">
+        <TerminalSquare className="w-3 h-3 shrink-0" />
+        <span className="font-bold text-text-primary">Bash</span>
       </div>
       <div className="bg-surface-secondary">
-        {/* Description on top */}
         {description && (
-          <p className="px-3 py-2 text-xs text-text-muted italic">{description}</p>
+          <p className="px-2.5 py-1 text-xs text-text-muted italic">{description}</p>
         )}
         {description && <div className="border-t border-border" />}
-
-        {/* Command */}
-        <pre className="px-3 py-2.5 text-text-primary text-xs font-mono overflow-x-auto leading-relaxed">
+        <pre className="px-2.5 py-1.5 text-text-primary text-xs font-mono overflow-x-auto scrollbar-thin leading-snug">
           <code>{command}</code>
         </pre>
       </div>
@@ -314,16 +311,16 @@ function TaskBlock({ input, result }: { input: Input; result?: string }) {
   const hasActivity = childActivity.length > 0;
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border">
+    <div className="rounded-md overflow-hidden border border-border">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 w-full px-3 py-2 bg-surface-secondary text-text-secondary text-xs hover:bg-surface-hover transition-colors"
+        className="flex items-center gap-1.5 w-full px-2.5 py-1 text-xs hover:bg-surface-secondary/50 transition-colors"
       >
         {hasResult
-          ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
-          : <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin shrink-0" />}
-        <span className="font-medium truncate">{description || 'Subagent task'}</span>
-        <span className="text-text-muted ml-1">({agentType})</span>
+          ? <CheckCircle2 className="w-3 h-3 text-green-500 shrink-0" />
+          : <Loader2 className="w-3 h-3 text-blue-400 animate-spin shrink-0" />}
+        <span className="font-bold text-text-primary truncate">{description || 'Subagent task'}</span>
+        <span className="text-text-muted">({agentType})</span>
         {hasResult
           ? <CheckCircle2 className="w-3 h-3 text-green-500 ml-auto shrink-0" />
           : hasActivity
@@ -390,20 +387,20 @@ function WriteBlock({ input, resultContent }: { input: Input; resultContent?: st
   const ext = extname(filePath);
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border">
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs">
-        <FileText className="w-3.5 h-3.5 text-blue-400" />
-        <span className="font-medium font-mono">{basename(filePath)}</span>
+    <div className="rounded-md overflow-hidden border border-border">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs">
+        <FileText className="w-3 h-3 text-blue-400 shrink-0" />
+        <span className="font-bold text-text-primary font-mono">{basename(filePath)}</span>
         {ext && <span className="text-text-muted">{ext}</span>}
         <span className="text-text-muted ml-auto">{lines.length} lines</span>
       </div>
-      <pre className="px-3 py-2 bg-surface-secondary text-text-primary text-xs font-mono overflow-x-auto leading-relaxed">
+      <pre className="px-2.5 py-1.5 bg-surface-secondary text-text-primary text-xs font-mono overflow-x-auto scrollbar-thin leading-snug">
         <code>{displayLines.join('\n')}</code>
       </pre>
       {isLong && (
         <button
           onClick={() => setExpanded(!expanded)}
-          className="w-full px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs flex items-center justify-center gap-1 hover:text-text-primary transition-colors"
+          className="w-full px-2.5 py-1 bg-surface-secondary text-text-secondary text-xs flex items-center justify-center gap-1 hover:text-text-primary transition-colors"
         >
           {expanded ? (
             <>
@@ -449,15 +446,15 @@ function PatchWriteBlock({ patchText, resultContent }: { patchText: string; resu
   const displayLines = isLong && !expanded ? patchLines.slice(0, 15) : patchLines;
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border">
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs">
-        <FilePen className="w-3.5 h-3.5 text-blue-400" />
-        <span className="font-medium">Write</span>
+    <div className="rounded-md overflow-hidden border border-border">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs">
+        <FilePen className="w-3 h-3 text-blue-400 shrink-0" />
+        <span className="font-bold text-text-primary">Write</span>
         <span className="text-text-muted ml-auto">{files.length} file{files.length !== 1 ? 's' : ''}</span>
       </div>
-      <div className="px-3 py-2 space-y-0.5 text-xs font-mono border-t border-border">
+      <div className="px-2.5 py-1 space-y-0.5 text-xs font-mono border-t border-border">
         {files.map((f, i) => (
-          <div key={i} className="flex items-center gap-2">
+          <div key={i} className="flex items-center gap-1.5">
             <span className={`font-semibold ${f.op === 'A' ? 'text-green-400' : f.op === 'D' ? 'text-red-400' : 'text-yellow-400'}`}>
               {f.op}
             </span>
@@ -466,13 +463,13 @@ function PatchWriteBlock({ patchText, resultContent }: { patchText: string; resu
         ))}
       </div>
       {expanded && (
-        <pre className="px-3 py-2 bg-surface-secondary text-text-primary text-xs font-mono overflow-x-auto leading-relaxed border-t border-border max-h-60 overflow-y-auto">
+        <pre className="px-2.5 py-1.5 bg-surface-secondary text-text-primary text-xs font-mono overflow-x-auto scrollbar-thin leading-snug border-t border-border max-h-60 overflow-y-auto">
           <code>{displayLines.join('\n')}</code>
         </pre>
       )}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs flex items-center justify-center gap-1 hover:text-text-primary transition-colors border-t border-border"
+        className="w-full px-2.5 py-1 bg-surface-secondary text-text-secondary text-xs flex items-center justify-center gap-1 hover:text-text-primary transition-colors border-t border-border"
       >
         {expanded ? (
           <>
@@ -505,9 +502,9 @@ function ReadBlock({ input }: { input: Input }) {
   }
 
   return (
-    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-surface text-xs text-text-secondary">
-      <FileSearch className="w-3.5 h-3.5 text-emerald-500" />
-      <span className="font-mono">{basename(filePath)}</span>
+    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border bg-surface text-xs">
+      <FileSearch className="w-3 h-3 text-emerald-500 shrink-0" />
+      <span className="font-bold text-text-primary font-mono">{basename(filePath)}</span>
       {rangeLabel && <span className="text-text-muted">{rangeLabel}</span>}
     </div>
   );
@@ -539,7 +536,7 @@ function DiffCodeBlock({
   const text = variant === 'removed' ? 'text-red-300' : 'text-green-300';
 
   return (
-    <div className={`${bg} overflow-x-auto`}>
+    <div className={`${bg} overflow-x-auto scrollbar-thin`}>
       {lines.map((line, i) => {
         const lineNum = startLine + i;
         return (
@@ -550,12 +547,12 @@ function DiffCodeBlock({
             <button
               type="button"
               onClick={() => handleLineClick(lineNum)}
-              className="shrink-0 w-10 py-1 pr-2 text-right text-[10px] font-mono text-text-muted hover:text-text-secondary cursor-pointer select-none border-r border-border/50 hover:bg-white/5"
+              className="shrink-0 w-8 py-px pr-1.5 text-right text-[10px] font-mono text-text-muted hover:text-text-secondary cursor-pointer select-none border-r border-border/50 hover:bg-white/5"
               title={`Open ${fileName} at line ${lineNum}`}
             >
               {lineNum}
             </button>
-            <pre className={`flex-1 px-3 py-1 ${text} text-xs font-mono leading-relaxed whitespace-pre`}>
+            <pre className={`flex-1 px-2.5 py-px ${text} text-xs font-mono leading-snug whitespace-pre`}>
               <code>{line || ' '}</code>
             </pre>
           </div>
@@ -572,15 +569,15 @@ function EditBlock({ input }: { input: Input }) {
   const startLine = Number(input.start_line ?? input.startLine ?? 1);
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border">
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs">
-        <FilePen className="w-3.5 h-3.5 text-amber-500" />
-        <span className="font-medium font-mono">{basename(filePath)}</span>
+    <div className="rounded-md overflow-hidden border border-border">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs">
+        <FilePen className="w-3 h-3 text-amber-500 shrink-0" />
+        <span className="font-bold text-text-primary font-mono">{basename(filePath)}</span>
       </div>
       <div className="divide-y divide-border">
         {oldStr && (
           <div>
-            <div className="flex items-center gap-1.5 px-3 py-1 bg-red-950/30 text-red-400 text-[10px] font-medium">
+            <div className="flex items-center gap-1 px-2.5 py-0.5 bg-red-950/30 text-red-400 text-[10px] font-medium">
               <Minus className="w-3 h-3" />
               Removed
             </div>
@@ -589,7 +586,7 @@ function EditBlock({ input }: { input: Input }) {
         )}
         {newStr && (
           <div>
-            <div className="flex items-center gap-1.5 px-3 py-1 bg-green-950/30 text-green-400 text-[10px] font-medium">
+            <div className="flex items-center gap-1 px-2.5 py-0.5 bg-green-950/30 text-green-400 text-[10px] font-medium">
               <Plus className="w-3 h-3" />
               Added
             </div>
@@ -617,10 +614,10 @@ function MultiEditBlock({ input }: { input: Input }) {
   }
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border">
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs">
-        <FilePen className="w-3.5 h-3.5 text-amber-500" />
-        <span className="font-medium font-mono">{basename(filePath)}</span>
+    <div className="rounded-md overflow-hidden border border-border">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs">
+        <FilePen className="w-3 h-3 text-amber-500 shrink-0" />
+        <span className="font-bold text-text-primary font-mono">{basename(filePath)}</span>
         <span className="text-text-muted ml-auto">{edits.length} edits</span>
       </div>
       <div className="divide-y divide-border">
@@ -661,18 +658,18 @@ function TodoWriteBlock({ input }: { input: Input }) {
   }
 
   return (
-    <div className="rounded-lg border border-border overflow-hidden">
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs">
-        <ListTodo className="w-3.5 h-3.5 text-violet-500" />
-        <span className="font-medium">Tasks</span>
+    <div className="rounded-md border border-border overflow-hidden">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs">
+        <ListTodo className="w-3 h-3 text-violet-500 shrink-0" />
+        <span className="font-bold text-text-primary">Tasks</span>
         <span className="text-text-muted ml-auto">
-          {completedCount}/{todos.length} done
+          {completedCount}/{todos.length}
         </span>
       </div>
       <ul className="divide-y divide-border">
         {todos.map((todo, i) => (
-          <li key={todo.id ?? i} className="flex items-start gap-2.5 px-3 py-2 text-sm">
-            <span className="mt-0.5 shrink-0">{todoStatusIcon(todo.status)}</span>
+          <li key={todo.id ?? i} className="flex items-start gap-1.5 px-2.5 py-1 text-xs">
+            <span className="mt-px shrink-0">{todoStatusIcon(todo.status)}</span>
             <span className={todo.status === 'completed' ? 'line-through text-text-muted' : 'text-text-primary'}>
               {todo.content ?? '(untitled)'}
             </span>
@@ -686,13 +683,13 @@ function TodoWriteBlock({ input }: { input: Input }) {
 function todoStatusIcon(status?: string) {
   switch (status) {
     case 'completed':
-      return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+      return <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />;
     case 'in_progress':
-      return <Loader2 className="w-4 h-4 text-yellow-500 animate-spin" />;
+      return <Loader2 className="w-3.5 h-3.5 text-yellow-500 animate-spin" />;
     case 'cancelled':
-      return <Circle className="w-4 h-4 text-text-muted line-through" />;
+      return <Circle className="w-3.5 h-3.5 text-text-muted line-through" />;
     default:
-      return <Circle className="w-4 h-4 text-text-muted" />;
+      return <Circle className="w-3.5 h-3.5 text-text-muted" />;
   }
 }
 
@@ -1069,15 +1066,15 @@ function GenericToolBlock({
 
   return (
     <div className={cn(
-      "border border-border rounded-lg overflow-hidden bg-surface text-sm transition-opacity",
+      "border border-border rounded-md overflow-hidden bg-surface text-xs transition-opacity",
       !expanded && "opacity-50",
     )}>
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 w-full px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-surface-secondary transition-colors"
+        className="flex items-center gap-1.5 w-full px-2.5 py-1 text-xs hover:bg-surface-secondary/50 transition-colors"
       >
-        <Wrench className="w-3.5 h-3.5" />
-        <span>{name ?? 'Tool'}</span>
+        <Wrench className="w-3 h-3 shrink-0" />
+        <span className="font-bold text-text-primary">{name ?? 'Tool'}</span>
         <span className="ml-auto">
           {expanded ? (
             <ChevronDown className="w-3 h-3" />
@@ -1087,7 +1084,7 @@ function GenericToolBlock({
         </span>
       </button>
       {expanded && (
-        <pre className="px-3 py-2 text-xs text-text-muted overflow-x-auto border-t border-border">
+        <pre className="px-2.5 py-1.5 text-xs text-text-muted overflow-x-auto scrollbar-thin border-t border-border">
           {json}
         </pre>
       )}

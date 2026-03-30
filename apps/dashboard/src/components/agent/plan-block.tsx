@@ -33,53 +33,50 @@ export function PlanBlock({ filename, content, isComplete, wasBuilt, threadStatu
   }, [content, actionDisabled, isPlanAgent, sendSilentPrompt]);
 
   return (
-    <div className="rounded-lg overflow-hidden border border-border">
-      {/* Header */}
+    <div className="rounded-md overflow-hidden border border-border">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 w-full px-3 py-1.5 bg-surface-secondary text-text-secondary text-xs hover:bg-surface-secondary/80 transition-colors"
+        className="flex items-center gap-1.5 w-full px-2.5 py-1 text-text-secondary text-xs hover:bg-surface-secondary/50 transition-colors"
       >
-        <ScrollText className="w-3.5 h-3.5 text-primary" />
-        <span className="font-medium font-mono">{filename}</span>
+        <ScrollText className="w-3 h-3 text-primary shrink-0" />
+        <span className="font-bold text-text-primary truncate">{filename}</span>
         {!isComplete && (
-          <Loader2 className="w-3 h-3 animate-spin text-yellow-500 ml-1" />
+          <Loader2 className="w-3 h-3 animate-spin text-yellow-500 shrink-0" />
         )}
         {isComplete && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent font-medium ml-1">
+          <span className="text-[10px] px-1 py-px rounded bg-accent/15 text-accent font-medium shrink-0">
             READY
           </span>
         )}
-        <span className="ml-auto">
+        <span className="ml-auto shrink-0">
           {expanded
             ? <ChevronDown className="w-3 h-3" />
             : <ChevronRight className="w-3 h-3" />}
         </span>
       </button>
 
-      {/* Markdown content */}
       {expanded && (
-        <div className="px-4 py-3 bg-black/20 overflow-x-auto">
+        <div className="px-2.5 py-2 bg-black/20 overflow-x-auto border-t border-border">
           <article className="plan-markdown">
             <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
           </article>
         </div>
       )}
 
-      {/* Footer with collapse toggle + Build button */}
-      <div className="flex items-center justify-between px-3 py-1.5 bg-black/20 border-t border-border">
+      <div className="flex items-center justify-between px-2.5 py-1 bg-black/20 border-t border-border">
         <button
           onClick={() => setExpanded(!expanded)}
           className="text-xs text-text-secondary flex items-center gap-1 hover:text-text-primary transition-colors"
         >
           {expanded
             ? <><ChevronDown className="w-3 h-3" /> Collapse</>
-            : <><ChevronRight className="w-3 h-3" /> Expand plan</>}
+            : <><ChevronRight className="w-3 h-3" /> Expand</>}
         </button>
         <button
           onClick={handleAction}
           disabled={actionDisabled}
           className={[
-            'flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all',
+            'flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-medium transition-all',
             actionDisabled
               ? 'bg-surface text-text-muted border border-border cursor-not-allowed opacity-60'
               : 'bg-primary text-white hover:bg-primary-hover cursor-pointer',

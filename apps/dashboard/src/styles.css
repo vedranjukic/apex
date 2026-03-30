@@ -167,6 +167,25 @@ body {
   background: var(--t-scrollbar-thumb-hover);
 }
 
+/* ── Thin scrollbar (hidden until hover) ──────────── */
+.scrollbar-thin {
+  scrollbar-width: thin;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  height: 3px;
+  width: 3px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 2px;
+}
+.scrollbar-thin:hover::-webkit-scrollbar-thumb {
+  background: var(--t-scrollbar-thumb);
+}
+.scrollbar-thin:hover::-webkit-scrollbar-thumb:hover {
+  background: var(--t-scrollbar-thumb-hover);
+}
+
 /* ── Prompt editor placeholder ─────────────────────── */
 .prompt-editor:empty::before {
   content: attr(data-placeholder);
@@ -177,46 +196,46 @@ body {
 /* ── Plan markdown styling ─────────────────────────── */
 .plan-markdown {
   color: var(--color-text-primary);
-  line-height: 1.7;
-  font-size: 0.875rem;
+  line-height: 1.5;
+  font-size: 0.75rem;
 }
 .plan-markdown h1 {
-  font-size: 1.5rem;
+  font-size: 1rem;
   font-weight: 700;
   margin-top: 0;
-  margin-bottom: 1rem;
-  padding-bottom: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.35rem;
   border-bottom: 1px solid var(--color-border);
   color: var(--color-text-primary);
 }
 .plan-markdown h2 {
-  font-size: 1.2rem;
+  font-size: 0.875rem;
   font-weight: 600;
-  margin-top: 1.75rem;
-  margin-bottom: 0.75rem;
+  margin-top: 1rem;
+  margin-bottom: 0.35rem;
   color: var(--color-text-primary);
 }
 .plan-markdown h3 {
-  font-size: 1.05rem;
+  font-size: 0.8rem;
   font-weight: 600;
-  margin-top: 1.5rem;
-  margin-bottom: 0.5rem;
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
   color: var(--color-text-primary);
 }
 .plan-markdown h4 {
-  font-size: 0.95rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  margin-top: 1.25rem;
-  margin-bottom: 0.5rem;
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
   color: var(--color-text-secondary);
 }
 .plan-markdown p {
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.4rem;
 }
 .plan-markdown ul,
 .plan-markdown ol {
-  margin-bottom: 0.75rem;
-  padding-left: 1.5rem;
+  margin-bottom: 0.4rem;
+  padding-left: 1.25rem;
 }
 .plan-markdown ul {
   list-style-type: disc;
@@ -225,11 +244,11 @@ body {
   list-style-type: decimal;
 }
 .plan-markdown li {
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.15rem;
 }
 .plan-markdown li > ul,
 .plan-markdown li > ol {
-  margin-top: 0.25rem;
+  margin-top: 0.15rem;
   margin-bottom: 0;
 }
 .plan-markdown strong {
@@ -248,51 +267,80 @@ body {
 .plan-markdown a:hover {
   color: var(--color-primary-hover);
 }
+.plan-markdown li.task-list-item {
+  list-style: none;
+  margin-left: -1.25rem;
+}
+.plan-markdown input[type="checkbox"] {
+  appearance: none;
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 1.5px solid var(--color-text-muted);
+  border-radius: 3px;
+  vertical-align: -0.15rem;
+  margin-right: 0.35rem;
+  cursor: default;
+  position: relative;
+  background: transparent;
+}
+.plan-markdown input[type="checkbox"]:checked {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+.plan-markdown input[type="checkbox"]:checked::after {
+  content: '✓';
+  position: absolute;
+  top: -1px;
+  left: 1px;
+  font-size: 0.6rem;
+  color: white;
+  font-weight: 700;
+}
 .plan-markdown code {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 0.8rem;
+  font-size: 0.7rem;
   background: var(--color-surface-secondary);
-  padding: 0.15rem 0.4rem;
-  border-radius: 4px;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
   color: var(--color-accent);
 }
 .plan-markdown pre {
-  margin-bottom: 1rem;
-  border-radius: 8px;
+  margin-bottom: 0.5rem;
+  border-radius: 4px;
   background: var(--color-surface-secondary);
   border: 1px solid var(--color-border);
   overflow-x: auto;
 }
 .plan-markdown pre code {
   display: block;
-  padding: 1rem;
+  padding: 0.5rem;
   background: none;
   color: var(--color-text-primary);
-  font-size: 0.8rem;
-  line-height: 1.6;
+  font-size: 0.7rem;
+  line-height: 1.5;
 }
 .plan-markdown blockquote {
-  border-left: 3px solid var(--color-primary);
-  padding-left: 1rem;
-  margin-bottom: 0.75rem;
+  border-left: 2px solid var(--color-primary);
+  padding-left: 0.75rem;
+  margin-bottom: 0.4rem;
   color: var(--color-text-secondary);
   font-style: italic;
 }
 .plan-markdown hr {
   border: none;
   border-top: 1px solid var(--color-border);
-  margin: 1.5rem 0;
+  margin: 0.75rem 0;
 }
 .plan-markdown table {
   width: 100%;
   border-collapse: collapse;
-  margin-bottom: 1rem;
-  font-size: 0.8rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.7rem;
 }
 .plan-markdown th,
 .plan-markdown td {
   border: 1px solid var(--color-border);
-  padding: 0.5rem 0.75rem;
+  padding: 0.25rem 0.5rem;
   text-align: left;
 }
 .plan-markdown th {
@@ -368,132 +416,6 @@ body {
   content: attr(data-placeholder);
   color: var(--color-text-muted);
   pointer-events: none;
-}
-
-/* ── Plan markdown styling ─────────────────────────── */
-.plan-markdown {
-  color: var(--color-text-primary);
-  line-height: 1.7;
-  font-size: 0.875rem;
-}
-.plan-markdown h1 {
-  font-size: 1.5rem;
-  font-weight: 700;
-  margin-top: 0;
-  margin-bottom: 1rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--color-border);
-  color: var(--color-text-primary);
-}
-.plan-markdown h2 {
-  font-size: 1.2rem;
-  font-weight: 600;
-  margin-top: 1.75rem;
-  margin-bottom: 0.75rem;
-  color: var(--color-text-primary);
-}
-.plan-markdown h3 {
-  font-size: 1.05rem;
-  font-weight: 600;
-  margin-top: 1.5rem;
-  margin-bottom: 0.5rem;
-  color: var(--color-text-primary);
-}
-.plan-markdown h4 {
-  font-size: 0.95rem;
-  font-weight: 600;
-  margin-top: 1.25rem;
-  margin-bottom: 0.5rem;
-  color: var(--color-text-secondary);
-}
-.plan-markdown p {
-  margin-bottom: 0.75rem;
-}
-.plan-markdown ul,
-.plan-markdown ol {
-  margin-bottom: 0.75rem;
-  padding-left: 1.5rem;
-}
-.plan-markdown ul {
-  list-style-type: disc;
-}
-.plan-markdown ol {
-  list-style-type: decimal;
-}
-.plan-markdown li {
-  margin-bottom: 0.25rem;
-}
-.plan-markdown li > ul,
-.plan-markdown li > ol {
-  margin-top: 0.25rem;
-  margin-bottom: 0;
-}
-.plan-markdown strong {
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-.plan-markdown em {
-  font-style: italic;
-  color: var(--color-text-secondary);
-}
-.plan-markdown a {
-  color: var(--color-primary);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.plan-markdown a:hover {
-  color: var(--color-primary-hover);
-}
-.plan-markdown code {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 0.8rem;
-  background: var(--color-surface-secondary);
-  padding: 0.15rem 0.4rem;
-  border-radius: 4px;
-  color: var(--color-accent);
-}
-.plan-markdown pre {
-  margin-bottom: 1rem;
-  border-radius: 8px;
-  background: var(--color-surface-secondary);
-  border: 1px solid var(--color-border);
-  overflow-x: auto;
-}
-.plan-markdown pre code {
-  display: block;
-  padding: 1rem;
-  background: none;
-  color: var(--color-text-primary);
-  font-size: 0.8rem;
-  line-height: 1.6;
-}
-.plan-markdown blockquote {
-  border-left: 3px solid var(--color-primary);
-  padding-left: 1rem;
-  margin-bottom: 0.75rem;
-  color: var(--color-text-secondary);
-  font-style: italic;
-}
-.plan-markdown hr {
-  border: none;
-  border-top: 1px solid var(--color-border);
-  margin: 1.5rem 0;
-}
-.plan-markdown table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-bottom: 1rem;
-  font-size: 0.8rem;
-}
-.plan-markdown th,
-.plan-markdown td {
-  border: 1px solid var(--color-border);
-  padding: 0.5rem 0.75rem;
-  text-align: left;
-}
-.plan-markdown th {
-  background: var(--color-surface-secondary);
-  font-weight: 600;
 }
 
 /* Tighter spacing for inline markdown in chat messages */
