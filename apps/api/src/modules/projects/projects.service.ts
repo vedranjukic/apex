@@ -11,6 +11,8 @@ import { getSecretsProxyPort } from '../secrets-proxy/secrets-proxy';
 import { secretsService } from '../secrets/secrets.service';
 import { settingsService } from '../settings/settings.service';
 import { threadsService } from '../tasks/tasks.service';
+import { proxySandboxService } from '../llm-proxy/proxy-sandbox.service';
+import { DaytonaSandboxProvider } from '@apex/orchestrator';
 
 export type Project = typeof projects.$inferSelect & { threads?: (typeof tasks.$inferSelect)[] };
 
@@ -149,7 +151,31 @@ class ProjectsService {
     for (const status of this.providerStatuses) {
       if (!status.available) continue;
       try {
-        const mgr = new SandboxManager({ ...sharedConfig, provider: status.type });
+        const providerConfig: Record<string, unknown> = { ...sharedConfig, provider: status.type };
+
+        if (status.type === 'daytona') {
+          const anthropicKey = sharedConfig.anthropicApiKey || '';
+          const openaiKey = sharedConfig.openaiApiKey || '';
+          if (anthropicKey || openaiKey) {
+            try {
+              const daytonaProvider = new DaytonaSandboxProvider();
+              await daytonaProvider.initialize();
+              const proxyInfo = await proxySandboxService.ensureProxySandbox(
+                daytonaProvider, anthropicKey, openaiKey,
+              );
+              providerConfig.proxyBaseUrl = proxyInfo.proxyBaseUrl;
+              providerConfig.proxyAuthToken = proxyInfo.authToken;
+              console.log(`[projects] Daytona LLM proxy sandbox ready: ${proxyInfo.proxyBaseUrl}`);
+            } catch (proxyErr) {
+              console.warn(`[projects] Daytona LLM proxy sandbox failed (non-fatal):`, proxyErr);
+            }
+          }
+        }
+
+        if (status.type === 'daytona') {
+          console.log(`[projects] Daytona SandboxManager config: proxyBaseUrl=${providerConfig.proxyBaseUrl} hasAuthToken=${!!providerConfig.proxyAuthToken}`);
+        }
+        const mgr = new SandboxManager(providerConfig);
         await mgr.initialize();
         this.sandboxManagers.set(status.type, mgr);
         console.log(`[projects] SandboxManager initialized (provider=${status.type})`);
@@ -165,6 +191,35 @@ class ProjectsService {
   async reinitSandboxManager() {
     console.log('[projects] Re-initializing SandboxManagers...');
     await this.initSandboxManagers();
+  }
+
+  /**
+   * Verify the Daytona LLM proxy sandbox is healthy and hot-update the
+   * SandboxManager config if a new proxy sandbox was created.
+   * Called lazily before every Daytona sandbox operation.
+   */
+  async ensureDaytonaProxy(): Promise<void> {
+    const manager = this.sandboxManagers.get('daytona');
+    if (!manager) return;
+
+    const anthropicKey = process.env.ANTHROPIC_API_KEY || '';
+    const openaiKey = process.env.OPENAI_API_KEY || '';
+    if (!anthropicKey && !openaiKey) return;
+
+    try {
+      const oldCached = proxySandboxService.getCachedInfo();
+      const daytonaProvider = new DaytonaSandboxProvider();
+      await daytonaProvider.initialize();
+      const info = await proxySandboxService.ensureProxySandbox(
+        daytonaProvider, anthropicKey, openaiKey,
+      );
+      if (!oldCached || oldCached.proxyBaseUrl !== info.proxyBaseUrl) {
+        manager.updateProxyConfig(info.proxyBaseUrl, info.authToken);
+        console.log(`[projects] Daytona proxy config updated: ${info.proxyBaseUrl}`);
+      }
+    } catch (err) {
+      console.warn('[projects] ensureDaytonaProxy failed:', err);
+    }
   }
 
   /** Return provider types that are currently initialized. */
@@ -220,6 +275,8 @@ class ProjectsService {
     }
     const mgr = this.getManagerForProject(project);
     if (!mgr) return;
+
+    if (project.provider === 'daytona') await this.ensureDaytonaProxy();
 
     if (project.sandboxId) {
       try {
@@ -551,6 +608,7 @@ class ProjectsService {
       projectsWsBroadcast('project_updated', await this.findById(projectId));
       return;
     }
+    if (provider === 'daytona') await this.ensureDaytonaProxy();
     const manager = this.sandboxManagers.get(provider)!;
     const onStatusChange = async (status: string) => {
       await db.update(projects).set({ status }).where(eq(projects.id, projectId));
@@ -581,6 +639,7 @@ class ProjectsService {
       projectsWsBroadcast('project_updated', await this.findById(projectId));
       return;
     }
+    if (provider === 'daytona') await this.ensureDaytonaProxy();
     const manager = this.sandboxManagers.get(provider)!;
     try {
       const sandboxId = await manager.forkSandbox(sourceSandboxId, branchName, projectName);

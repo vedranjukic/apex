@@ -14,6 +14,11 @@ export const ALLOWED_KEYS = new Set([
   'GIT_USER_EMAIL',
   'PROXY_CA_CERT',
   'PROXY_CA_KEY',
+  'LLM_PROXY_SANDBOX_ID',
+  'LLM_PROXY_AUTH_TOKEN',
+  'LLM_PROXY_URL',
+  'LLM_PROXY_KEYS_HASH',
+  'PROXY_SANDBOX_SNAPSHOT',
 ]);
 
 export type SettingSource = 'settings' | 'env' | 'none';

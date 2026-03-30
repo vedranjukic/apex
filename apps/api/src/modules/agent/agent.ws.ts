@@ -1077,6 +1077,9 @@ async function reconcileAndReconnect(
     if (reconciled.status === 'stopped' || reconciled.status === 'error') {
       await projectsService.startOrProvisionSandbox(projectId);
     } else {
+      if (reconciled.provider === 'daytona') {
+        await projectsService.ensureDaytonaProxy();
+      }
       const manager = projectsService.getSandboxManager(reconciled.provider);
       if (manager) {
         const dirName = await resolveDirName(reconciled);

@@ -78,6 +78,14 @@ Wraps the `@daytonaio/sdk`. Creates sandboxes from **snapshots** (pre-built imag
 - `createSshAccess(expiresInMinutes)`: Returns SSH connection details.
 - `fork(name)`: Creates a copy-on-write fork of the sandbox.
 
+### LLM Proxy Sandbox
+
+Daytona cloud sandboxes cannot reach a locally-running API server, so a dedicated **proxy sandbox** runs the LLM API key proxy on Daytona itself. See the "LLM API Key Proxy" section in `workdocs/architecture-overview.md` for the full design.
+
+The proxy sandbox uses a minimal Docker image (`images/proxy/Dockerfile`) containing only Node.js, curl, and the Daytona daemon. The snapshot name defaults to the regular sandbox snapshot but can be overridden via the `PROXY_SANDBOX_SNAPSHOT` setting.
+
+Key settings persisted in the DB: `LLM_PROXY_SANDBOX_ID`, `LLM_PROXY_AUTH_TOKEN`, `LLM_PROXY_URL`, `LLM_PROXY_KEYS_HASH`.
+
 ### Requirements
 
 - `DAYTONA_API_KEY` environment variable
@@ -246,6 +254,9 @@ switch (type) {
 | `apps/api/src/database/schema.ts` | `provider` column on projects table |
 | `libs/shared/src/lib/enums.ts` | `SandboxProvider` enum |
 | `apps/dashboard/src/components/projects/create-project-dialog.tsx` | Provider selector UI |
+| `apps/api/src/modules/llm-proxy/proxy-sandbox.service.ts` | Daytona LLM proxy sandbox lifecycle management |
+| `libs/orchestrator/src/lib/llm-proxy-service-script.ts` | Proxy service script generator (uploaded into proxy sandbox) |
+| `images/proxy/Dockerfile` | Minimal Docker image for the proxy sandbox |
 
 ---
 
