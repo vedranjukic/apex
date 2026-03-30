@@ -185,6 +185,7 @@ type InternalSession = SandboxSession & {
 const FILTERED_PORTS = new Set([
   BRIDGE_PORT, 9090, 4096,
   22, 25, 53, 445, 2375, 2376, 3306, 3389, 5432, 6379, 27017,
+  2280, 22220, 22222, 33333,
 ]);
 
 /** TTL for cached Sandbox objects (avoid redundant daytona.get() calls) */
@@ -298,6 +299,8 @@ export class SandboxManager extends EventEmitter {
       );
     }
 
+    const isDaytona = this.config.provider === "daytona";
+
     if (this.config.anthropicApiKey) {
       if (useProxy) {
         envVars["ANTHROPIC_API_KEY"] = placeholder;
@@ -317,6 +320,13 @@ export class SandboxManager extends EventEmitter {
       } else {
         envVars["OPENAI_API_KEY"] = this.config.openaiApiKey;
       }
+    }
+
+    if (isDaytona && !useProxy) {
+      console.warn(
+        "[sandbox] Daytona provider without a public API_BASE_URL — LLM proxy unreachable. " +
+        "Set API_BASE_URL to a publicly reachable URL to enable the LLM proxy.",
+      );
     }
 
     const secretsProxyUrl = resolveSecretsProxyUrl(
@@ -954,7 +964,7 @@ export class SandboxManager extends EventEmitter {
       const pidProg = parts[6] ?? parts[5] ?? "";
       const slash = pidProg.indexOf("/");
       if (slash !== -1) proc = pidProg.substring(slash + 1);
-      if (proc === "daytona-daemon") continue;
+      if (proc === "daytona-daemon" || proc === "daytona") continue;
       ports.push({ port: portNum, protocol: "tcp", process: proc, command: proc });
     }
     ports.sort((a, b) => a.port - b.port);

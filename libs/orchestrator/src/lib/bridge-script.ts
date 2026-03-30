@@ -1236,7 +1236,7 @@ wss.on("connection", (ws) => {
 });
 
 // ── Port scanning ────────────────────────────────────
-const INTERNAL_PORTS = new Set([${port}, 9090, OC_PORT, 22, 25, 53, 445, 2375, 2376, 3306, 3389, 5432, 6379, 27017]);
+const INTERNAL_PORTS = new Set([${port}, 9090, OC_PORT, 22, 25, 53, 445, 2375, 2376, 3306, 3389, 5432, 6379, 27017, 2280, 22220, 22222, 33333]);
 const portFs = require("fs");
 let lastPortsKey = "";
 let portInfoCache = new Map();
@@ -1307,7 +1307,7 @@ function resolveProcesses(portInodes) {
       const cmd = pid ? readCmdline(pid) : "";
       const parts = cmd.split(" ");
       const base = parts[0] ? parts[0].split("/").pop() : "";
-      if (base === "daytona-daemon") continue;
+      if (base === "daytona-daemon" || base === "daytona") continue;
       info = { process: base || "", command: cmd || base };
     }
     newCache.set(portNum, info);

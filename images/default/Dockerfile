@@ -158,7 +158,7 @@ zstyle ':vcs_info:git*+set-message:*' hooks git-truncate
 }
 precmd() { vcs_info }
 setopt PROMPT_SUBST
-PROMPT='%F{green}%n%f %F{cyan}➜%f %F{blue}%~%f%F{yellow}${vcs_info_msg_0_}%f $ '
+PROMPT='%F{green}%n%f %F{cyan}➜%f %F{blue}%20<…<%1~%<<%f%F{yellow}${vcs_info_msg_0_}%f $ '
 ZSHRC
 
 # Configure bash prompt with git branch display (branch truncated to 30 chars)
@@ -173,7 +173,8 @@ __git_branch() {
         echo " ($branch)"
     fi
 }
-PS1='\[\033[32m\]\u\[\033[0m\] \[\033[36m\]➜\[\033[0m\] \[\033[34m\]\w\[\033[0m\]\[\033[33m\]$(__git_branch)\[\033[0m\] $ '
+__short_dir() { local d; d=$(basename "$PWD"); if [ "$PWD" = "$HOME" ]; then d="~"; fi; if [ ${#d} -gt 20 ]; then d="${d:0:20}…"; fi; echo "$d"; }
+PS1='\[\033[32m\]\u\[\033[0m\] \[\033[36m\]➜\[\033[0m\] \[\033[34m\]$(__short_dir)\[\033[0m\]\[\033[33m\]$(__git_branch)\[\033[0m\] $ '
 BASHRC
 
 # Configure oh-my-openagent plugin for OpenCode

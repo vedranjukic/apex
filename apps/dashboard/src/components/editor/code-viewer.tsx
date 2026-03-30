@@ -160,24 +160,8 @@ export function CodeViewer({ filePath, content, onSave }: CodeViewerProps) {
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    const apex = (window as any).apex;
-    if (apex?.isElectron && apex.showContextMenu) {
-      const items = buildContextMenuItems(lspReady).map((item) => {
-        if (item.type === 'separator') return { type: 'separator' as const };
-        return {
-          label: item.label,
-          action: item.id,
-          accelerator: item.shortcut,
-          enabled: !item.disabled,
-        };
-      });
-      apex.showContextMenu(items).then((result: { action: string | null }) => {
-        if (result?.action) executeEditorAction(result.action);
-      });
-    } else {
-      setCtxMenu({ x: e.clientX, y: e.clientY });
-    }
-  }, [lspReady, language, filePath]);
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  }, []);
 
   const triggerEditorCommand = useCallback((editor: any, commandId: string) => {
     editor.focus();
@@ -220,27 +204,13 @@ export function CodeViewer({ filePath, content, onSave }: CodeViewerProps) {
         triggerEditorCommand(editor, 'editor.action.rename');
         break;
       case 'cut':
-        editor.focus();
-        document.execCommand('cut');
+        triggerEditorCommand(editor, 'editor.action.clipboardCutAction');
         break;
       case 'copy':
-        editor.focus();
-        document.execCommand('copy');
+        triggerEditorCommand(editor, 'editor.action.clipboardCopyAction');
         break;
       case 'paste':
-        editor.focus();
-        navigator.clipboard.readText().then((text) => {
-          const selection = editor.getSelection();
-          if (selection) {
-            editor.executeEdits('paste', [{
-              range: selection,
-              text,
-              forceMoveMarkers: true,
-            }]);
-          }
-        }).catch(() => {
-          document.execCommand('paste');
-        });
+        triggerEditorCommand(editor, 'editor.action.clipboardPasteAction');
         break;
     }
   }, [language, filePath, triggerEditorCommand]);
