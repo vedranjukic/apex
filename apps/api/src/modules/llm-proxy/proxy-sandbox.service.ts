@@ -16,6 +16,7 @@ const PROXY_PORT = 3000;
 const PROXY_DIR = '/home/daytona/proxy';
 const HEALTH_MAX_ATTEMPTS = 30;
 const HEALTH_INTERVAL_MS = 1000;
+const SIGNED_URL_TTL_SECS = 8 * 60 * 60; // 8 hours
 
 const SETTINGS_KEYS = {
   sandboxId: 'LLM_PROXY_SANDBOX_ID',
@@ -65,9 +66,12 @@ class ProxySandboxService {
     ]);
 
     if (storedId && storedHash === currentHash && storedUrl && storedToken) {
-      const healthy = await this.checkHealth(daytonaProvider, storedId);
-      if (healthy) {
-        this.cachedInfo = { proxyBaseUrl: storedUrl, authToken: storedToken };
+      const freshUrl = await this.checkHealthAndRefreshUrl(daytonaProvider, storedId);
+      if (freshUrl) {
+        if (freshUrl !== storedUrl) {
+          await settingsService.setAll({ [SETTINGS_KEYS.url]: freshUrl });
+        }
+        this.cachedInfo = { proxyBaseUrl: freshUrl, authToken: storedToken };
         return this.cachedInfo;
       }
       console.log('[proxy-sandbox] Existing proxy sandbox unhealthy — recreating');
@@ -114,8 +118,7 @@ class ProxySandboxService {
     const authToken = generateAuthToken();
     const snapshot = await settingsService.get(SETTINGS_KEYS.snapshot)
       || process.env['PROXY_SANDBOX_SNAPSHOT']
-      || process.env['DAYTONA_SNAPSHOT']
-      || 'apex-default-0.2.1-m';
+      || 'apex-proxy-0.1.0';
 
     console.log(`[proxy-sandbox] Creating proxy sandbox (snapshot=${snapshot})`);
 
@@ -134,7 +137,9 @@ class ProxySandboxService {
 
     try {
       await this.installAndStart(sandbox, authToken);
-      const previewInfo = await sandbox.getPreviewLink(PROXY_PORT);
+      const previewInfo = sandbox.getSignedPreviewUrl
+        ? await sandbox.getSignedPreviewUrl(PROXY_PORT, SIGNED_URL_TTL_SECS)
+        : await sandbox.getPreviewLink(PROXY_PORT);
       const proxyBaseUrl = previewInfo.url.replace(/\/$/, '');
 
       await this.persistSettings(sandbox.id, authToken, proxyBaseUrl, keysHash);
@@ -178,25 +183,30 @@ class ProxySandboxService {
     throw new Error('Proxy sandbox health check timed out');
   }
 
-  private async checkHealth(
+  private async checkHealthAndRefreshUrl(
     daytonaProvider: SandboxProvider,
     sandboxId: string,
-  ): Promise<boolean> {
+  ): Promise<string | null> {
     try {
       const sandbox = await daytonaProvider.get(sandboxId);
       if (sandbox.state !== 'started' && sandbox.state !== 'unknown') {
         try {
           await sandbox.start(60);
         } catch {
-          return false;
+          return null;
         }
       }
       const result = await sandbox.process.executeCommand(
         `curl -sf http://localhost:${PROXY_PORT}/health 2>&1 || echo "NOT_READY"`,
       );
-      return (result.result ?? '').includes('"ok"');
+      if (!(result.result ?? '').includes('"ok"')) return null;
+
+      const previewInfo = sandbox.getSignedPreviewUrl
+        ? await sandbox.getSignedPreviewUrl(PROXY_PORT, SIGNED_URL_TTL_SECS)
+        : await sandbox.getPreviewLink(PROXY_PORT);
+      return previewInfo.url.replace(/\/$/, '');
     } catch {
-      return false;
+      return null;
     }
   }
 

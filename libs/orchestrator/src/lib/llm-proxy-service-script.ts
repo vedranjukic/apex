@@ -82,6 +82,7 @@ function proxyRequest(req, res, provider, subpath) {
   };
 
   const upstream = https.request(opts, (upRes) => {
+    console.log("[llm-proxy] upstream " + provider + " → " + upRes.statusCode);
     const respHeaders = {};
     const skip = new Set(["transfer-encoding", "content-encoding", "connection"]);
     for (const [k, v] of Object.entries(upRes.headers)) {
@@ -103,12 +104,17 @@ function proxyRequest(req, res, provider, subpath) {
 }
 
 const server = http.createServer((req, res) => {
+  console.log("[llm-proxy] " + req.method + " " + req.url);
+
   if (req.url === "/health" || req.url === "/health/") {
     return sendJson(res, 200, { status: "ok" });
   }
 
   const match = req.url.match(ROUTE_RE);
-  if (!match) return sendJson(res, 404, { error: "Not found" });
+  if (!match) {
+    console.log("[llm-proxy] 404 — no route match for: " + req.url);
+    return sendJson(res, 404, { error: "Not found" });
+  }
 
   const [, provider, rest] = match;
   const subpath = rest || "/";

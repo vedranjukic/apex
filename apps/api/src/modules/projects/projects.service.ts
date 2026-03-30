@@ -172,6 +172,9 @@ class ProjectsService {
           }
         }
 
+        if (status.type === 'daytona') {
+          console.log(`[projects] Daytona SandboxManager config: proxyBaseUrl=${providerConfig.proxyBaseUrl} hasAuthToken=${!!providerConfig.proxyAuthToken}`);
+        }
         const mgr = new SandboxManager(providerConfig);
         await mgr.initialize();
         this.sandboxManagers.set(status.type, mgr);
@@ -204,13 +207,13 @@ class ProjectsService {
     if (!anthropicKey && !openaiKey) return;
 
     try {
+      const oldCached = proxySandboxService.getCachedInfo();
       const daytonaProvider = new DaytonaSandboxProvider();
       await daytonaProvider.initialize();
       const info = await proxySandboxService.ensureProxySandbox(
         daytonaProvider, anthropicKey, openaiKey,
       );
-      const cached = proxySandboxService.getCachedInfo();
-      if (cached && cached.proxyBaseUrl !== info.proxyBaseUrl) {
+      if (!oldCached || oldCached.proxyBaseUrl !== info.proxyBaseUrl) {
         manager.updateProxyConfig(info.proxyBaseUrl, info.authToken);
         console.log(`[projects] Daytona proxy config updated: ${info.proxyBaseUrl}`);
       }

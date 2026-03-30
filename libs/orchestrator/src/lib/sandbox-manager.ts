@@ -239,6 +239,10 @@ export class SandboxManager extends EventEmitter {
       gitUserName: config.gitUserName || "",
       gitUserEmail: config.gitUserEmail || "",
       proxyAuthToken: config.proxyAuthToken || "",
+      secretsProxyBaseUrl:
+        config.secretsProxyBaseUrl ||
+        process.env["API_BASE_URL"] ||
+        `http://localhost:${process.env["PORT"] || "3000"}`,
     };
   }
 
@@ -277,13 +281,29 @@ export class SandboxManager extends EventEmitter {
   private buildContainerEnvVars(): Record<string, string> {
     const proxyBase = resolveProxyBaseUrl(this.config.proxyBaseUrl, this.config.provider);
     const useProxy = !!proxyBase;
+    const isDaytona = this.config.provider === "daytona";
     const envVars: Record<string, string> = {};
     const placeholder = this.config.proxyAuthToken || "sk-proxy-placeholder";
+
+    console.log(
+      `[sandbox] buildContainerEnvVars: provider=${this.config.provider} ` +
+      `proxyBaseUrl=${this.config.proxyBaseUrl} resolvedProxy=${proxyBase} ` +
+      `useProxy=${useProxy} hasAuthToken=${!!this.config.proxyAuthToken}`,
+    );
+
+    if (isDaytona && !useProxy) {
+      console.warn(
+        "[sandbox] Daytona provider without a reachable LLM proxy — " +
+        "real keys will NOT be sent. Agent LLM calls will fail until the proxy sandbox is available.",
+      );
+    }
 
     if (this.config.anthropicApiKey) {
       if (useProxy) {
         envVars["ANTHROPIC_API_KEY"] = placeholder;
         envVars["ANTHROPIC_BASE_URL"] = `${proxyBase}/llm-proxy/anthropic/v1`;
+      } else if (isDaytona) {
+        envVars["ANTHROPIC_API_KEY"] = placeholder;
       } else {
         envVars["ANTHROPIC_API_KEY"] = this.config.anthropicApiKey;
       }
@@ -292,13 +312,15 @@ export class SandboxManager extends EventEmitter {
       if (useProxy) {
         envVars["OPENAI_API_KEY"] = placeholder;
         envVars["OPENAI_BASE_URL"] = `${proxyBase}/llm-proxy/openai/v1`;
+      } else if (isDaytona) {
+        envVars["OPENAI_API_KEY"] = placeholder;
       } else {
         envVars["OPENAI_API_KEY"] = this.config.openaiApiKey;
       }
     }
 
     const secretsProxyUrl = resolveSecretsProxyUrl(
-      this.config.proxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
+      this.config.secretsProxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
     if (secretsProxyUrl) {
       envVars["HTTPS_PROXY"] = secretsProxyUrl;
@@ -1957,7 +1979,7 @@ export class SandboxManager extends EventEmitter {
 
     // Ensure CA cert is installed (containers only — local provider uses host certs)
     const secretsProxyUrlR = resolveSecretsProxyUrl(
-      this.config.proxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
+      this.config.secretsProxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
     if (this.config.secretsProxyCaCert && secretsProxyUrlR && this.config.provider !== "local") {
       try {
@@ -1983,6 +2005,7 @@ export class SandboxManager extends EventEmitter {
     const projectIdForBridge = this.projectIds.get(sandbox.id) || "";
     const apexProxyForBridge = proxyBase || this.config.proxyBaseUrl;
     const placeholderR = this.config.proxyAuthToken || "sk-proxy-placeholder";
+    const isDaytonaR = this.config.provider === "daytona";
     const envParts = [
       ...(useProxy
         ? [
@@ -1991,10 +2014,15 @@ export class SandboxManager extends EventEmitter {
             `OPENAI_API_KEY="${placeholderR}"`,
             `OPENAI_BASE_URL="${proxyBase}/llm-proxy/openai/v1"`,
           ]
-        : [
-            `ANTHROPIC_API_KEY="${this.config.anthropicApiKey}"`,
-            `OPENAI_API_KEY="${this.config.openaiApiKey}"`,
-          ]),
+        : isDaytonaR
+          ? [
+              `ANTHROPIC_API_KEY="${placeholderR}"`,
+              `OPENAI_API_KEY="${placeholderR}"`,
+            ]
+          : [
+              `ANTHROPIC_API_KEY="${this.config.anthropicApiKey}"`,
+              `OPENAI_API_KEY="${this.config.openaiApiKey}"`,
+            ]),
       `DAYTONA_API_KEY="${daytonaApiKeyR}"`,
       `DAYTONA_API_URL="${daytonaApiUrlR}"`,
       `DAYTONA_SANDBOX_ID="${sandbox.id}"`,
@@ -2194,7 +2222,7 @@ export class SandboxManager extends EventEmitter {
     };
 
     const secretsProxyUrl = resolveSecretsProxyUrl(
-      this.config.proxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
+      this.config.secretsProxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
 
     // ── Exec 1: Write infra files (bridge, config, agents) ──
@@ -2293,6 +2321,7 @@ export class SandboxManager extends EventEmitter {
     const apexProxyForBridgeI = proxyBaseUrlForEnv || this.config.proxyBaseUrl;
 
     const placeholderI = this.config.proxyAuthToken || "sk-proxy-placeholder";
+    const isDaytonaI = this.config.provider === "daytona";
     const envParts = [
       ...(useProxyI
         ? [
@@ -2301,10 +2330,15 @@ export class SandboxManager extends EventEmitter {
             `OPENAI_API_KEY="${placeholderI}"`,
             `OPENAI_BASE_URL="${proxyBaseUrlForEnv}/llm-proxy/openai/v1"`,
           ]
-        : [
-            `ANTHROPIC_API_KEY="${this.config.anthropicApiKey}"`,
-            `OPENAI_API_KEY="${this.config.openaiApiKey}"`,
-          ]),
+        : isDaytonaI
+          ? [
+              `ANTHROPIC_API_KEY="${placeholderI}"`,
+              `OPENAI_API_KEY="${placeholderI}"`,
+            ]
+          : [
+              `ANTHROPIC_API_KEY="${this.config.anthropicApiKey}"`,
+              `OPENAI_API_KEY="${this.config.openaiApiKey}"`,
+            ]),
       `DAYTONA_API_KEY="${daytonaApiKey}"`,
       `DAYTONA_API_URL="${daytonaApiUrl}"`,
       `DAYTONA_SANDBOX_ID="${sandbox.id}"`,

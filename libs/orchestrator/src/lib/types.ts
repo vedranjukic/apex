@@ -369,6 +369,11 @@ export interface OrchestratorConfig {
   secretsProxyCaCert?: string;
   /** Port the MITM secrets proxy listens on (default 6001). */
   secretsProxyPort?: number;
+  /** Base URL of the Apex API server for secrets proxy resolution.
+   *  Separate from `proxyBaseUrl` because the LLM proxy may live on a
+   *  different host (e.g. a Daytona proxy sandbox) while the secrets proxy
+   *  always runs alongside the Apex API. */
+  secretsProxyBaseUrl?: string;
   /** Secret env var names to write as placeholders in the container .env.
    *  SDKs can initialize with the placeholder; the proxy replaces it at HTTP level. */
   secretPlaceholders?: Record<string, string>;
