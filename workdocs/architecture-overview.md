@@ -167,9 +167,12 @@ When the user sends a prompt in **Plan** mode, the response renders in a special
 
 ## LLM API Key Proxy
 
-API keys for LLM providers (Anthropic, OpenAI) are **never sent into sandbox containers**. Instead, the Elysia API runs a streaming reverse proxy that injects real keys server-side.
+API keys for LLM providers (Anthropic, OpenAI) are **never sent into sandbox containers**. Instead, all LLM API calls are routed through a proxy that injects real keys server-side. The proxy implementation varies by provider:
 
-### How It Works
+- **Local providers** (Docker, Apple Container, local): The Elysia API on the host acts as the proxy.
+- **Daytona** (cloud): A dedicated **proxy sandbox** on Daytona runs the proxy service, since the host API is typically unreachable from cloud sandboxes.
+
+### How It Works (Local Providers)
 
 ```
 Container (OpenCode) → http://<host-ip>:6000/llm-proxy/anthropic/v1/messages
@@ -181,10 +184,31 @@ Container (OpenCode) → http://<host-ip>:6000/llm-proxy/anthropic/v1/messages
                         https://api.anthropic.com/v1/messages (with real x-api-key header)
 ```
 
+### How It Works (Daytona — Proxy Sandbox)
+
+```
+Regular Sandbox (OpenCode) → https://<proxy-sandbox-preview-url>/llm-proxy/anthropic/v1/messages
+                                         (x-api-key: <auth-token>)
+                                    ↓
+                        Proxy Sandbox (proxy.cjs on port 3000)
+                                    ↓
+                        Verifies auth token, reads real key from env
+                                    ↓
+                        https://api.anthropic.com/v1/messages (with real x-api-key header)
+```
+
+A **proxy sandbox** is a lightweight Daytona sandbox that runs only the LLM proxy service. One proxy sandbox is shared across all regular Daytona sandboxes in the same application instance. It is created automatically at startup and lazily re-created if it becomes unhealthy.
+
+**Security:** The proxy sandbox's Daytona preview URL contains the sandbox UUID (hard to guess). Each application instance generates a unique auth token (e.g. `sk-proxy-<random-hex>`) that regular sandboxes send as their "API key". The proxy verifies this token before forwarding requests. Real API keys never leave the proxy sandbox.
+
+**Lifecycle:** The proxy sandbox is created on first Daytona sandbox operation and persists across app restarts (sandbox ID stored in the settings DB). It is recreated when API keys change (detected via SHA-256 hash comparison) or when the sandbox is found to be stopped/destroyed.
+
+### Container Environment
+
 Containers receive:
-- `ANTHROPIC_API_KEY=sk-proxy-placeholder` / `OPENAI_API_KEY=sk-proxy-placeholder` — dummy values so SDKs initialize without error
-- `ANTHROPIC_BASE_URL=http://<host-ip>:<port>/llm-proxy/anthropic/v1` — redirects all Anthropic API calls through the proxy
-- `OPENAI_BASE_URL=http://<host-ip>:<port>/llm-proxy/openai/v1` — redirects all OpenAI API calls through the proxy
+- `ANTHROPIC_API_KEY=<auth-token>` / `OPENAI_API_KEY=<auth-token>` — the auth token that doubles as an SDK-compatible "API key" (for local providers, `sk-proxy-placeholder` is used instead)
+- `ANTHROPIC_BASE_URL=<proxy-url>/llm-proxy/anthropic/v1` — redirects all Anthropic API calls through the proxy
+- `OPENAI_BASE_URL=<proxy-url>/llm-proxy/openai/v1` — redirects all OpenAI API calls through the proxy
 
 The OpenCode config (`opencode.json`) uses `{env:ANTHROPIC_BASE_URL}` / `{env:OPENAI_BASE_URL}` in `provider.*.options.baseURL` to pick up these URLs.
 
@@ -192,16 +216,21 @@ The OpenCode config (`opencode.json`) uses `{env:ANTHROPIC_BASE_URL}` / `{env:OP
 
 The proxy URL resolution in `sandbox-manager.ts` adapts to the sandbox provider:
 
-- **Local providers** (Docker, Apple Container): `localhost` in the proxy URL is replaced with the host machine's LAN IP (via `os.networkInterfaces()`), since containers can't reach the host via `localhost`. The API server must listen on `0.0.0.0`.
-- **Daytona** (cloud): The proxy only works when `API_BASE_URL` is set to a publicly reachable URL. If the API is running locally (no public URL), falls back to sending real keys directly into the container (same as pre-proxy behavior).
+- **Local provider**: `localhost` URLs work as-is (process runs on host).
+- **Container providers** (Docker, Apple Container): `localhost` in the proxy URL is replaced with the host machine's LAN IP (via `os.networkInterfaces()`), since containers can't reach the host via `localhost`. The API server must listen on `0.0.0.0`.
+- **Daytona** (cloud): Uses the proxy sandbox's preview URL. If no proxy sandbox is available and `API_BASE_URL` is set to a publicly reachable URL, falls back to the host API. Real API keys are **never** sent into Daytona cloud sandboxes.
 
 ### Key Files
 
 | File | Role |
 |---|---|
-| `apps/api/src/modules/llm-proxy/llm-proxy.routes.ts` | Elysia streaming reverse proxy — matches `/llm-proxy/(anthropic\|openai)/*`, injects real API keys from `settingsService` |
-| `libs/orchestrator/src/lib/sandbox-manager.ts` | `resolveProxyBaseUrl()` — adapts proxy URL per provider; `restartBridge()` / `installBridge()` — writes `.env` with proxy URLs + dummy keys, configures `opencode.json` with provider base URLs |
-| `apps/api/src/modules/settings/settings.service.ts` | Stores and retrieves API keys (SQLite DB + env var fallback) — keys never leave this service |
+| `apps/api/src/modules/llm-proxy/llm-proxy.routes.ts` | Elysia streaming reverse proxy for local providers — matches `/llm-proxy/(anthropic\|openai)/*`, injects real API keys from `settingsService` |
+| `apps/api/src/modules/llm-proxy/proxy-sandbox.service.ts` | Manages the Daytona proxy sandbox lifecycle — create, health check, destroy, settings persistence |
+| `libs/orchestrator/src/lib/llm-proxy-service-script.ts` | Generates the self-contained proxy service script uploaded into the proxy sandbox |
+| `libs/orchestrator/src/lib/sandbox-manager.ts` | `resolveProxyBaseUrl()` — adapts proxy URL per provider; `updateProxyConfig()` — hot-updates proxy URL; `restartBridge()` / `installBridge()` — writes `.env` with proxy URLs + auth tokens |
+| `apps/api/src/modules/projects/projects.service.ts` | `ensureDaytonaProxy()` — lazy health check before Daytona operations; integrates proxy sandbox into `initSandboxManagers()` |
+| `apps/api/src/modules/settings/settings.service.ts` | Stores API keys and proxy sandbox metadata (`LLM_PROXY_SANDBOX_ID`, `LLM_PROXY_AUTH_TOKEN`, etc.) |
+| `images/proxy/Dockerfile` | Minimal Docker image for the proxy sandbox (Node.js + daytona-daemon) |
 
 ## Secrets Proxy (MITM)
 

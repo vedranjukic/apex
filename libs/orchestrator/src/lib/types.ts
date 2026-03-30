@@ -358,9 +358,13 @@ export interface OrchestratorConfig {
   timeoutMs?: number;
   /** Sandbox provider backend. Defaults to `"daytona"`. */
   provider?: 'daytona' | 'docker' | 'apple-container' | 'local';
-  /** Base URL of the LLM proxy (e.g. `http://localhost:6000`).
-   *  When set, containers receive proxy URLs instead of raw API keys. */
+  /** Base URL of the LLM proxy (e.g. `http://localhost:6000` or a Daytona
+   *  proxy sandbox preview URL).  When set, containers receive proxy URLs
+   *  instead of raw API keys. */
   proxyBaseUrl?: string;
+  /** Auth token that regular sandboxes send as their "API key" to the LLM
+   *  proxy.  When set, used instead of the hardcoded `sk-proxy-placeholder`. */
+  proxyAuthToken?: string;
   /** PEM-encoded CA certificate for the MITM secrets proxy. */
   secretsProxyCaCert?: string;
   /** Port the MITM secrets proxy listens on (default 6001). */

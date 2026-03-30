@@ -69,7 +69,7 @@ Additional docs live in `workdocs/`. Read these only when working on the relevan
 
 ## LLM API Key Proxy
 
-LLM provider keys (Anthropic, OpenAI) never enter sandbox containers. The Elysia API runs a streaming reverse proxy at `/llm-proxy/(anthropic|openai)/*` that injects real keys server-side. Containers receive dummy keys + `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` pointing at the proxy. See the "LLM API Key Proxy" section in `workdocs/architecture-overview.md` for the full design.
+LLM provider keys (Anthropic, OpenAI) never enter sandbox containers. For local providers (Docker, Apple Container), the Elysia API runs a streaming reverse proxy at `/llm-proxy/(anthropic|openai)/*` that injects real keys server-side. For Daytona cloud sandboxes, a dedicated **proxy sandbox** runs the same proxy logic on Daytona's infrastructure (since the host API is typically unreachable from cloud). Containers receive an auth token as their "API key" + `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` pointing at the proxy. Key files: `apps/api/src/modules/llm-proxy/`, `libs/orchestrator/src/lib/llm-proxy-service-script.ts`. See the "LLM API Key Proxy" section in `workdocs/architecture-overview.md` for the full design.
 
 ## Secrets Proxy (MITM)
 
