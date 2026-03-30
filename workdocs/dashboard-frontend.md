@@ -447,6 +447,7 @@ Debug helper: `window.__resetTour()` clears all dismissed state for testing.
 | `setRootPath(path)`           | Sets the project root (triggers initial listing) |
 | `setEntries(dirPath, entries)` | Caches directory listing, marks dir as changed if entries differ |
 | `getAllCachedFiles()`         | Returns all non-directory entries across all cached dirs |
+| `getAllCachedEntries()`       | Returns all entries (files and directories) across all cached dirs, deduplicated by path. Used by FilePicker search mode. |
 | `invalidate(dirPath)`        | Removes a dir from cache (forces re-fetch on next expand) |
 | `reset()`                    | Clears all cache and root path |
 

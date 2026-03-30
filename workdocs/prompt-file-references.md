@@ -60,11 +60,16 @@ ProjectPage
    - Shows "PR" (if project has githubContext with type 'pull')
    - If only "Files" is available (no agents/skills/GitHub), skips directly to FilePicker
 
-5a. [Files path] User selects "Files" → CategoryPicker transitions to FilePicker (HarnessItemPicker)
-    FilePicker reads useFileTreeStore.cache for the current directory
-    If directory is not cached, calls requestListing(path) via WebSocket
-    User filters with the text input, navigates directories by clicking
-    User selects a file (click/Enter) or folder (Shift+Click / Shift+Enter)
+5a. [Files path] User selects "Files" → CategoryPicker transitions to FilePicker
+    FilePicker has two modes based on the search input:
+    - Empty input (browse mode): shows current directory from useFileTreeStore.cache,
+      navigate into directories by clicking, back button / Backspace to go up
+    - Non-empty input (search mode): searches across ALL cached entries (files and
+      directories) via getAllCachedEntries(), partial name match, sorted dirs-first
+      then alphabetically, capped at 50 results. Each row shows the filename plus
+      the relative parent path (muted, small) for disambiguation.
+    In search mode, Enter on any result (file or directory) selects it as a reference.
+    In browse mode, Enter descends into directories, Shift+Enter selects directory.
     handleFileSelect() removes the "@" trigger text, inserts a file tag
 
 5b. [Agents path] User selects "Agents" → opens HarnessItemPicker with agent list
@@ -227,12 +232,22 @@ ProjectPage
 
 ### FilePicker keyboard shortcuts
 
+**Browse mode** (empty search input):
+
 | Key | Action |
 |-----|--------|
 | Arrow Up / Down | Move highlight |
 | Enter | Select file, or descend into directory |
 | Shift+Enter | Select directory as a reference |
-| Backspace (empty filter) | Navigate to parent directory |
+| Backspace | Navigate to parent directory |
+| Escape | Close picker |
+
+**Search mode** (non-empty search input -- searches all cached files/dirs globally):
+
+| Key | Action |
+|-----|--------|
+| Arrow Up / Down | Move highlight |
+| Enter | Select file or directory as a reference |
 | Escape | Close picker |
 
 ## Code Snippet References
