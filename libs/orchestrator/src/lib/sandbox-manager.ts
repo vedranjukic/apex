@@ -237,7 +237,7 @@ export class SandboxManager extends EventEmitter {
       secretsProxyCaCert: config.secretsProxyCaCert || "",
       secretsProxyPort:
         config.secretsProxyPort ||
-        Number(process.env["SECRETS_PROXY_PORT"] || "6001"),
+        Number(process.env["SECRETS_PROXY_PORT"] || "3001"),
       secretPlaceholders: config.secretPlaceholders || {},
       memoryMB: config.memoryMB || Number(process.env["SANDBOX_MEMORY_MB"] || "4096"),
       cpus: config.cpus || Number(process.env["SANDBOX_CPUS"] || "2"),

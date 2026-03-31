@@ -6,7 +6,7 @@
  *   2. MITM proxy intercepts CONNECT to secret domains and injects auth
  *   3. Transparent tunnel for non-secret domains
  *
- * Requires a running API server (proxy starts on port 6001 by default).
+ * Requires a running API server (proxy starts on port 3001 by default).
  * No sandbox or cloud keys needed — tests the proxy directly.
  *
  * Run: npx nx e2e @apex/api-e2e --testPathPattern=secrets-proxy
@@ -18,7 +18,7 @@ import * as tls from 'tls';
 
 const host = process.env.HOST ?? 'localhost';
 const port = process.env.PORT ?? '6000';
-const proxyPort = process.env.SECRETS_PROXY_PORT ?? '6001';
+const proxyPort = process.env.SECRETS_PROXY_PORT ?? '3001';
 const proxyHost = `${host}:${proxyPort}`;
 
 // ── Helpers ──────────────────────────────────────────
