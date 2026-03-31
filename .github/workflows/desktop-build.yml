@@ -16,6 +16,9 @@ on:
           - canary
           - stable
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: write
 
@@ -82,7 +85,11 @@ jobs:
             python3
 
       - name: Install dependencies
-        run: bun install
+        run: bun install ${{ matrix.platform == 'linux' && '--ignore-scripts' || '' }}
+
+      - name: Rebuild native modules (Linux)
+        if: matrix.platform == 'linux'
+        run: npm rebuild node-pty
 
       - name: Build API
         run: bun run build:api
