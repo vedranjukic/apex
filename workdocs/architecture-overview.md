@@ -190,14 +190,19 @@ Container (OpenCode) → http://<host-ip>:6000/llm-proxy/anthropic/v1/messages
 Regular Sandbox (OpenCode) → https://<proxy-sandbox-preview-url>/llm-proxy/anthropic/v1/messages
                                          (x-api-key: <auth-token>)
                                     ↓
-                        Proxy Sandbox (proxy.cjs on port 3000)
+                        Proxy Sandbox (combined-proxy.cjs on port 3000)
                                     ↓
                         Verifies auth token, reads real key from env
                                     ↓
                         https://api.anthropic.com/v1/messages (with real x-api-key header)
 ```
 
-A **proxy sandbox** is a lightweight Daytona sandbox that runs only the LLM proxy service. One proxy sandbox is shared across all regular Daytona sandboxes in the same application instance. It is created automatically at startup and lazily re-created if it becomes unhealthy.
+A **proxy sandbox** is a lightweight Daytona sandbox that runs the **combined proxy service** — both LLM proxy and MITM secrets proxy functionality. One proxy sandbox is shared across all regular Daytona sandboxes in the same application instance. It is created automatically at startup and lazily re-created if it becomes unhealthy.
+
+**Combined Services in Proxy Sandbox:**
+- **LLM Proxy** (port 3000) — existing API key proxying functionality
+- **MITM Secrets Proxy** (port 9340, internal) — TLS termination with secrets injection
+- **WebSocket Tunnel Bridge** (`/tunnel` endpoint) — enables TCP-over-WebSocket tunneling for HTTPS proxy connections from regular sandboxes
 
 **Security:** The proxy sandbox's Daytona preview URL contains the sandbox UUID (hard to guess). Each application instance generates a unique auth token (e.g. `sk-proxy-<random-hex>`) that regular sandboxes send as their "API key". The proxy verifies this token before forwarding requests. Real API keys never leave the proxy sandbox.
 
@@ -238,6 +243,10 @@ User-defined API key secrets (Stripe, Twilio, etc.) are stored server-side and *
 
 ### How It Works
 
+The implementation varies by sandbox provider:
+
+#### Local/Container Providers (Docker, Apple Container)
+
 ```
 Container app → CONNECT api.stripe.com:443 via HTTPS_PROXY
                             ↓
@@ -252,14 +261,40 @@ Container app → CONNECT api.stripe.com:443 via HTTPS_PROXY
               https://api.stripe.com (with real Authorization: Bearer <key>)
 ```
 
+#### Daytona Provider (TCP-over-WebSocket Tunnel)
+
+Since Daytona preview URLs only support HTTP/HTTPS with WebSocket upgrades (no raw TCP ports), HTTPS proxy `CONNECT` requests are tunneled through WebSocket:
+
+```
+Regular Sandbox (Daytona)                    Proxy Sandbox (Daytona)
+┌─────────────────────────────┐              ┌──────────────────────────────┐
+│ App (gh/curl/SDK)           │              │ MITM Secrets Proxy (:9340)  │
+│   ↓                         │              │   ▲                          │
+│ HTTPS_PROXY=localhost:9339  │  WebSocket   │   │ TCP                      │
+│   ↓                         │  /tunnel     │   │                          │
+│ TCP-to-WS Client (:9339)    │ ──────────── │ WS-to-TCP Bridge (:3000)    │
+│ (bridge script)             │              │ + LLM Proxy                  │
+└─────────────────────────────┘              └──────────────────────────────┘
+```
+
 For domains **without** secrets, the proxy acts as a transparent TCP tunnel (no interception, no certificate).
 
-Containers receive:
+### Container Environment
+
+#### Local/Container Providers
 - `HTTPS_PROXY` / `HTTP_PROXY` pointing to the proxy (e.g. `http://<host-lan-ip>:3001`)
 - `NO_PROXY=localhost,127.0.0.1,0.0.0.0` so local traffic skips the proxy
 - Custom CA certificate installed in the system trust store (`update-ca-certificates`)
 - `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` for per-runtime CA trust
 - Placeholder env vars for each secret (e.g. `STRIPE_KEY=sk-proxy-placeholder`) so SDKs initialize without error
+
+#### Daytona Provider
+- `HTTPS_PROXY=http://localhost:9339` / `HTTP_PROXY=http://localhost:9339` → points to tunnel client in bridge script
+- `TUNNEL_ENDPOINT_URL` → WebSocket endpoint URL for tunnel (e.g. `wss://proxy-sandbox/tunnel`)
+- `NO_PROXY=localhost,127.0.0.1,0.0.0.0` so local traffic skips the proxy
+- Custom CA certificate installed in the system trust store (same as other providers)
+- `NODE_EXTRA_CA_CERTS`, etc. for CA trust
+- Placeholder env vars for each secret (same as other providers)
 
 ### Agent Awareness
 
@@ -285,11 +320,24 @@ Each secret specifies how the proxy injects the credential:
 
 ### Key Files
 
+#### Core Secrets Management
 | File | Role |
 |---|---|
 | `apps/api/src/modules/secrets/secrets.service.ts` | CRUD + domain lookup for secrets (SQLite) |
 | `apps/api/src/modules/secrets/secrets.routes.ts` | Elysia REST API under `/api/secrets` |
+
+#### MITM Proxy - Local/Container Providers  
+| File | Role |
+|---|---|
 | `apps/api/src/modules/secrets-proxy/secrets-proxy.ts` | MITM proxy server — CONNECT handler, selective TLS interception, auth injection, transparent tunnel fallback |
+
+#### MITM Proxy - Daytona Provider (TCP-over-WebSocket)
+| File | Role |
+|---|---|
+| `libs/orchestrator/src/lib/combined-proxy-service-script.ts` | Combined LLM proxy + MITM proxy + WebSocket tunnel bridge for Daytona proxy sandbox |
+| `libs/orchestrator/src/lib/bridge-script.ts` | Enhanced with TCP-to-WebSocket tunnel client on port 9339 |
+| `libs/orchestrator/src/lib/sandbox-manager.ts` | Daytona-specific proxy configuration (localhost:9339, tunnel URL) |
+| `apps/api/src/modules/llm-proxy/proxy-sandbox.service.ts` | Updated to deploy combined proxy service |
 | `apps/api/src/modules/secrets-proxy/ca-manager.ts` | CA keypair generation, persistence, per-domain certificate generation + caching |
 | `apps/api/src/database/schema.ts` | `secrets` table definition |
 | `libs/orchestrator/src/lib/sandbox-manager.ts` | CA cert upload, `HTTPS_PROXY` env injection, secret placeholder env vars |

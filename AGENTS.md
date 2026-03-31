@@ -64,6 +64,7 @@ Additional docs live in `workdocs/`. Read these only when working on the relevan
 - `workdocs/ports-panel.md` -- port scanning, preview URLs, bottom panel ports tab, status bar indicator
 - `workdocs/electron-desktop.md` -- Electrobun desktop app, settings system, packaging
 - `workdocs/secrets.md` -- secrets management UI, CRUD API, MITM proxy integration
+- `workdocs/tcp-over-websocket-tunnel.md` -- TCP-over-WebSocket tunnel for MITM proxy on Daytona, combined proxy service, architecture
 - `workdocs/open-in-ide.md` -- Open in IDE button, SSH remote connection, IDE detection, SSH config management
 - `workdocs/lsp-integration.md` -- LSP architecture, bridge LSP manager, MCP LSP server, dashboard language client, Monaco editor migration
 
@@ -73,8 +74,12 @@ LLM provider keys (Anthropic, OpenAI) never enter sandbox containers. For local 
 
 ## Secrets Proxy (MITM)
 
-User-defined API key secrets (Stripe, Twilio, etc.) are managed via a transparent MITM HTTPS proxy. Secret values are stored server-side and **never enter containers**. A forward proxy on port 3001 intercepts outbound HTTPS traffic from containers, and for domains with configured secrets, terminates TLS with a dynamic certificate (signed by an auto-generated CA), injects the real auth header, and forwards to the upstream. Non-secret domains pass through as transparent tunnels.
+User-defined API key secrets (Stripe, Twilio, etc.) are managed via a transparent MITM HTTPS proxy. Secret values are stored server-side and **never enter containers**. A forward proxy intercepts outbound HTTPS traffic from containers, and for domains with configured secrets, terminates TLS with a dynamic certificate (signed by an auto-generated CA), injects the real auth header, and forwards to the upstream. Non-secret domains pass through as transparent tunnels.
 
-Containers get `HTTPS_PROXY`/`HTTP_PROXY` env vars pointing at the proxy, the CA cert in the system trust store, and placeholder env vars (e.g. `STRIPE_KEY=sk-proxy-placeholder`) so SDKs can initialize. The agent can discover secret names (never values) via the `list_secrets` MCP tool.
+**Implementation varies by provider:**
+- **Local/Container providers** (Docker, Apple Container): Direct proxy on port 3001  
+- **Daytona provider**: TCP-over-WebSocket tunnel due to Daytona's WebSocket-only infrastructure. Uses a combined proxy service in a dedicated proxy sandbox with tunnel client in regular sandboxes.
 
-Key files: `apps/api/src/modules/secrets/`, `apps/api/src/modules/secrets-proxy/`, dashboard UI at `/secrets`. See the "Secrets Proxy (MITM)" section in `workdocs/architecture-overview.md` for the full design.
+Containers get `HTTPS_PROXY`/`HTTP_PROXY` env vars pointing at the proxy (or tunnel client for Daytona), the CA cert in the system trust store, and placeholder env vars (e.g. `STRIPE_KEY=sk-proxy-placeholder`) so SDKs can initialize. The agent can discover secret names (never values) via the `list_secrets` MCP tool.
+
+Key files: `apps/api/src/modules/secrets/`, `apps/api/src/modules/secrets-proxy/`, `libs/orchestrator/src/lib/combined-proxy-service-script.ts`, dashboard UI at `/secrets`. See the "Secrets Proxy (MITM)" section in `workdocs/architecture-overview.md` and `workdocs/tcp-over-websocket-tunnel.md` for the full design.

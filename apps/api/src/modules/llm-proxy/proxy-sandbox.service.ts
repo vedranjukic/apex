@@ -9,7 +9,9 @@
 
 import crypto from 'crypto';
 import { settingsService } from '../settings/settings.service';
-import { getLlmProxyServiceScript } from '@apex/orchestrator';
+import { secretsService } from '../secrets/secrets.service';
+import { getCACertPem } from '../secrets-proxy/ca-manager';
+import { getCombinedProxyServiceScript } from '@apex/orchestrator';
 import type { SandboxProvider, SandboxInstance } from '@apex/orchestrator';
 
 const PROXY_PORT = 3000;
@@ -227,7 +229,32 @@ class ProxySandboxService {
       || process.env['PROXY_SANDBOX_SNAPSHOT']
       || 'apex-proxy-0.1.0';
 
-    console.log(`[proxy-sandbox] Creating proxy sandbox (snapshot=${snapshot})`);
+    console.log(`[proxy-sandbox] Creating combined proxy sandbox (snapshot=${snapshot})`);
+
+    // Get all secrets for MITM proxy
+    const allSecrets = await secretsService.findAll();
+    const secretsJson = JSON.stringify(allSecrets.map(secret => ({
+      id: secret.id,
+      name: secret.name,
+      value: secret.value,
+      domain: secret.domain,
+      authType: secret.authType || 'bearer'
+    })));
+
+    // Get GitHub token if available
+    const githubToken = await settingsService.get('GITHUB_TOKEN') || '';
+
+    // Get CA certificate and key (will be generated if not exists)
+    let caCertPem = '';
+    let caKeyPem = '';
+    try {
+      caCertPem = getCACertPem();
+      // Get CA key from settings - this is a simplified approach
+      // In production, you might want better key management
+      caKeyPem = await settingsService.get('PROXY_CA_KEY') || '';
+    } catch (err) {
+      console.warn('[proxy-sandbox] CA certificate not available:', err);
+    }
 
     const sandbox = await this.createProxySandboxWithConflictResolution(daytonaProvider, {
       snapshot,
@@ -237,6 +264,11 @@ class ProxySandboxService {
         REAL_OPENAI_API_KEY: openaiKey,
         PROXY_AUTH_TOKEN: authToken,
         PROXY_PORT: String(PROXY_PORT),
+        MITM_PROXY_PORT: '9340',
+        SECRETS_JSON: secretsJson,
+        GITHUB_TOKEN: githubToken,
+        CA_CERT_PEM: caCertPem,
+        CA_KEY_PEM: caKeyPem,
       },
       labels: { 'apex.proxy': 'true' },
     });
@@ -262,7 +294,12 @@ class ProxySandboxService {
   private async installAndStart(sandbox: SandboxInstance, _authToken: string): Promise<void> {
     await sandbox.fs.createFolder(PROXY_DIR, '755');
 
-    const script = getLlmProxyServiceScript(PROXY_PORT);
+    // Install ws for WebSocket support
+    await sandbox.process.executeCommand(
+      `cd ${PROXY_DIR} && npm init -y && npm install ws`
+    );
+
+    const script = getCombinedProxyServiceScript(PROXY_PORT, 9340);
     await sandbox.fs.uploadFile(Buffer.from(script), `${PROXY_DIR}/proxy.cjs`);
 
     const sessionId = `proxy-${Date.now()}`;
