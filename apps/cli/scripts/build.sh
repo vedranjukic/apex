@@ -1,41 +1,39 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CLI_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-ROOT_DIR="$(cd "$CLI_DIR/../.." && pwd)"
+echo "🔨 Building Apex CLI with Bun..."
 
-VERSION="${VERSION:-$(cat "$ROOT_DIR/VERSION" 2>/dev/null || echo "dev")}"
-BIN_DIR="$CLI_DIR/bin"
+# Create dist directory
+mkdir -p dist
 
-mkdir -p "$BIN_DIR"
-cd "$CLI_DIR"
+# Build for multiple platforms
+echo "📦 Building binaries..."
 
-build() {
-  local os=$1 arch=$2 suffix=$3
-  local output="$BIN_DIR/apex-${suffix}"
-  echo "Building apex-${suffix} (${os}/${arch})..."
-  CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build \
-    -ldflags "-s -w -X github.com/apex/cli/cmd.Version=${VERSION}" \
-    -o "$output" .
-  echo "  -> $output ($(du -h "$output" | cut -f1))"
-}
+# Linux x64
+echo "  → Linux x64"
+bun build --compile --target=bun-linux-x64 src/main.ts --outfile dist/apex-linux-x64
 
-case "${1:-all}" in
-  darwin-arm64) build darwin arm64 darwin-arm64 ;;
-  darwin-amd64) build darwin amd64 darwin-amd64 ;;
-  linux-amd64)  build linux  amd64 linux-amd64  ;;
-  linux-arm64)  build linux  arm64 linux-arm64  ;;
-  all)
-    build darwin arm64 darwin-arm64
-    build darwin amd64 darwin-amd64
-    build linux  amd64 linux-amd64
-    build linux  arm64 linux-arm64
-    ;;
-  *)
-    echo "Usage: $0 [darwin-arm64|darwin-amd64|linux-amd64|linux-arm64|all]"
-    exit 1
-    ;;
-esac
+# Linux ARM64 (if supported by Bun)
+if bun build --compile --target=bun-linux-arm64 src/main.ts --outfile dist/apex-linux-arm64 2>/dev/null; then
+    echo "  → Linux ARM64"
+else
+    echo "  ⚠️  Linux ARM64 not supported by this Bun version"
+fi
 
-echo "Done."
+# macOS ARM64 (Apple Silicon)
+echo "  → macOS ARM64"
+bun build --compile --target=bun-darwin-arm64 src/main.ts --outfile dist/apex-darwin-arm64
+
+# macOS x64 (Intel)
+echo "  → macOS x64"
+bun build --compile --target=bun-darwin-x64 src/main.ts --outfile dist/apex-darwin-x64
+
+# Make binaries executable
+chmod +x dist/apex-*
+
+echo "✅ Build complete! Binaries created in dist/"
+ls -la dist/
+
+echo ""
+echo "📊 Binary sizes:"
+du -h dist/apex-*

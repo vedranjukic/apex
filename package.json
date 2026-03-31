@@ -4,7 +4,9 @@
   "license": "SEE LICENSE IN LICENSE",
   "scripts": {
     "build": "npx nx run-many --target=build --all",
-    "build:cli": "cd apps/cli && go build -o bin/apex .",
+    "build:cli": "npx nx run cli:build",
+    "build:cli:binary": "npx nx run cli:build:binary",
+    "cli": "cd apps/cli && bun src/main.ts",
     "build:api": "npx nx build @apex/api",
     "build:dashboard": "npx nx build @apex/dashboard",
     "serve": "npx nx run-many --target=serve --projects=@apex/api,@apex/dashboard --parallel=2",
@@ -19,7 +21,7 @@
     "test:agent-retry-e2e": "APEX_E2E_TEST=1 npx nx e2e @apex/api-e2e --testPathPattern=agent-retry",
     "test:multi-agent-e2e": "npx nx e2e @apex/api-e2e --testPathPattern=multi-agent.spec",
     "test:ask-user-e2e": "npx nx e2e @apex/api-e2e --testPathPattern=ask-user",
-    "test:create-project-e2e": "npx nx e2e @apex/cli-e2e --testPathPattern=create-project",
+
     "test:secrets-proxy-e2e": "npx nx e2e @apex/api-e2e --testPathPattern=secrets-proxy.spec"
   },
   "private": true,

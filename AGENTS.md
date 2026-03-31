@@ -6,6 +6,7 @@ Nx monorepo with these packages:
 
 - `apps/dashboard` -- React 19 + Vite frontend (Zustand, Tailwind CSS 4, Lucide icons)
 - `apps/api` -- NestJS backend (TypeORM, SQLite, Socket.io)
+- `apps/cli` -- TypeScript/Bun CLI (Commander.js, native SQLite, shared orchestrator)
 - `libs/orchestrator` -- Sandbox/orchestration logic
 - `libs/shared` -- Shared TypeScript types
 
@@ -42,11 +43,9 @@ Access store actions outside React components with `useXxxStore.getState().actio
 - API routes are prefixed with `/api` (set in NestJS `main.ts`)
 - Real-time communication uses Socket.io (agent, terminal, file tree, layout sockets)
 
-## Go CLI ↔ Node.js App Cross-Mode
+## CLI Architecture
 
-The Go CLI (`apps/cli`) and NestJS API (`apps/api`) are independent clients that both connect to a shared bridge inside sandboxes via WebSocket. Types and bridge scripts must stay in sync across Go and TypeScript.
-
-When adding, modifying, or debugging the bridge protocol, sandbox interaction, or cross-language types, read `workdocs/go-cli-cross-mode.md` for the full protocol spec, file map, build commands, and sync checklist.
+The TypeScript CLI (`apps/cli`) uses the same `libs/orchestrator` and `libs/shared` libraries as the NestJS API, ensuring zero code duplication and type safety across the entire stack. Both CLI and API connect to the same in-sandbox bridge via WebSocket using shared protocols.
 
 ## Detailed Documentation
 
@@ -54,7 +53,7 @@ Additional docs live in `workdocs/`. Read these only when working on the relevan
 
 - `workdocs/architecture-overview.md` -- full system architecture, data model, key flows
 - `workdocs/command-registry.md` -- command system, keybindings, how to add commands
-- `workdocs/go-cli-cross-mode.md` -- Go CLI ↔ Node.js bridge protocol, types sync, build commands
+
 - `workdocs/dashboard-frontend.md` -- frontend component structure and patterns
 - `workdocs/prompt-file-references.md` -- prompt input, @ references (files, GitHub issue/PR), code snippet references, image attachments, CategoryPicker, FilePicker, tag system
 - `workdocs/claude-sandbox-installation.md` -- sandbox provisioning and bridge setup
