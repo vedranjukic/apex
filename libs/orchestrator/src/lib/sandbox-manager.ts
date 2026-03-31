@@ -348,6 +348,7 @@ export class SandboxManager extends EventEmitter {
       envVars["SSL_CERT_FILE"] = "/etc/ssl/certs/ca-certificates.crt";
       envVars["REQUESTS_CA_BUNDLE"] = "/etc/ssl/certs/ca-certificates.crt";
       envVars["CURL_CA_BUNDLE"] = "/etc/ssl/certs/ca-certificates.crt";
+      envVars["GIT_SSL_CAINFO"] = "/etc/ssl/certs/ca-certificates.crt";
     }
 
     if (this.config.githubToken && secretsProxyAvailable) {
@@ -2481,15 +2482,7 @@ export class SandboxManager extends EventEmitter {
         const isCommitSha = gitBranch && /^[0-9a-f]{7,40}$/i.test(gitBranch);
         const branchArg = (gitBranch && !isCommitSha) ? gitBranch : undefined;
         const branchFlag = branchArg ? ` --branch ${branchArg}` : '';
-        let cloneUrl = gitRepo;
-        if (this.config.githubToken && gitRepo.includes("github.com")) {
-          cloneUrl = gitRepo.replace(
-            /^https:\/\/github\.com/,
-            `https://x-access-token:${this.config.githubToken}@github.com`,
-          );
-        }
-        const noProxy = `HTTPS_PROXY="" HTTP_PROXY="" https_proxy="" http_proxy="" `;
-        const cloneResult = await sandbox.process.executeCommand(`${noProxy}git clone${branchFlag} ${cloneUrl} .`, projectDir);
+        const cloneResult = await sandbox.process.executeCommand(`git clone${branchFlag} ${gitRepo} .`, projectDir);
         if (cloneResult.exitCode !== 0) {
           throw new Error(`git clone failed (exit ${cloneResult.exitCode}): ${cloneResult.result}`);
         }
@@ -2534,7 +2527,10 @@ export class SandboxManager extends EventEmitter {
         ).then(() => log("CA cert updated"))
       : Promise.resolve();
 
-    await Promise.all([writeInfraTask, gitTask, caCertTask]);
+    // Wait for infrastructure and CA cert tasks first to avoid race condition
+    await Promise.all([writeInfraTask, caCertTask]);
+    // Git clone now runs after CA cert is in the system bundle  
+    await gitTask;
     log("setup complete");
 
     // ── Exec 4: Start bridge ────────────────────────
