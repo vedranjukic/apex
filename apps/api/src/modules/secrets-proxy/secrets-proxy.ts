@@ -29,7 +29,19 @@ function getProxyPort(): number {
   return Number(process.env['SECRETS_PROXY_PORT'] || DEFAULT_PORT);
 }
 
-const GITHUB_DOMAINS = new Set(['github.com', 'api.github.com']);
+const GITHUB_DOMAINS = new Set([
+  'github.com',
+  'api.github.com',
+  // Additional GitHub domains that gh CLI might connect to
+  'uploads.github.com',
+  'objects.githubusercontent.com',
+  'raw.githubusercontent.com',
+  'codeload.github.com',
+  'ghcr.io',
+  // GitHub Enterprise Cloud domains
+  'github.enterprise.com',
+  'api.github.enterprise.com'
+]);
 
 /**
  * Find a secret for the given domain. Checks user-defined secrets first,
@@ -248,6 +260,15 @@ async function handleConnect(
     secret = null;
   }
 
+  // Debug logging for GitHub domain handling
+  if (GITHUB_DOMAINS.has(host)) {
+    if (secret) {
+      console.log(`[secrets-proxy] GitHub domain ${host}: intercepting with auth injection`);
+    } else {
+      console.warn(`[secrets-proxy] GitHub domain ${host}: no token found, passing through`);
+    }
+  }
+
   if (!secret) {
     const upstream = net.connect(port, host, () => {
       clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
@@ -307,6 +328,15 @@ async function handleHttpProxy(
     secret = null;
   }
 
+  // Debug logging for GitHub domain handling in HTTP proxy
+  if (GITHUB_DOMAINS.has(parsed.hostname)) {
+    if (secret) {
+      console.log(`[secrets-proxy] GitHub HTTP ${parsed.hostname}: intercepting with auth injection`);
+    } else {
+      console.warn(`[secrets-proxy] GitHub HTTP ${parsed.hostname}: no token found, passing through`);
+    }
+  }
+
   const outHeaders: Record<string, string | string[] | undefined> = {};
   for (const [key, value] of Object.entries(req.headers)) {
     if (key === 'proxy-connection' || key === 'proxy-authorization') continue;
@@ -347,10 +377,22 @@ async function handleHttpProxy(
 }
 
 /** Start the MITM secrets proxy server. */
-export async function startSecretsProxy(): Promise<void> {
+export async function startSecretsProxy(): Promise<http.Server> {
   const port = getProxyPort();
 
   server = http.createServer((req, res) => {
+    // Handle health check endpoint
+    if (req.url === '/health' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ 
+        status: 'ok', 
+        port: port,
+        timestamp: new Date().toISOString(),
+        github_domains: Array.from(GITHUB_DOMAINS)
+      }));
+      return;
+    }
+
     handleHttpProxy(req, res).catch((err) => {
       console.error(`[secrets-proxy] unhandled HTTP error: ${err}`);
       try { res.writeHead(500); res.end(); } catch { /* ignore */ }
@@ -368,10 +410,15 @@ export async function startSecretsProxy(): Promise<void> {
     console.error(`[secrets-proxy] server error: ${err.message}`);
   });
 
-  return new Promise<void>((resolve) => {
+  return new Promise<http.Server>((resolve, reject) => {
     server!.listen(port, '0.0.0.0', () => {
       console.log(`[secrets-proxy] MITM proxy listening on 0.0.0.0:${port}`);
-      resolve();
+      console.log(`[secrets-proxy] Health check available at http://0.0.0.0:${port}/health`);
+      resolve(server!);
+    });
+    
+    server!.on('error', (err) => {
+      reject(err);
     });
   });
 }
@@ -386,3 +433,39 @@ export function stopSecretsProxy(): void {
 
 /** Get the port the proxy is running on. */
 export { getProxyPort as getSecretsProxyPort };
+
+/** Check if the proxy server is healthy. */
+export async function isProxyHealthy(): Promise<boolean> {
+  if (!server || !server.listening) return false;
+  
+  const port = getProxyPort();
+  return new Promise<boolean>((resolve) => {
+    const req = http.get(`http://127.0.0.1:${port}/health`, (res) => {
+      resolve(res.statusCode === 200);
+    });
+    
+    req.on('error', () => resolve(false));
+    req.setTimeout(1000, () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+/** Get proxy server status. */
+export function getProxyStatus(): { running: boolean; port: number; address: string | null } {
+  if (!server || !server.listening) {
+    return { running: false, port: getProxyPort(), address: null };
+  }
+  
+  const address = server.address();
+  if (typeof address === 'string') {
+    return { running: true, port: getProxyPort(), address };
+  }
+  
+  return { 
+    running: true, 
+    port: address?.port || getProxyPort(), 
+    address: `${address?.address}:${address?.port}` 
+  };
+}

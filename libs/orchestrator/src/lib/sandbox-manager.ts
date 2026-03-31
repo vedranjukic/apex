@@ -332,10 +332,24 @@ export class SandboxManager extends EventEmitter {
       envVars["SSL_CERT_FILE"] = "/etc/ssl/certs/ca-certificates.crt";
       envVars["REQUESTS_CA_BUNDLE"] = "/etc/ssl/certs/ca-certificates.crt";
       envVars["CURL_CA_BUNDLE"] = "/etc/ssl/certs/ca-certificates.crt";
+      // Go-specific environment variables for CA certificate validation
+      // Go's crypto/tls package looks for certificates in these locations
+      envVars["GOFLAGS"] = "-insecure=false"; // Ensure TLS verification is enabled
+      envVars["GODEBUG"] = "x509ignoreCN=0"; // Enable proper certificate validation
+      envVars["CGO_ENABLED"] = "1"; // Enable CGO for proper certificate chain validation
+      // Additional CA bundle paths that Go applications may use
+      envVars["CA_BUNDLE"] = "/etc/ssl/certs/ca-certificates.crt";
+      envVars["CAFILE"] = "/etc/ssl/certs/ca-certificates.crt";
     }
 
-    if (this.config.githubToken) {
+    // Set GitHub token placeholder when secrets proxy is available
+    // This ensures `gh` CLI will use the proxy for authentication
+    if (this.config.githubToken || secretsProxyUrl) {
       envVars["GH_TOKEN"] = "gh-proxy-placeholder";
+      envVars["GITHUB_TOKEN"] = "gh-proxy-placeholder";
+      // Set additional GitHub-related environment variables that some tools expect
+      envVars["GIT_ASKPASS"] = "true"; // Disable interactive password prompts
+      envVars["GIT_TERMINAL_PROMPT"] = "0"; // Disable terminal prompts for Git
     }
 
     for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
@@ -1989,12 +2003,32 @@ export class SandboxManager extends EventEmitter {
           Buffer.from(this.config.secretsProxyCaCert),
           CA_CERT_PATH,
         );
-        await sandbox.process.executeCommand(
-          "sudo update-ca-certificates 2>/dev/null || true",
+        
+        // Install CA certificate with better error handling and verification
+        const caCertResult = await sandbox.process.executeCommand(
+          `sudo update-ca-certificates 2>&1 && echo "CA_UPDATE_SUCCESS"`,
         );
-        console.log(`[bridge:${sid}] CA cert installed`);
-      } catch {
-        console.log(`[bridge:${sid}] CA cert install failed (non-fatal)`);
+        const caCertOutput = (caCertResult.result ?? "").trim();
+        
+        if (caCertOutput.includes("CA_UPDATE_SUCCESS")) {
+          console.log(`[bridge:${sid}] CA cert installed successfully`);
+          
+          // Verify the certificate is in the system store
+          const verifyResult = await sandbox.process.executeCommand(
+            `grep -l "Apex Proxy CA" /etc/ssl/certs/*.pem 2>/dev/null || echo "NOT_FOUND"`,
+          );
+          const verifyOutput = (verifyResult.result ?? "").trim();
+          
+          if (verifyOutput === "NOT_FOUND") {
+            console.warn(`[bridge:${sid}] CA cert not found in system store after installation`);
+          } else {
+            console.log(`[bridge:${sid}] CA cert verified in system store`);
+          }
+        } else {
+          console.error(`[bridge:${sid}] CA cert update failed: ${caCertOutput}`);
+        }
+      } catch (error) {
+        console.error(`[bridge:${sid}] CA cert install failed: ${error}`);
       }
     }
 
@@ -2300,9 +2334,35 @@ export class SandboxManager extends EventEmitter {
 
     // ── Exec 3: Update CA certs if needed (parallel, containers only) ──
     const caCertTask = (this.config.secretsProxyCaCert && secretsProxyUrl && this.config.provider !== "local")
-      ? writeInfraTask.then(() =>
-          sandbox.process.executeCommand("sudo update-ca-certificates 2>/dev/null || true"),
-        ).then(() => log("CA cert updated"))
+      ? writeInfraTask.then(async () => {
+          try {
+            // Install CA certificate with better error handling and verification
+            const caCertResult = await sandbox.process.executeCommand(
+              `sudo update-ca-certificates 2>&1 && echo "CA_UPDATE_SUCCESS"`,
+            );
+            const caCertOutput = (caCertResult.result ?? "").trim();
+            
+            if (caCertOutput.includes("CA_UPDATE_SUCCESS")) {
+              log("CA cert installed successfully");
+              
+              // Verify the certificate is in the system store
+              const verifyResult = await sandbox.process.executeCommand(
+                `grep -l "Apex Proxy CA" /etc/ssl/certs/*.pem 2>/dev/null || echo "NOT_FOUND"`,
+              );
+              const verifyOutput = (verifyResult.result ?? "").trim();
+              
+              if (verifyOutput === "NOT_FOUND") {
+                console.warn(`[install:${sandbox.id.slice(0, 8)}] CA cert not found in system store after installation`);
+              } else {
+                log("CA cert verified in system store");
+              }
+            } else {
+              console.error(`[install:${sandbox.id.slice(0, 8)}] CA cert update failed: ${caCertOutput}`);
+            }
+          } catch (error) {
+            console.error(`[install:${sandbox.id.slice(0, 8)}] CA cert install failed: ${error}`);
+          }
+        })
       : Promise.resolve();
 
     await Promise.all([writeInfraTask, gitTask, caCertTask]);
