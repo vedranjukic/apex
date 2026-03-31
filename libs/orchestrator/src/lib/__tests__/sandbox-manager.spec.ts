@@ -139,7 +139,7 @@ describe('SandboxManager - GitHub CLI Environment Setup', () => {
   });
 
   describe('Local provider handling', () => {
-    it('should not set proxy environment variables for local provider', () => {
+    it('should set environment variables for local provider', () => {
       const manager = new SandboxManager({
         provider: 'local',
         baseUrl: 'http://localhost:3000',
@@ -152,7 +152,7 @@ describe('SandboxManager - GitHub CLI Environment Setup', () => {
         disableCache: false,
         proxyPort: 3001,
         proxyAuthToken: 'test-proxy-token',
-        proxyBaseUrl: 'http://proxy.example.com',
+        proxyBaseUrl: 'http://localhost:3000',
         agentType: 'build',
         modelChoices: {},
         allowedModels: [],
@@ -161,8 +161,11 @@ describe('SandboxManager - GitHub CLI Environment Setup', () => {
 
       const envVars = manager['buildContainerEnvVars']();
 
-      // Local provider should not have proxy settings
-      expect(envVars).toEqual({});
+      // Local provider should still have proxy settings configured
+      expect(envVars['HTTPS_PROXY']).toContain(':3001');
+      expect(envVars['GH_TOKEN']).toBe('gh-proxy-placeholder');
+      expect(envVars['GITHUB_TOKEN']).toBe('gh-proxy-placeholder');
+      expect(envVars['GOFLAGS']).toBe('-insecure=false');
     });
   });
 });

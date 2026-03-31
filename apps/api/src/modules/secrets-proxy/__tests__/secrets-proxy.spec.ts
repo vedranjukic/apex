@@ -1,19 +1,31 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi, beforeEach } from 'vitest';
 import * as http from 'http';
 import * as net from 'net';
-import { secretsService } from '../../secrets/secrets.service';
-import { settingsService } from '../../settings/settings.service';
-import { startSecretsProxy, stopSecretsProxy } from '../secrets-proxy';
 
-// Mock the services
-vi.mock('../../secrets/secrets.service');
-vi.mock('../../settings/settings.service');
+// Mock all the modules before importing
+vi.mock('../../secrets/secrets.service', () => ({
+  secretsService: {
+    findByDomain: vi.fn().mockResolvedValue([]),
+  }
+}));
+
+vi.mock('../../settings/settings.service', () => ({
+  settingsService: {
+    get: vi.fn().mockResolvedValue(null),
+  }
+}));
+
 vi.mock('../ca-manager', () => ({
   generateDomainCert: vi.fn(() => ({
     cert: 'mock-cert',
     key: 'mock-key',
   })),
 }));
+
+// Now import the modules
+const { secretsService } = await import('../../secrets/secrets.service');
+const { settingsService } = await import('../../settings/settings.service');
+const { startSecretsProxy, stopSecretsProxy } = await import('../secrets-proxy');
 
 describe('Secrets Proxy', () => {
   let proxyPort: number;

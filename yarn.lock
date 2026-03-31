@@ -10,20 +10,20 @@
     ansi-styles "^6.2.1"
     is-fullwidth-code-point "^4.0.0"
 
-"@apex/api-e2e@file:/home/daytona/daytona-llm-proxy-sandbox-creation-fails/apps/api-e2e":
+"@apex/api-e2e@file:/home/daytona/github-cli-gh-fails-to-authenticate-thro/apps/api-e2e":
   version "0.0.1"
   resolved "file:apps/api-e2e"
   dependencies:
     dotenv "^16.4.5"
 
-"@apex/api@file:/home/daytona/daytona-llm-proxy-sandbox-creation-fails/apps/api":
+"@apex/api@file:/home/daytona/github-cli-gh-fails-to-authenticate-thro/apps/api":
   version "0.0.1"
   resolved "file:apps/api"
   dependencies:
     drizzle-orm "*"
     elysia "*"
 
-"@apex/cli@file:/home/daytona/daytona-llm-proxy-sandbox-creation-fails/apps/cli":
+"@apex/cli@file:/home/daytona/github-cli-gh-fails-to-authenticate-thro/apps/cli":
   version "0.1.0"
   resolved "file:apps/cli"
   dependencies:
@@ -45,28 +45,28 @@
     terminal-kit "^3.1.2"
     ws "^8.16.0"
 
-"@apex/dashboard-e2e@file:/home/daytona/daytona-llm-proxy-sandbox-creation-fails/apps/dashboard-e2e":
+"@apex/dashboard-e2e@file:/home/daytona/github-cli-gh-fails-to-authenticate-thro/apps/dashboard-e2e":
   version "0.0.1"
   resolved "file:apps/dashboard-e2e"
 
-"@apex/dashboard@file:/home/daytona/daytona-llm-proxy-sandbox-creation-fails/apps/dashboard":
+"@apex/dashboard@file:/home/daytona/github-cli-gh-fails-to-authenticate-thro/apps/dashboard":
   version "0.0.1"
   resolved "file:apps/dashboard"
 
-"@apex/desktop@file:/home/daytona/daytona-llm-proxy-sandbox-creation-fails/apps/desktop":
+"@apex/desktop@file:/home/daytona/github-cli-gh-fails-to-authenticate-thro/apps/desktop":
   version "0.0.1"
   resolved "file:apps/desktop"
   dependencies:
     electrobun latest
 
-"@apex/orchestrator@file:/home/daytona/daytona-llm-proxy-sandbox-creation-fails/libs/orchestrator":
+"@apex/orchestrator@file:/home/daytona/github-cli-gh-fails-to-authenticate-thro/libs/orchestrator":
   version "0.0.1"
   resolved "file:libs/orchestrator"
   dependencies:
     dockerode "^4.0.7"
     tslib "^2.3.0"
 
-"@apex/shared@file:/home/daytona/daytona-llm-proxy-sandbox-creation-fails/libs/shared":
+"@apex/shared@file:/home/daytona/github-cli-gh-fails-to-authenticate-thro/libs/shared":
   version "0.0.1"
   resolved "file:libs/shared"
   dependencies:
