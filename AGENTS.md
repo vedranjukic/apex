@@ -73,7 +73,7 @@ LLM provider keys (Anthropic, OpenAI) never enter sandbox containers. For local 
 
 ## Secrets Proxy (MITM)
 
-User-defined API key secrets (Stripe, Twilio, etc.) are managed via a transparent MITM HTTPS proxy. Secret values are stored server-side and **never enter containers**. A forward proxy on port 6001 intercepts outbound HTTPS traffic from containers, and for domains with configured secrets, terminates TLS with a dynamic certificate (signed by an auto-generated CA), injects the real auth header, and forwards to the upstream. Non-secret domains pass through as transparent tunnels.
+User-defined API key secrets (Stripe, Twilio, etc.) are managed via a transparent MITM HTTPS proxy. Secret values are stored server-side and **never enter containers**. A forward proxy on port 3001 intercepts outbound HTTPS traffic from containers, and for domains with configured secrets, terminates TLS with a dynamic certificate (signed by an auto-generated CA), injects the real auth header, and forwards to the upstream. Non-secret domains pass through as transparent tunnels.
 
 Containers get `HTTPS_PROXY`/`HTTP_PROXY` env vars pointing at the proxy, the CA cert in the system trust store, and placeholder env vars (e.g. `STRIPE_KEY=sk-proxy-placeholder`) so SDKs can initialize. The agent can discover secret names (never values) via the `list_secrets` MCP tool.
 

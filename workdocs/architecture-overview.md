@@ -241,7 +241,7 @@ User-defined API key secrets (Stripe, Twilio, etc.) are stored server-side and *
 ```
 Container app → CONNECT api.stripe.com:443 via HTTPS_PROXY
                             ↓
-              MITM Proxy (secrets-proxy.ts, port 6001)
+               MITM Proxy (secrets-proxy.ts, port 3001)
                             ↓
               Looks up domain in secrets DB → match found
                             ↓
@@ -255,7 +255,7 @@ Container app → CONNECT api.stripe.com:443 via HTTPS_PROXY
 For domains **without** secrets, the proxy acts as a transparent TCP tunnel (no interception, no certificate).
 
 Containers receive:
-- `HTTPS_PROXY` / `HTTP_PROXY` pointing to the proxy (e.g. `http://<host-lan-ip>:6001`)
+- `HTTPS_PROXY` / `HTTP_PROXY` pointing to the proxy (e.g. `http://<host-lan-ip>:3001`)
 - `NO_PROXY=localhost,127.0.0.1,0.0.0.0` so local traffic skips the proxy
 - Custom CA certificate installed in the system trust store (`update-ca-certificates`)
 - `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` for per-runtime CA trust
@@ -465,7 +465,7 @@ apps/api/src/modules/preview/preview.routes.ts             – HTTP reverse prox
 apps/api/src/modules/preview/port-forwarder.ts             – TCP port forwarding for local sandboxes (desktop app)
 apps/api/src/modules/secrets/secrets.service.ts            – Secrets CRUD + domain lookup
 apps/api/src/modules/secrets/secrets.routes.ts             – Secrets REST API (/api/secrets)
-apps/api/src/modules/secrets-proxy/secrets-proxy.ts        – MITM HTTPS proxy (port 6001)
+apps/api/src/modules/secrets-proxy/secrets-proxy.ts        – MITM HTTPS proxy (port 3001)
 apps/api/src/modules/secrets-proxy/ca-manager.ts           – CA cert generation + per-domain cert caching
 apps/dashboard/src/hooks/use-file-tree-socket.ts          – Socket.io hook for file explorer (list, CRUD, read, write)
 apps/dashboard/src/components/layout/project-status-bar.tsx – Bottom status bar (project name, git branch picker, sync status)
