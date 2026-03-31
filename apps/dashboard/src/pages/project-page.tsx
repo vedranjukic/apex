@@ -22,6 +22,7 @@ import { useProjectCommands } from '../hooks/use-project-commands';
 import { useEditorStore, type CodeSelection } from '../stores/editor-store';
 import type { ImageAttachment } from '../components/agent/prompt-input';
 import { useAgentSettingsStore, type AgentTypeId } from '../stores/agent-settings-store';
+import { useProjectAgentSettingsStore } from '../stores/project-agent-settings-store';
 import { useTerminalStore } from '../stores/terminal-store';
 import { usePortsStore } from '../stores/ports-store';
 import { useGitStore } from '../stores/git-store';
@@ -133,9 +134,12 @@ export function ProjectPage() {
       });
 
       const imagePayloads = images?.map((img) => img.source);
-      sendPrompt(threadId, fullPrompt, mode, model, agentType, imagePayloads);
+      const storeSettings = projectId ? useProjectAgentSettingsStore.getState().settings[projectId] : undefined;
+      const agentSettings = storeSettings ?? undefined;
+      const hasSettings = agentSettings && (agentSettings.maxTokens || agentSettings.reasoningEffort || agentSettings.maxSteps);
+      sendPrompt(threadId, fullPrompt, mode, model, agentType, imagePayloads, hasSettings ? agentSettings : undefined);
     },
-    [sendPrompt, addMessage],
+    [sendPrompt, addMessage, projectId],
   );
 
   useProjectCommands({

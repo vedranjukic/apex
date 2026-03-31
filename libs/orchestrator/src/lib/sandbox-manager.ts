@@ -613,6 +613,7 @@ export class SandboxManager extends EventEmitter {
     agent?: string,
     forceRestart?: boolean,
     images?: { type: 'base64'; media_type: string; data: string }[],
+    agentSettings?: Record<string, unknown>,
   ): Promise<void> {
     const session = await this.ensureConnected(sandboxId);
     const effectiveAgent = agent || (mode === 'plan' ? 'plan' : 'build');
@@ -626,6 +627,7 @@ export class SandboxManager extends EventEmitter {
         model: model || undefined,
         forceRestart: forceRestart || undefined,
         images: images && images.length > 0 ? images : undefined,
+        agentSettings: agentSettings || undefined,
       }),
     );
     session.status = "running";
@@ -1405,20 +1407,64 @@ export class SandboxManager extends EventEmitter {
    * Markdown agent file for sisyphus. Placed in .opencode/agents/sisyphus.md
    * so it has higher precedence than any project-level opencode.json config.
    */
-  private static readonly SISYPHUS_AGENT_MD = [
-    "---",
-    "description: Orchestration agent for complex multi-step tasks",
-    "mode: primary",
-    "model: anthropic/claude-sonnet-4-20250514",
-    "steps: 50",
-    "permission:",
-    "  edit: allow",
-    "  bash: allow",
-    "  webfetch: allow",
-    "---",
-    "",
-    ...SandboxManager.SISYPHUS_PROMPT.split("\n"),
-  ].join("\n");
+  private static buildSisyphusAgentMd(steps: number, maxTokens?: number, reasoningEffort?: string): string {
+    const lines = [
+      "---",
+      "description: Orchestration agent for complex multi-step tasks",
+      "mode: primary",
+      "model: anthropic/claude-sonnet-4-20250514",
+      `steps: ${steps}`,
+      ...(maxTokens ? [`maxTokens: ${maxTokens}`] : []),
+      ...(reasoningEffort ? [`reasoningEffort: ${reasoningEffort}`] : []),
+      "permission:",
+      "  edit: allow",
+      "  bash: allow",
+      "  webfetch: allow",
+      "---",
+      "",
+      ...SandboxManager.SISYPHUS_PROMPT.split("\n"),
+    ];
+    return lines.join("\n");
+  }
+
+  private static readonly VALID_REASONING_EFFORTS = new Set(["low", "medium", "high"]);
+
+  /** Read agent-limit settings from process.env (populated by settings service). */
+  private static readAgentLimits() {
+    const parseInt_ = (v: string | undefined) => {
+      const n = parseInt(v || "", 10);
+      return Number.isFinite(n) && n > 0 ? n : undefined;
+    };
+    const parseEffort = (v: string | undefined) => {
+      const s = (v || "").trim().toLowerCase();
+      return SandboxManager.VALID_REASONING_EFFORTS.has(s) ? s : undefined;
+    };
+
+    return {
+      globalMaxTokens: parseInt_(process.env.AGENT_MAX_TOKENS),
+      build: {
+        maxTokens: parseInt_(process.env.AGENT_BUILD_MAX_TOKENS),
+        reasoningEffort: parseEffort(process.env.AGENT_BUILD_REASONING_EFFORT),
+      },
+      plan: {
+        maxTokens: parseInt_(process.env.AGENT_PLAN_MAX_TOKENS),
+        reasoningEffort: parseEffort(process.env.AGENT_PLAN_REASONING_EFFORT),
+      },
+      sisyphus: {
+        maxSteps: parseInt_(process.env.AGENT_SISYPHUS_MAX_STEPS) ?? 50,
+        maxTokens: parseInt_(process.env.AGENT_SISYPHUS_MAX_TOKENS),
+        reasoningEffort: parseEffort(process.env.AGENT_SISYPHUS_REASONING_EFFORT),
+      },
+    };
+  }
+
+  private static agentTokenOpts(maxTokens?: number): Record<string, unknown> {
+    return maxTokens ? { maxTokens } : {};
+  }
+
+  private static agentReasoningOpts(reasoningEffort?: string): Record<string, unknown> {
+    return reasoningEffort ? { reasoningEffort } : {};
+  }
 
   private static buildSandboxInstructions(projectDir: string, isLocal: boolean): string {
     return [
@@ -1879,6 +1925,9 @@ export class SandboxManager extends EventEmitter {
     const useProxy = !!proxyBase;
     const homeDir = this.config.provider === "local" ? os.homedir() : HOME_DIR;
 
+    // Read agent-limit settings from env (set by settings service)
+    const agentLimits = SandboxManager.readAgentLimits();
+
     // Write opencode.json (always overwrite to keep config in sync)
     {
       // GPT-5.2 only supports "medium" for both reasoningEffort and textVerbosity (OpenCode bug #9969)
@@ -1899,6 +1948,7 @@ export class SandboxManager extends EventEmitter {
       $schema: "https://opencode.ai/config.json",
       model: "anthropic/claude-sonnet-4-20250514",
       default_agent: "build",
+      ...(agentLimits.globalMaxTokens ? { maxTokens: agentLimits.globalMaxTokens } : {}),
       provider: {
         ...(useProxy ? {
           anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
@@ -1918,12 +1968,16 @@ export class SandboxManager extends EventEmitter {
           mode: "primary",
           prompt: `{file:${homeDir}/AGENTS.md}`,
           tools: { question: false },
+          ...SandboxManager.agentTokenOpts(agentLimits.build.maxTokens ?? agentLimits.globalMaxTokens),
+          ...SandboxManager.agentReasoningOpts(agentLimits.build.reasoningEffort),
           permission: { "*": { "*": "allow" } },
         },
         plan: {
           description: "Analysis and planning without making changes",
           mode: "primary",
           tools: { write: false, edit: false, bash: false, question: false },
+          ...SandboxManager.agentTokenOpts(agentLimits.plan.maxTokens ?? agentLimits.globalMaxTokens),
+          ...SandboxManager.agentReasoningOpts(agentLimits.plan.reasoningEffort),
           permission: { "*": { "*": "allow" } },
         },
         sisyphus: {
@@ -1932,7 +1986,9 @@ export class SandboxManager extends EventEmitter {
           model: "anthropic/claude-sonnet-4-20250514",
           prompt: SandboxManager.SISYPHUS_PROMPT,
           tools: { question: false },
-          steps: 50,
+          steps: agentLimits.sisyphus.maxSteps,
+          ...SandboxManager.agentTokenOpts(agentLimits.sisyphus.maxTokens ?? agentLimits.globalMaxTokens),
+          ...SandboxManager.agentReasoningOpts(agentLimits.sisyphus.reasoningEffort),
           permission: { "*": { "*": "allow" } },
         },
       },
@@ -1963,7 +2019,11 @@ export class SandboxManager extends EventEmitter {
           `${ocConfigDir}/opencode.json`,
         ),
         sandbox.fs.uploadFile(
-          Buffer.from(SandboxManager.SISYPHUS_AGENT_MD),
+          Buffer.from(SandboxManager.buildSisyphusAgentMd(
+            agentLimits.sisyphus.maxSteps,
+            agentLimits.sisyphus.maxTokens ?? agentLimits.globalMaxTokens,
+            agentLimits.sisyphus.reasoningEffort,
+          )),
           `${ocConfigDir}/agents/sisyphus.md`,
         ),
         sandbox.fs.uploadFile(
@@ -2149,6 +2209,9 @@ export class SandboxManager extends EventEmitter {
 
     const sandboxInstructions = SandboxManager.buildSandboxInstructions(projectDir, isLocalProvider);
 
+    // Read agent-limit settings from env (set by settings service)
+    const agentLimitsI = SandboxManager.readAgentLimits();
+
     // GPT-5.2 only supports "medium" for both reasoningEffort and textVerbosity (OpenCode bug #9969)
     const gpt52OptsI = { reasoningEffort: "medium", textVerbosity: "medium" };
     const gpt52VariantI = { reasoningEffort: "medium", textVerbosity: "medium" };
@@ -2167,6 +2230,7 @@ export class SandboxManager extends EventEmitter {
       $schema: "https://opencode.ai/config.json",
       model: "anthropic/claude-sonnet-4-20250514",
       default_agent: "build",
+      ...(agentLimitsI.globalMaxTokens ? { maxTokens: agentLimitsI.globalMaxTokens } : {}),
       provider: {
         ...(useProxyI ? {
           anthropic: { options: { baseURL: "{env:ANTHROPIC_BASE_URL}" } },
@@ -2186,12 +2250,16 @@ export class SandboxManager extends EventEmitter {
           mode: "primary",
           prompt: `{file:${homeDir}/AGENTS.md}`,
           tools: { question: false },
+          ...SandboxManager.agentTokenOpts(agentLimitsI.build.maxTokens ?? agentLimitsI.globalMaxTokens),
+          ...SandboxManager.agentReasoningOpts(agentLimitsI.build.reasoningEffort),
           permission: { "*": { "*": "allow" } },
         },
         plan: {
           description: "Analysis and planning without making changes",
           mode: "primary",
           tools: { write: false, edit: false, bash: false, question: false },
+          ...SandboxManager.agentTokenOpts(agentLimitsI.plan.maxTokens ?? agentLimitsI.globalMaxTokens),
+          ...SandboxManager.agentReasoningOpts(agentLimitsI.plan.reasoningEffort),
           permission: { "*": { "*": "allow" } },
         },
         sisyphus: {
@@ -2200,7 +2268,9 @@ export class SandboxManager extends EventEmitter {
           model: "anthropic/claude-sonnet-4-20250514",
           prompt: SandboxManager.SISYPHUS_PROMPT,
           tools: { question: false },
-          steps: 50,
+          steps: agentLimitsI.sisyphus.maxSteps,
+          ...SandboxManager.agentTokenOpts(agentLimitsI.sisyphus.maxTokens ?? agentLimitsI.globalMaxTokens),
+          ...SandboxManager.agentReasoningOpts(agentLimitsI.sisyphus.reasoningEffort),
           permission: { "*": { "*": "allow" } },
         },
       },
@@ -2240,7 +2310,11 @@ export class SandboxManager extends EventEmitter {
     ];
     const configFiles: { path: string; content: string }[] = [
       { path: `${ocConfigDir}/opencode.json`, content: JSON.stringify(openCodeConfig) },
-      { path: `${ocConfigDir}/agents/sisyphus.md`, content: SandboxManager.SISYPHUS_AGENT_MD },
+      { path: `${ocConfigDir}/agents/sisyphus.md`, content: SandboxManager.buildSisyphusAgentMd(
+        agentLimitsI.sisyphus.maxSteps,
+        agentLimitsI.sisyphus.maxTokens ?? agentLimitsI.globalMaxTokens,
+        agentLimitsI.sisyphus.reasoningEffort,
+      ) },
     ];
     const skipIfExistsFiles: { path: string; content: string }[] = [
       { path: `${homeDir}/AGENTS.md`, content: sandboxInstructions },

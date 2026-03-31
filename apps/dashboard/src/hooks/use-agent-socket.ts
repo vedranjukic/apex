@@ -199,12 +199,12 @@ export function useAgentSocket(projectId: string | undefined) {
   }, [projectId, addMessage, updateThreadStatus, setThreadSessionInfo]);
 
   const sendPrompt = useCallback(
-    (threadId: string, prompt: string, mode?: string, model?: string, agentType?: string, images?: { type: 'base64'; media_type: string; data: string }[]) => {
+    (threadId: string, prompt: string, mode?: string, model?: string, agentType?: string, images?: { type: 'base64'; media_type: string; data: string }[], agentSettings?: Record<string, unknown>) => {
       if (mode === 'plan') {
         usePlanStore.getState().markThreadAsPlan(threadId);
         planTextRef.current.delete(threadId);
       }
-      wsRef.current?.send('send_prompt', { threadId, prompt, mode, model, agentType, images });
+      wsRef.current?.send('send_prompt', { threadId, prompt, mode, model, agentType, images, agentSettings });
     },
     [],
   );

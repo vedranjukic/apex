@@ -389,7 +389,7 @@ function handleSSEEvent(evType, data) {
 }
 
 // ── Bridge core ──────────────────────────────────────
-async function sendPrompt(threadId, prompt, agent, model, sessionId, images) {
+async function sendPrompt(threadId, prompt, agent, model, sessionId, images, agentSettings) {
   const ocAgent = agent || "build";
   const ocModel = model || "";
   log("\\u{1F916}", "Sending prompt thread=" + threadId + " agent=" + ocAgent + " model=" + (ocModel || "default") + " storedSession=" + (sessionId || "none"));
@@ -482,6 +482,26 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images) {
     }
   }
   parts.push({ type: "text", text: prompt });
+
+  if (agentSettings && typeof agentSettings === "object") {
+    var cfgPatch = {};
+    var ap = {};
+    if (agentSettings.maxTokens) ap.maxTokens = agentSettings.maxTokens;
+    if (agentSettings.reasoningEffort) ap.reasoningEffort = agentSettings.reasoningEffort;
+    if (ap.maxTokens || ap.reasoningEffort) {
+      cfgPatch.agent = {
+        build: Object.assign({}, ap),
+        plan: Object.assign({}, ap),
+        sisyphus: Object.assign({}, ap, agentSettings.maxSteps ? { steps: agentSettings.maxSteps } : {})
+      };
+    } else if (agentSettings.maxSteps) {
+      cfgPatch.agent = { sisyphus: { steps: agentSettings.maxSteps } };
+    }
+    if (Object.keys(cfgPatch).length > 0) {
+      log("\\u{2699}", "PATCH /config with agent overrides: " + JSON.stringify(cfgPatch));
+      try { await ocFetch("PATCH", "/config", cfgPatch, 10000); } catch (pe) { log("\\u{26A0}", "PATCH /config failed: " + (pe.message || pe)); }
+    }
+  }
 
   await ocFetch("POST", "/session/" + ocSessionId + "/prompt_async", {
     parts: parts,
@@ -756,7 +776,7 @@ async function handleStartAgent(msg) {
   }
   try {
     await ensureOpenCodeHealthy();
-    await sendPrompt(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId, msg.images);
+    await sendPrompt(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId, msg.images, msg.agentSettings);
   } catch (e) {
     log("\\u{26A0}", "First attempt failed: " + (e.message || String(e)) + ", retrying after restart...");
     try {
@@ -767,7 +787,7 @@ async function handleStartAgent(msg) {
         throw new Error("OpenCode serve not healthy after restart (" + diag + ")");
       }
       threadToSession.delete(threadId);
-      await sendPrompt(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId, msg.images);
+      await sendPrompt(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId, msg.images, msg.agentSettings);
     } catch (retryErr) {
       emitAgentError(threadId, retryErr.message || String(retryErr));
     }

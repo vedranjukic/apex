@@ -300,6 +300,7 @@ function contextFileHint(filePath: string): string {
 async function executeAgainstSandbox(
   client: WsClient, threadId: string, prompt: string, mode?: string, model?: string,
   images?: { type: 'base64'; media_type: string; data: string }[],
+  agentSettings?: Record<string, unknown>,
 ) {
   const thread = await threadsService.findById(threadId);
   const project = await projectsService.findById(thread.projectId);
@@ -586,7 +587,7 @@ async function executeAgainstSandbox(
       });
     }
     await Promise.race([
-      manager.sendPrompt(project.sandboxId, effectivePrompt, threadId, thread.claudeSessionId, mode, model, effectiveAgentType as string, undefined, images),
+      manager.sendPrompt(project.sandboxId, effectivePrompt, threadId, thread.claudeSessionId, mode, model, effectiveAgentType as string, undefined, images, agentSettings),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timed out connecting to sandbox')), SEND_TIMEOUT_MS)),
     ]);
     emitTo(client, 'prompt_accepted', { threadId });
@@ -645,7 +646,7 @@ async function handleMessage(client: WsClient, message: unknown) {
         break;
       }
       case 'send_prompt': {
-        const { threadId, prompt, mode, model, agentType, images } = payload;
+        const { threadId, prompt, mode, model, agentType, images, agentSettings } = payload;
         if (mode) await threadsService.updateMode(threadId, mode);
         if (agentType) await threadsService.updateAgentType(threadId, agentType);
         if (model !== undefined) await threadsService.updateModel(threadId, model);
@@ -659,7 +660,7 @@ async function handleMessage(client: WsClient, message: unknown) {
         contentBlocks.push({ type: 'text', text: prompt });
         await threadsService.addMessage(threadId, { role: 'user', content: contentBlocks });
 
-        await executeAgainstSandbox(client, threadId, prompt, mode, model, images);
+        await executeAgainstSandbox(client, threadId, prompt, mode, model, images, agentSettings);
         break;
       }
       case 'execute_thread': {

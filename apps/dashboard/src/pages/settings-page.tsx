@@ -177,6 +177,69 @@ const FIELD_GROUPS: FieldGroup[] = [
       },
     ],
   },
+  {
+    title: "Agent Limits",
+    description:
+      "Tune per-agent output and reasoning limits. Changes apply to newly created sandboxes (or after sandbox restart).",
+    fields: [
+      {
+        key: "AGENT_MAX_TOKENS",
+        label: "Global Max Output Tokens",
+        type: "text",
+        placeholder: "Auto (provider default)",
+        help: "Default max output tokens for all agents. Lower this if you hit context-length errors (e.g. 16000). Per-agent values below override this.",
+      },
+      {
+        key: "AGENT_BUILD_MAX_TOKENS",
+        label: "Build — Max Output Tokens",
+        type: "text",
+        placeholder: "Inherit global",
+        help: "Max output tokens for the Build agent. Typical: 8000–32000.",
+      },
+      {
+        key: "AGENT_BUILD_REASONING_EFFORT",
+        label: "Build — Reasoning Effort",
+        type: "text",
+        placeholder: "Auto",
+        help: "Extended thinking effort for Build (low / medium / high). Applies to Opus, o-series, and other reasoning models.",
+      },
+      {
+        key: "AGENT_PLAN_MAX_TOKENS",
+        label: "Plan — Max Output Tokens",
+        type: "text",
+        placeholder: "Inherit global",
+        help: "Max output tokens for the Plan agent. Typical: 8000–32000.",
+      },
+      {
+        key: "AGENT_PLAN_REASONING_EFFORT",
+        label: "Plan — Reasoning Effort",
+        type: "text",
+        placeholder: "Auto",
+        help: "Extended thinking effort for Plan (low / medium / high).",
+      },
+      {
+        key: "AGENT_SISYPHUS_MAX_STEPS",
+        label: "Sisyphus — Max Steps",
+        type: "text",
+        placeholder: "50",
+        help: "Maximum tool-use steps the Sisyphus orchestration agent can take per prompt. Default: 50.",
+      },
+      {
+        key: "AGENT_SISYPHUS_MAX_TOKENS",
+        label: "Sisyphus — Max Output Tokens",
+        type: "text",
+        placeholder: "Inherit global",
+        help: "Max output tokens for the Sisyphus agent. Typical: 8000–32000.",
+      },
+      {
+        key: "AGENT_SISYPHUS_REASONING_EFFORT",
+        label: "Sisyphus — Reasoning Effort",
+        type: "text",
+        placeholder: "Auto",
+        help: "Extended thinking effort for Sisyphus (low / medium / high).",
+      },
+    ],
+  },
 ];
 
 type Status = "idle" | "saving" | "saved" | "error";
