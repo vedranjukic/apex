@@ -29,7 +29,7 @@ export function TourTooltip({
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null);
   const [doNotShow, setDoNotShow] = useState(false);
-  const dismissStep = useTourStore((s) => s.dismissStep);
+  const dismissAll = useTourStore((s) => s.dismissAll);
 
   const updatePosition = useCallback(() => {
     const target = targetRef.current;
@@ -92,7 +92,7 @@ export function TourTooltip({
   }, [updatePosition, targetRef]);
 
   const handleDismiss = () => {
-    if (doNotShow) dismissStep(stepId);
+    if (doNotShow) dismissAll();
     onDismiss?.();
   };
 
