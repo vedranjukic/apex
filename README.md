@@ -151,8 +151,8 @@ For local sandboxes: Docker installed, or macOS 26+ for Apple Container.
 ### Prerequisites
 
 - **Node.js** >= 18
+- **Bun** >= 1.0 (for the CLI)
 - **npm** >= 9
-- **Go** >= 1.21 (for the CLI)
 - An API key for your model provider (Anthropic, OpenAI, or use free OpenCode Zen models)
 - For cloud sandboxes: a [Daytona](https://www.daytona.io/) account with API access
 - For local sandboxes: Docker installed
@@ -187,13 +187,19 @@ npm run serve:api        # API on http://localhost:6000
 npm run serve:dashboard  # Dashboard on http://localhost:4200
 ```
 
-### Building the CLI
+### Using the CLI
 
 ```bash
+# Quick access from workspace root
+yarn cli --help
+yarn cli configure
+yarn cli project list
+yarn cli run "Create a hello world app"
+
+# Or build binaries
 cd apps/cli
-./scripts/build.sh              # all platforms → bin/
-./scripts/build.sh darwin-arm64 # single target
-./bin/apex-darwin-arm64 --help
+./scripts/build.sh              # all platforms → dist/
+./dist/apex-darwin-arm64 --help
 ```
 
 ## Project Structure
