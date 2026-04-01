@@ -43,7 +43,11 @@ async function bootstrap() {
   await usersService.init();
   await threadsService.init();
   await initCA();
-  await startSecretsProxy();
+  try {
+    await startSecretsProxy();
+  } catch (err) {
+    console.warn(`[secrets-proxy] Could not start proxy: ${(err as Error).message}. API will continue without secrets proxy.`);
+  }
   await projectsService.init();
   projectsService.registerAutoStartHandler(autoExecuteThread);
 

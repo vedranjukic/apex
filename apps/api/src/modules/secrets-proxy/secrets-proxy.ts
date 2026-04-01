@@ -364,11 +364,16 @@ export async function startSecretsProxy(): Promise<void> {
     });
   });
 
-  server.on('error', (err) => {
-    console.error(`[secrets-proxy] server error: ${err.message}`);
-  });
+  return new Promise<void>((resolve, reject) => {
+    server!.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        server = null;
+        reject(new Error(`Port ${port} is already in use`));
+      } else {
+        console.error(`[secrets-proxy] server error: ${err.message}`);
+      }
+    });
 
-  return new Promise<void>((resolve) => {
     server!.listen(port, '0.0.0.0', () => {
       console.log(`[secrets-proxy] MITM proxy listening on 0.0.0.0:${port}`);
       resolve();
