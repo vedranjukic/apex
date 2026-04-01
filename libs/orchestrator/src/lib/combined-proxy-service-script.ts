@@ -34,6 +34,7 @@ const tls = require("tls");
 const crypto = require("crypto");
 const { URL } = require("url");
 const WebSocket = require("ws");
+const forge = require("node-forge");
 
 // Configuration
 const LLM_PORT = Number(process.env.PROXY_PORT || ${llmPort});
@@ -142,23 +143,54 @@ function buildAuthHeader(secret) {
   return { name: 'authorization', value: \`Bearer \${secret.value}\` };
 }
 
-// Generate domain certificate - simplified approach for this environment
+// Parse CA cert/key once at startup
+let caCert = null;
+let caKey = null;
+if (CA_CERT_PEM && CA_KEY_PEM) {
+  try {
+    caCert = forge.pki.certificateFromPem(CA_CERT_PEM);
+    caKey = forge.pki.privateKeyFromPem(CA_KEY_PEM);
+    console.log("[combined-proxy] CA certificate loaded for MITM cert generation");
+  } catch (e) {
+    console.error("[combined-proxy] Failed to parse CA cert/key:", e.message);
+  }
+}
+
 function generateDomainCert(domain) {
   const cached = domainCertCache.get(domain);
   if (cached) return cached;
   
-  if (!CA_CERT_PEM || !CA_KEY_PEM) {
+  if (!caCert || !caKey) {
     throw new Error("CA certificate/key not available");
   }
   
-  // For this implementation, reuse the CA cert as domain cert
-  // This works because the client already trusts the CA
+  const keys = forge.pki.rsa.generateKeyPair(2048);
+  const cert = forge.pki.createCertificate();
+  
+  cert.publicKey = keys.publicKey;
+  cert.serialNumber = Date.now().toString(16);
+  cert.validity.notBefore = new Date();
+  cert.validity.notAfter = new Date();
+  cert.validity.notAfter.setFullYear(cert.validity.notAfter.getFullYear() + 1);
+  
+  cert.setSubject([{ name: "commonName", value: domain }]);
+  cert.setIssuer(caCert.subject.attributes);
+  
+  cert.setExtensions([
+    { name: "subjectAltName", altNames: [{ type: 2, value: domain }] },
+    { name: "keyUsage", digitalSignature: true, keyEncipherment: true },
+    { name: "extKeyUsage", serverAuth: true },
+  ]);
+  
+  cert.sign(caKey, forge.md.sha256.create());
+  
   const result = {
-    cert: CA_CERT_PEM,
-    key: CA_KEY_PEM
+    cert: forge.pki.certificateToPem(cert),
+    key: forge.pki.privateKeyToPem(keys.privateKey),
   };
   
   domainCertCache.set(domain, result);
+  console.log("[combined-proxy] Generated domain cert for", domain);
   return result;
 }
 

@@ -27,6 +27,14 @@ class DaytonaSandboxInstance implements SandboxInstance {
     this.id = sandbox.id;
   }
 
+  get name(): string | undefined {
+    return (this.sandbox as any).name;
+  }
+
+  get labels(): Record<string, string> | undefined {
+    return (this.sandbox as any).labels;
+  }
+
   get state(): SandboxState {
     return ((this.sandbox as any).state as SandboxState) ?? "unknown";
   }

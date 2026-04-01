@@ -10,7 +10,7 @@
 import crypto from 'crypto';
 import { settingsService } from '../settings/settings.service';
 import { secretsService } from '../secrets/secrets.service';
-import { getCACertPem } from '../secrets-proxy/ca-manager';
+import { getCACertPem, getCAKeyPem } from '../secrets-proxy/ca-manager';
 import { getCombinedProxyServiceScript } from '@apex/orchestrator';
 import type { SandboxProvider, SandboxInstance } from '@apex/orchestrator';
 
@@ -33,10 +33,13 @@ export interface ProxySandboxInfo {
   authToken: string;
 }
 
+// Bump this when the combined proxy service script changes to force recreation
+const PROXY_SCRIPT_VERSION = '2';
+
 function hashKeys(anthropicKey: string, openaiKey: string): string {
   return crypto
     .createHash('sha256')
-    .update(`${anthropicKey}|${openaiKey}`)
+    .update(`${PROXY_SCRIPT_VERSION}|${anthropicKey}|${openaiKey}`)
     .digest('hex');
 }
 
@@ -249,9 +252,7 @@ class ProxySandboxService {
     let caKeyPem = '';
     try {
       caCertPem = getCACertPem();
-      // Get CA key from settings - this is a simplified approach
-      // In production, you might want better key management
-      caKeyPem = await settingsService.get('PROXY_CA_KEY') || '';
+      caKeyPem = getCAKeyPem();
     } catch (err) {
       console.warn('[proxy-sandbox] CA certificate not available:', err);
     }
@@ -294,9 +295,8 @@ class ProxySandboxService {
   private async installAndStart(sandbox: SandboxInstance, _authToken: string): Promise<void> {
     await sandbox.fs.createFolder(PROXY_DIR, '755');
 
-    // Install ws for WebSocket support
     await sandbox.process.executeCommand(
-      `cd ${PROXY_DIR} && npm init -y && npm install ws`
+      `cd ${PROXY_DIR} && npm init -y && npm install ws node-forge`
     );
 
     const script = getCombinedProxyServiceScript(PROXY_PORT, 9340);
