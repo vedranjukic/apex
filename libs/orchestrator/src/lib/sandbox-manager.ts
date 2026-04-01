@@ -321,7 +321,11 @@ export class SandboxManager extends EventEmitter {
     const secretsProxyUrl = resolveSecretsProxyUrl(
       this.config.secretsProxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
-    if (secretsProxyUrl) {
+    // For Daytona the MITM proxy runs in the proxy sandbox (reachable via tunnel),
+    // not on the host — so availability depends on proxyBase, not secretsProxyUrl.
+    const secretsProxyAvailable = isDaytona ? useProxy : !!secretsProxyUrl;
+
+    if (secretsProxyAvailable) {
       if (isDaytona) {
         // For Daytona: use tunnel client on localhost:9339
         envVars["HTTPS_PROXY"] = "http://localhost:9339";
@@ -332,10 +336,10 @@ export class SandboxManager extends EventEmitter {
         envVars["PORT_RELAY_BASE_URL"] = `${proxyBase?.replace(':3000', ':9341') || ''}`;
       } else {
         // For other providers: use direct proxy URL
-        envVars["HTTPS_PROXY"] = secretsProxyUrl;
-        envVars["HTTP_PROXY"] = secretsProxyUrl;
-        envVars["https_proxy"] = secretsProxyUrl;
-        envVars["http_proxy"] = secretsProxyUrl;
+        envVars["HTTPS_PROXY"] = secretsProxyUrl!;
+        envVars["HTTP_PROXY"] = secretsProxyUrl!;
+        envVars["https_proxy"] = secretsProxyUrl!;
+        envVars["http_proxy"] = secretsProxyUrl!;
       }
       envVars["NO_PROXY"] = "localhost,127.0.0.1,0.0.0.0";
       envVars["no_proxy"] = "localhost,127.0.0.1,0.0.0.0";
@@ -345,7 +349,7 @@ export class SandboxManager extends EventEmitter {
       envVars["CURL_CA_BUNDLE"] = "/etc/ssl/certs/ca-certificates.crt";
     }
 
-    if (this.config.githubToken) {
+    if (this.config.githubToken && secretsProxyAvailable) {
       envVars["GH_TOKEN"] = "gh-proxy-placeholder";
     }
 
@@ -2080,7 +2084,9 @@ export class SandboxManager extends EventEmitter {
     const secretsProxyUrlR = resolveSecretsProxyUrl(
       this.config.secretsProxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
-    if (this.config.secretsProxyCaCert && secretsProxyUrlR && this.config.provider !== "local") {
+    const isDaytonaR = this.config.provider === "daytona";
+    const secretsProxyAvailableR = isDaytonaR ? useProxy : !!secretsProxyUrlR;
+    if (this.config.secretsProxyCaCert && secretsProxyAvailableR && this.config.provider !== "local") {
       try {
         await sandbox.fs.uploadFile(
           Buffer.from(this.config.secretsProxyCaCert),
@@ -2104,7 +2110,6 @@ export class SandboxManager extends EventEmitter {
     const projectIdForBridge = this.projectIds.get(sandbox.id) || "";
     const apexProxyForBridge = proxyBase || this.config.proxyBaseUrl;
     const placeholderR = this.config.proxyAuthToken || "sk-proxy-placeholder";
-    const isDaytonaR = this.config.provider === "daytona";
     const envParts = [
       ...(useProxy
         ? [
@@ -2131,7 +2136,7 @@ export class SandboxManager extends EventEmitter {
       ...(this.config.provider === "local"
         ? []
         : [`HOME="/home/daytona"`, `PATH="/home/daytona/.opencode/bin:$PATH"`]),
-      ...(secretsProxyUrlR
+      ...(secretsProxyAvailableR
         ? isDaytonaR
           ? [
               // For Daytona: use tunnel client on localhost:9339, pass tunnel URL to bridge
@@ -2346,6 +2351,8 @@ export class SandboxManager extends EventEmitter {
     const secretsProxyUrl = resolveSecretsProxyUrl(
       this.config.secretsProxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
+    const isDaytonaI = this.config.provider === "daytona";
+    const secretsProxyAvailableI = isDaytonaI ? useProxyI : !!secretsProxyUrl;
 
     // ── Exec 1: Write infra files (bridge, config, agents) ──
     // All config goes under HOME — never write to the project working directory.
@@ -2379,7 +2386,7 @@ export class SandboxManager extends EventEmitter {
       (existCheck.result ?? "").split("\n").map(l => l.trim()).filter(Boolean),
     );
     const promptFiles = skipIfExistsFiles.filter(f => !existingPaths.has(f.path));
-    if (this.config.secretsProxyCaCert && secretsProxyUrl && !isLocalProvider) {
+    if (this.config.secretsProxyCaCert && secretsProxyAvailableI && !isLocalProvider) {
       configFiles.push({ path: CA_CERT_PATH, content: this.config.secretsProxyCaCert });
     }
 
@@ -2426,7 +2433,7 @@ export class SandboxManager extends EventEmitter {
     })();
 
     // ── Exec 3: Update CA certs if needed (parallel, containers only) ──
-    const caCertTask = (this.config.secretsProxyCaCert && secretsProxyUrl && this.config.provider !== "local")
+    const caCertTask = (this.config.secretsProxyCaCert && secretsProxyAvailableI && this.config.provider !== "local")
       ? writeInfraTask.then(() =>
           sandbox.process.executeCommand("sudo update-ca-certificates 2>/dev/null || true"),
         ).then(() => log("CA cert updated"))
@@ -2447,7 +2454,6 @@ export class SandboxManager extends EventEmitter {
     const apexProxyForBridgeI = proxyBaseUrlForEnv || this.config.proxyBaseUrl;
 
     const placeholderI = this.config.proxyAuthToken || "sk-proxy-placeholder";
-    const isDaytonaI = this.config.provider === "daytona";
     const envParts = [
       ...(useProxyI
         ? [
@@ -2474,7 +2480,7 @@ export class SandboxManager extends EventEmitter {
       ...(this.config.provider === "local"
         ? []
         : [`HOME="/home/daytona"`, `PATH="/home/daytona/.opencode/bin:$PATH"`]),
-      ...(secretsProxyUrl
+      ...(secretsProxyAvailableI
         ? isDaytonaI
           ? [
               // For Daytona: use tunnel client on localhost:9339, pass tunnel URL to bridge
