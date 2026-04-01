@@ -2061,12 +2061,9 @@ export class SandboxManager extends EventEmitter {
     const secretsProxyAvailableR = isDaytonaR ? useProxy : !!secretsProxyUrlR;
     if (this.config.secretsProxyCaCert && secretsProxyAvailableR && this.config.provider !== "local") {
       try {
-        await sandbox.fs.uploadFile(
-          Buffer.from(this.config.secretsProxyCaCert),
-          CA_CERT_PATH,
-        );
+        const b64Cert = Buffer.from(this.config.secretsProxyCaCert).toString("base64");
         await sandbox.process.executeCommand(
-          "sudo update-ca-certificates 2>/dev/null || true",
+          `printf '%s' '${b64Cert}' | base64 -d | sudo tee '${CA_CERT_PATH}' > /dev/null && sudo update-ca-certificates 2>/dev/null || true`,
         );
         console.log(`[bridge:${sid}] CA cert installed`);
       } catch {
@@ -2359,14 +2356,18 @@ export class SandboxManager extends EventEmitter {
       (existCheck.result ?? "").split("\n").map(l => l.trim()).filter(Boolean),
     );
     const promptFiles = skipIfExistsFiles.filter(f => !existingPaths.has(f.path));
-    if (this.config.secretsProxyCaCert && secretsProxyAvailableI && !isLocalProvider) {
-      configFiles.push({ path: CA_CERT_PATH, content: this.config.secretsProxyCaCert });
-    }
+    const writeCaCert = this.config.secretsProxyCaCert && secretsProxyAvailableI && !isLocalProvider;
 
     const writeInfraTask = Promise.all([
       this.batchWriteFiles(sandbox, bridgeFiles),
       this.batchWriteFiles(sandbox, mcpFiles),
       this.batchWriteFiles(sandbox, [...configFiles, ...promptFiles]),
+      // CA cert path requires sudo — write separately to avoid breaking the && chain
+      ...(writeCaCert ? [
+        sandbox.process.executeCommand(
+          `printf '%s' '${Buffer.from(this.config.secretsProxyCaCert).toString("base64")}' | base64 -d | sudo tee '${CA_CERT_PATH}' > /dev/null`,
+        ),
+      ] : []),
     ]).then(() => log("infra files written"));
 
     // ── Exec 2: git clone/init (parallel with infra writes, projectDir must be empty for clone) ──
@@ -2405,8 +2406,8 @@ export class SandboxManager extends EventEmitter {
       log("git done");
     })();
 
-    // ── Exec 3: Update CA certs if needed (parallel, containers only) ──
-    const caCertTask = (this.config.secretsProxyCaCert && secretsProxyAvailableI && this.config.provider !== "local")
+    // ── Exec 3: Update CA certs if needed (after infra files are written) ──
+    const caCertTask = writeCaCert
       ? writeInfraTask.then(() =>
           sandbox.process.executeCommand("sudo update-ca-certificates 2>/dev/null || true"),
         ).then(() => log("CA cert updated"))
