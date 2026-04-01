@@ -328,7 +328,8 @@ function connectSSE() {
   });
   proc.stderr.on("data", (d) => { const m = d.toString().trim(); if (m) log("\\u{26A0}", "SSE curl stderr: " + m); });
   function scheduleReconnect(delay) {
-    if (sseReq === proc) sseReq = null;
+    if (sseReq !== proc) return;
+    sseReq = null;
     if (!sseReconnectTimer) { sseReconnectTimer = setTimeout(connectSSE, delay); }
   }
   proc.on("exit", (code) => { log("\\u{26A0}", "SSE curl exited code=" + code + ", reconnecting..."); scheduleReconnect(2000); });
