@@ -73,6 +73,10 @@ Create and delete trigger `projectsService.reinitSandboxManager()` to refresh pr
 
 ### Architecture
 
+The MITM proxy architecture varies by sandbox provider:
+
+#### Local/Container Providers (Docker, Apple Container)
+
 ```
 Container app → CONNECT api.stripe.com:443 via HTTPS_PROXY
                             ↓
@@ -87,14 +91,66 @@ Container app → CONNECT api.stripe.com:443 via HTTPS_PROXY
               https://api.stripe.com (with real Authorization: Bearer <key>)
 ```
 
+#### Daytona Provider (WebSocket TCP Tunnel)
+
+Since Daytona preview URLs only support HTTP/HTTPS with WebSocket upgrades (no raw TCP), a TCP-over-WebSocket tunnel enables MITM proxy functionality:
+
+```
+Regular Sandbox (Daytona)                    Proxy Sandbox (Daytona)
+┌─────────────────────────────┐              ┌──────────────────────────────┐
+│ gh / curl / SDK             │              │ MITM Secrets Proxy (:9340)  │
+│   ↓                         │              │   ▲                          │
+│ HTTPS_PROXY=localhost:9339  │  WebSocket   │   │ TCP                      │
+│   ↓                         │  /tunnel     │   │                          │
+│ TCP-to-WS Client (:9339)    │ ──────────── │ WS-to-TCP Bridge (:3000)    │
+│ (bridge script)             │              │ + LLM Proxy                  │
+└─────────────────────────────┘              └──────────────────────────────┘
+```
+
+**Port Assignments for Daytona:**
+
+| Port | Role | Location |
+|------|------|----------|
+| `9339` | Tunnel client (local proxy endpoint) | Regular sandbox — bridge script |
+| `9340` | MITM secrets proxy | Proxy sandbox — internal only |
+| `3000` | LLM proxy + WebSocket tunnel bridge | Proxy sandbox — shared HTTP server |
+
+**Flow for Daytona GitHub API call:**
+1. `gh` reads `HTTPS_PROXY=http://localhost:9339`, connects to localhost:9339
+2. `gh` sends `CONNECT api.github.com:443 HTTP/1.1` over TCP connection
+3. **TCP-to-WS client** (bridge script) accepts connection, opens WebSocket to `wss://<proxy-sandbox>/tunnel`
+4. All bytes flow bidirectionally: TCP socket ↔ binary WebSocket frames
+5. **WS-to-TCP bridge** (proxy sandbox) accepts WebSocket, connects to MITM proxy (localhost:9340)
+6. **MITM proxy** handles CONNECT, performs TLS termination, injects auth, forwards to upstream
+
 For domains **without** secrets, the proxy acts as a transparent TCP tunnel (no interception, no certificate).
 
-### Proxy Server (`apps/api/src/modules/secrets-proxy/secrets-proxy.ts`)
+### Proxy Server
+
+#### Local/Container Implementation (`apps/api/src/modules/secrets-proxy/secrets-proxy.ts`)
 
 - **Port**: 3001 (default, override with `SECRETS_PROXY_PORT`)
 - **CONNECT handling (HTTPS)**: Parses host from CONNECT request. If `findByDomain(host)` returns no rows → transparent TCP tunnel. If rows exist → MITM path with dynamic TLS cert.
 - **Plain HTTP proxy**: Same domain lookup for `http://` / `https://` absolute URLs.
-- **Auth injection** (`buildAuthHeader`):
+
+#### Daytona Implementation
+
+**Combined Proxy Service** (`libs/orchestrator/src/lib/combined-proxy-service-script.ts`):
+- **LLM Proxy** (port 3000) - existing API key proxying functionality
+- **MITM Proxy** (port 9340, internal) - secrets injection with TLS termination
+- **WebSocket Tunnel Bridge** (`/tunnel` endpoint) - converts WebSocket frames to TCP
+
+**Bridge Script Enhancement** (`libs/orchestrator/src/lib/bridge-script.ts`):
+- **TCP-to-WebSocket client** on port 9339 accepting proxy connections
+- **Environment variable**: `TUNNEL_ENDPOINT_URL` - WebSocket endpoint for tunnel
+- **Bidirectional data flow** with backpressure management
+
+**Sandbox Manager Configuration** (`libs/orchestrator/src/lib/sandbox-manager.ts`):
+- **Daytona**: Sets `HTTPS_PROXY=http://localhost:9339` (tunnel client)
+- **Other providers**: Uses direct proxy URLs (unchanged)
+- **Environment**: Passes `TUNNEL_ENDPOINT_URL=${proxyBase}/tunnel` to bridge
+
+**Auth injection** (`buildAuthHeader`) - same for both implementations:
 
 | `authType` | Injected Header |
 |---|---|
@@ -114,13 +170,23 @@ Client `authorization` / `x-api-key` headers are stripped before injection.
 
 ## Container Environment
 
-Containers receive the following secrets-related environment:
+Container environment varies by provider:
 
+### Local/Container Providers
 - `HTTPS_PROXY` / `HTTP_PROXY` → proxy URL (e.g. `http://<host-lan-ip>:3001`)
 - `NO_PROXY=localhost,127.0.0.1,0.0.0.0` so local traffic skips the proxy
 - Custom CA certificate installed in the system trust store
 - `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` for per-runtime CA trust
 - Placeholder env vars for each secret (e.g. `STRIPE_KEY=sk-proxy-placeholder`) so SDKs can initialize
+
+### Daytona Provider
+- `HTTPS_PROXY=http://localhost:9339` → points to tunnel client in bridge script
+- `HTTP_PROXY=http://localhost:9339` → same tunnel client for HTTP traffic
+- `TUNNEL_ENDPOINT_URL` → WebSocket endpoint URL (e.g. `wss://proxy-sandbox/tunnel`)
+- `NO_PROXY=localhost,127.0.0.1,0.0.0.0` so local traffic skips the proxy
+- Custom CA certificate installed in the system trust store (same as other providers)
+- `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, etc. for CA trust
+- Placeholder env vars for each secret (same as other providers)
 
 ## Agent Awareness
 
@@ -130,19 +196,36 @@ Flow: Agent calls `list_secrets` → MCP server calls bridge `/internal/list-sec
 
 ## Key Files
 
+### Core Secrets Management
 | File | Role |
 |---|---|
 | `apps/api/src/modules/secrets/secrets.service.ts` | CRUD + domain lookup for secrets (SQLite) |
 | `apps/api/src/modules/secrets/secrets.routes.ts` | REST API under `/api/secrets` |
-| `apps/api/src/modules/secrets-proxy/secrets-proxy.ts` | MITM proxy server — CONNECT handler, selective TLS interception, auth injection, transparent tunnel fallback |
-| `apps/api/src/modules/secrets-proxy/ca-manager.ts` | CA keypair generation, persistence, per-domain certificate generation + caching |
 | `apps/api/src/database/schema.ts` | `secrets` table definition |
-| `libs/orchestrator/src/lib/sandbox-manager.ts` | CA cert upload, `HTTPS_PROXY` env injection, secret placeholder env vars |
-| `libs/orchestrator/src/lib/mcp-terminal-script.ts` | `list_secrets` MCP tool |
-| `libs/orchestrator/src/lib/bridge-script.ts` | `/internal/list-secrets` bridge endpoint |
 | `apps/dashboard/src/pages/secrets-page.tsx` | Secrets management UI at `/secrets` |
 | `apps/dashboard/src/api/client.ts` | `secretsApi` client |
 | `apps/api/src/modules/projects/projects.service.ts` | `reinitSandboxManager()` on secret create/delete; placeholder env var generation |
+
+### MITM Proxy - Local/Container Providers
+| File | Role |
+|---|---|
+| `apps/api/src/modules/secrets-proxy/secrets-proxy.ts` | MITM proxy server — CONNECT handler, selective TLS interception, auth injection, transparent tunnel fallback |
+| `apps/api/src/modules/secrets-proxy/ca-manager.ts` | CA keypair generation, persistence, per-domain certificate generation + caching |
+
+### MITM Proxy - Daytona Provider (TCP-over-WebSocket Tunnel)
+| File | Role |
+|---|---|
+| `libs/orchestrator/src/lib/combined-proxy-service-script.ts` | **NEW** - Combined LLM proxy + MITM proxy + WebSocket tunnel bridge for Daytona |
+| `apps/api/src/modules/llm-proxy/proxy-sandbox.service.ts` | Updated to deploy combined proxy service with secrets and CA certificates |
+| `libs/orchestrator/src/lib/bridge-script.ts` | Enhanced with TCP-to-WebSocket tunnel client on port 9339 |
+| `libs/orchestrator/src/lib/sandbox-manager.ts` | Updated for Daytona: HTTPS_PROXY=localhost:9339, tunnel URL passing |
+| `libs/orchestrator/src/index.ts` | Exports combined proxy service script |
+
+### Agent Integration
+| File | Role |
+|---|---|
+| `libs/orchestrator/src/lib/mcp-terminal-script.ts` | `list_secrets` MCP tool |
+| `libs/orchestrator/src/lib/bridge-script.ts` | `/internal/list-secrets` bridge endpoint |
 
 ## Known Behaviors
 

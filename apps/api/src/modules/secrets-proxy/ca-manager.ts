@@ -76,6 +76,12 @@ export function getCACertPem(): string {
   return forge.pki.certificateToPem(caCert);
 }
 
+/** Get the CA private key in PEM format (for MITM cert generation in proxy sandbox). */
+export function getCAKeyPem(): string {
+  if (!caKey) throw new Error('CA not initialized — call initCA() first');
+  return forge.pki.privateKeyToPem(caKey);
+}
+
 /**
  * Generate a TLS certificate for a specific domain, signed by the CA.
  * Certificates are cached in memory for the process lifetime.

@@ -129,6 +129,15 @@ class SecretsService {
     return rows as SecretRecord[];
   }
 
+  /**
+   * Return ALL secrets with values (not user-scoped).
+   * Used internally by the proxy sandbox to configure MITM interception.
+   */
+  async findAll(): Promise<SecretRecord[]> {
+    const rows = await db.select().from(secrets);
+    return rows as SecretRecord[];
+  }
+
   /** Get all unique domains that have secrets configured. */
   async getSecretDomains(): Promise<Set<string>> {
     const rows = await db.select({ domain: secrets.domain }).from(secrets);

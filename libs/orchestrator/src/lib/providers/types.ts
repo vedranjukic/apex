@@ -107,6 +107,10 @@ export interface SshAccessInfo {
  */
 export interface SandboxInstance {
   readonly id: string;
+  /** Human-readable name (may not be set for all providers). */
+  readonly name?: string;
+  /** Metadata labels attached at creation time. */
+  readonly labels?: Record<string, string>;
   /** Current state — may be stale; call {@link refreshState} to update. */
   state: SandboxState;
 

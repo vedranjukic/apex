@@ -322,10 +322,20 @@ export class SandboxManager extends EventEmitter {
       this.config.secretsProxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
     if (secretsProxyUrl) {
-      envVars["HTTPS_PROXY"] = secretsProxyUrl;
-      envVars["HTTP_PROXY"] = secretsProxyUrl;
-      envVars["https_proxy"] = secretsProxyUrl;
-      envVars["http_proxy"] = secretsProxyUrl;
+      if (isDaytona) {
+        // For Daytona: use tunnel client on localhost:9339
+        envVars["HTTPS_PROXY"] = "http://localhost:9339";
+        envVars["HTTP_PROXY"] = "http://localhost:9339";
+        envVars["https_proxy"] = "http://localhost:9339";
+        envVars["http_proxy"] = "http://localhost:9339";
+        envVars["TUNNEL_ENDPOINT_URL"] = `${proxyBase}/tunnel`;
+      } else {
+        // For other providers: use direct proxy URL
+        envVars["HTTPS_PROXY"] = secretsProxyUrl;
+        envVars["HTTP_PROXY"] = secretsProxyUrl;
+        envVars["https_proxy"] = secretsProxyUrl;
+        envVars["http_proxy"] = secretsProxyUrl;
+      }
       envVars["NO_PROXY"] = "localhost,127.0.0.1,0.0.0.0";
       envVars["no_proxy"] = "localhost,127.0.0.1,0.0.0.0";
       envVars["NODE_EXTRA_CA_CERTS"] = CA_CERT_PATH;
@@ -2095,18 +2105,34 @@ export class SandboxManager extends EventEmitter {
         ? []
         : [`HOME="/home/daytona"`, `PATH="/home/daytona/.opencode/bin:$PATH"`]),
       ...(secretsProxyUrlR
-        ? [
-            `HTTPS_PROXY="${secretsProxyUrlR}"`,
-            `HTTP_PROXY="${secretsProxyUrlR}"`,
-            `https_proxy="${secretsProxyUrlR}"`,
-            `http_proxy="${secretsProxyUrlR}"`,
-            `NO_PROXY="localhost,127.0.0.1,0.0.0.0"`,
-            `no_proxy="localhost,127.0.0.1,0.0.0.0"`,
-            `NODE_EXTRA_CA_CERTS="${CA_CERT_PATH}"`,
-            `SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"`,
-            `REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
-            `CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
-          ]
+        ? isDaytonaR
+          ? [
+              // For Daytona: use tunnel client on localhost:9339, pass tunnel URL to bridge
+              `HTTPS_PROXY="http://localhost:9339"`,
+              `HTTP_PROXY="http://localhost:9339"`,
+              `https_proxy="http://localhost:9339"`,
+              `http_proxy="http://localhost:9339"`,
+              `NO_PROXY="localhost,127.0.0.1,0.0.0.0"`,
+              `no_proxy="localhost,127.0.0.1,0.0.0.0"`,
+              `NODE_EXTRA_CA_CERTS="${CA_CERT_PATH}"`,
+              `SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"`,
+              `REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+              `CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+              `TUNNEL_ENDPOINT_URL="${proxyBase}/tunnel"`,
+            ]
+          : [
+              // For other providers: use direct proxy URL
+              `HTTPS_PROXY="${secretsProxyUrlR}"`,
+              `HTTP_PROXY="${secretsProxyUrlR}"`,
+              `https_proxy="${secretsProxyUrlR}"`,
+              `http_proxy="${secretsProxyUrlR}"`,
+              `NO_PROXY="localhost,127.0.0.1,0.0.0.0"`,
+              `no_proxy="localhost,127.0.0.1,0.0.0.0"`,
+              `NODE_EXTRA_CA_CERTS="${CA_CERT_PATH}"`,
+              `SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"`,
+              `REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+              `CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+            ]
         : []),
     ];
     for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
@@ -2422,18 +2448,34 @@ export class SandboxManager extends EventEmitter {
         ? []
         : [`HOME="/home/daytona"`, `PATH="/home/daytona/.opencode/bin:$PATH"`]),
       ...(secretsProxyUrl
-        ? [
-            `HTTPS_PROXY="${secretsProxyUrl}"`,
-            `HTTP_PROXY="${secretsProxyUrl}"`,
-            `https_proxy="${secretsProxyUrl}"`,
-            `http_proxy="${secretsProxyUrl}"`,
-            `NO_PROXY="localhost,127.0.0.1,0.0.0.0"`,
-            `no_proxy="localhost,127.0.0.1,0.0.0.0"`,
-            `NODE_EXTRA_CA_CERTS="${CA_CERT_PATH}"`,
-            `SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"`,
-            `REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
-            `CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
-          ]
+        ? isDaytonaI
+          ? [
+              // For Daytona: use tunnel client on localhost:9339, pass tunnel URL to bridge
+              `HTTPS_PROXY="http://localhost:9339"`,
+              `HTTP_PROXY="http://localhost:9339"`,
+              `https_proxy="http://localhost:9339"`,
+              `http_proxy="http://localhost:9339"`,
+              `NO_PROXY="localhost,127.0.0.1,0.0.0.0"`,
+              `no_proxy="localhost,127.0.0.1,0.0.0.0"`,
+              `NODE_EXTRA_CA_CERTS="${CA_CERT_PATH}"`,
+              `SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"`,
+              `REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+              `CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+              `TUNNEL_ENDPOINT_URL="${proxyBaseUrlForEnv}/tunnel"`,
+            ]
+          : [
+              // For other providers: use direct proxy URL
+              `HTTPS_PROXY="${secretsProxyUrl}"`,
+              `HTTP_PROXY="${secretsProxyUrl}"`,
+              `https_proxy="${secretsProxyUrl}"`,
+              `http_proxy="${secretsProxyUrl}"`,
+              `NO_PROXY="localhost,127.0.0.1,0.0.0.0"`,
+              `no_proxy="localhost,127.0.0.1,0.0.0.0"`,
+              `NODE_EXTRA_CA_CERTS="${CA_CERT_PATH}"`,
+              `SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"`,
+              `REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+              `CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+            ]
         : []),
     ];
     for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {

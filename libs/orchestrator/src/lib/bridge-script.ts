@@ -28,8 +28,11 @@ const DAYTONA_API_URL = (process.env.DAYTONA_API_URL || "https://app.daytona.io/
 const SANDBOX_ID = process.env.DAYTONA_SANDBOX_ID || "";
 const APEX_PROXY_BASE_URL = (process.env.APEX_PROXY_BASE_URL || "").replace(/\\/$/, "");
 const APEX_PROJECT_ID = process.env.APEX_PROJECT_ID || "";
+const TUNNEL_ENDPOINT_URL = process.env.TUNNEL_ENDPOINT_URL || "";
 const https = require("https");
 const urlMod = require("url");
+const net = require("net");
+const WebSocket = require("ws");
 
 let state = { ws: null };
 const threadToSession = new Map();
@@ -1453,6 +1456,134 @@ setInterval(() => {
     state.ws.send(JSON.stringify({ type: "ports_update", ports }));
   } catch (e) {}
 }, 1000);
+
+// ── TCP-to-WebSocket Tunnel Client ──────────────────────
+const TUNNEL_PORT = 9339;
+
+function startTunnelClient() {
+  if (!TUNNEL_ENDPOINT_URL) {
+    log("\\u{26A0}", "No TUNNEL_ENDPOINT_URL configured, tunnel client disabled");
+    return;
+  }
+  
+  const tunnelServer = net.createServer((clientSocket) => {
+    log("\\u{1F4E1}", \`Tunnel client: New connection on port \${TUNNEL_PORT}\`);
+    
+    let wsConnected = false;
+    
+    try {
+      const ws = new WebSocket(TUNNEL_ENDPOINT_URL, {
+        handshakeTimeout: 10000, // 10 second handshake timeout
+        perMessageDeflate: false // Disable compression for raw TCP tunneling
+      });
+      
+      ws.on('open', () => {
+        log("\\u{1F517}", "Tunnel WebSocket connected");
+        wsConnected = true;
+        
+        // Handle client to WebSocket data flow with backpressure
+        clientSocket.on('data', (data) => {
+          if (!wsConnected || ws.readyState !== WebSocket.OPEN) {
+            log("\\u{26A0}", "Dropping client data, WebSocket not ready");
+            return;
+          }
+          
+          try {
+            ws.send(data);
+            // Handle backpressure for large transfers
+            if (ws.bufferedAmount > 64 * 1024) { // 64KB threshold
+              log("\\u{26A0}", "WebSocket buffer high, pausing client");
+              clientSocket.pause();
+              // Resume when buffer clears
+              const checkBuffer = () => {
+                if (ws.bufferedAmount < 16 * 1024 && wsConnected) {
+                  clientSocket.resume();
+                } else if (wsConnected) {
+                  setTimeout(checkBuffer, 50);
+                }
+              };
+              checkBuffer();
+            }
+          } catch (sendErr) {
+            log("\\u{274C}", "Error sending to WebSocket: " + sendErr.message);
+            clientSocket.destroy();
+          }
+        });
+        
+        // Handle WebSocket to client data flow with backpressure
+        ws.on('message', (data) => {
+          if (!clientSocket.writable) {
+            log("\\u{26A0}", "Dropping WebSocket data, client not writable");
+            return;
+          }
+          
+          const buffer = Buffer.from(data);
+          const success = clientSocket.write(buffer);
+          if (!success) {
+            // Backpressure: pause WebSocket until client drains
+            ws.pause?.();
+            clientSocket.once('drain', () => {
+              log("\\u{1F517}", "Client drain, resuming WebSocket");
+              ws.resume?.();
+            });
+          }
+        });
+      });
+      
+      ws.on('close', (code, reason) => {
+        log("\\u{1F517}", \`Tunnel WebSocket closed: \${code} \${reason || 'no reason'}\`);
+        wsConnected = false;
+        clientSocket.destroy();
+      });
+      
+      ws.on('error', (err) => {
+        log("\\u{274C}", "Tunnel WebSocket error: " + err.message);
+        wsConnected = false;
+        clientSocket.destroy();
+      });
+      
+      clientSocket.on('close', () => {
+        log("\\u{1F4E1}", "Tunnel client connection closed");
+        wsConnected = false;
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close(1000, 'Client disconnected');
+        }
+      });
+      
+      clientSocket.on('error', (err) => {
+        log("\\u{274C}", "Tunnel client socket error: " + err.message);
+        wsConnected = false;
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close(1011, 'Socket error');
+        }
+      });
+      
+      // Set timeout for the client socket
+      clientSocket.setTimeout(300000); // 5 minutes timeout
+      clientSocket.on('timeout', () => {
+        log("\\u{26A0}", "Tunnel client socket timeout");
+        clientSocket.destroy();
+      });
+      
+    } catch (err) {
+      log("\\u{274C}", "Failed to create tunnel WebSocket: " + err.message);
+      clientSocket.destroy();
+    }
+  });
+  
+  tunnelServer.on('error', (err) => {
+    log("\\u{274C}", "Tunnel server error: " + err.message);
+  });
+  
+  tunnelServer.listen(TUNNEL_PORT, '127.0.0.1', () => {
+    log("\\u{1F4E1}", \`Tunnel client listening on port \${TUNNEL_PORT}\`);
+  });
+}
+
+// Start tunnel client if configured
+if (TUNNEL_ENDPOINT_URL) {
+  startTunnelClient();
+}
 
 server.listen(PORT, "0.0.0.0", () => { log("\\u{2705}", "Bridge ready on port " + PORT); });
 `;
