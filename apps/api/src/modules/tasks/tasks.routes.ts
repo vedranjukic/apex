@@ -21,6 +21,14 @@ export const threadsRoutes = new Elysia({ prefix: '/api' })
     const { status } = body as { status: string };
     return threadsService.updateStatus(params.id, status);
   })
+  .patch('/threads/:id', async ({ params, body }) => {
+    const { title } = body as { title?: string };
+    if (!title) throw new Error('Title is required');
+    return threadsService.updateTitle(params.id, title);
+  })
+  .post('/threads/:id/fork', async ({ params }) => {
+    return threadsService.forkThread(params.id);
+  })
   .delete('/threads/:id', async ({ params }) => {
     await threadsService.remove(params.id);
     return { ok: true };

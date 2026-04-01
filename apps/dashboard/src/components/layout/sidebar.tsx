@@ -1,9 +1,12 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { Search, Plus, Loader2, CheckCircle2, AlertCircle, Circle, MessageCircleQuestion, CirclePause, X, FileText, ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { useThreadsStore } from '../../stores/tasks-store';
 import { useEditorStore } from '../../stores/editor-store';
-import { useState } from 'react';
+import { ThreadContextMenu } from './thread-context-menu';
+import { RenameThreadDialog } from './rename-thread-dialog';
+import { ForkThreadDialog } from './fork-thread-dialog';
+import type { Thread } from '../../api/client';
 
 interface SidebarProps {
   projectId: string;
@@ -20,6 +23,9 @@ export function Sidebar({ projectId }: SidebarProps) {
     fetchThreads,
     setActiveThread,
     startNewThread,
+    deleteThread,
+    renameThread,
+    forkThread,
   } = useThreadsStore();
 
   const openFiles = useEditorStore((s) => s.openFiles);
@@ -31,6 +37,11 @@ export function Sidebar({ projectId }: SidebarProps) {
 
   const [filesExpanded, setFilesExpanded] = useState(true);
   const [threadsExpanded, setThreadsExpanded] = useState(true);
+  
+  // Context menu and dialog states
+  const [contextMenu, setContextMenu] = useState<{ thread: Thread, x: number, y: number } | null>(null);
+  const [renameDialog, setRenameDialog] = useState<Thread | null>(null);
+  const [forkDialog, setForkDialog] = useState<Thread | null>(null);
 
   useEffect(() => {
     fetchThreads(projectId);
@@ -56,6 +67,59 @@ export function Sidebar({ projectId }: SidebarProps) {
     startNewThread();
     showThread();
   }, [startNewThread, showThread]);
+
+  const handleThreadContextMenu = useCallback((e: React.MouseEvent, thread: Thread) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ thread, x: e.clientX, y: e.clientY });
+  }, []);
+
+  const handleRename = useCallback((thread: Thread) => {
+    setRenameDialog(thread);
+  }, []);
+
+  const handleFork = useCallback((thread: Thread) => {
+    setForkDialog(thread);
+  }, []);
+
+  const handleDelete = useCallback(async (thread: Thread) => {
+    if (window.confirm(`Are you sure you want to delete the thread "${thread.title}"?`)) {
+      try {
+        await deleteThread(thread.id);
+      } catch (error) {
+        console.error('Failed to delete thread:', error);
+        alert('Failed to delete thread. Please try again.');
+      }
+    }
+  }, [deleteThread]);
+
+  const handleRenameSubmit = useCallback(async (newTitle: string) => {
+    if (renameDialog) {
+      try {
+        await renameThread(renameDialog.id, newTitle);
+        setRenameDialog(null);
+      } catch (error) {
+        console.error('Failed to rename thread:', error);
+        alert('Failed to rename thread. Please try again.');
+        throw error; // Re-throw to keep dialog open
+      }
+    }
+  }, [renameDialog, renameThread]);
+
+  const handleForkSubmit = useCallback(async (newTitle: string) => {
+    if (forkDialog) {
+      try {
+        await forkThread(forkDialog.id);
+        // Note: The API doesn't currently support setting a custom title for forks
+        // The title parameter is accepted but the actual implementation uses the default naming
+        setForkDialog(null);
+      } catch (error) {
+        console.error('Failed to fork thread:', error);
+        alert('Failed to fork thread. Please try again.');
+        throw error; // Re-throw to keep dialog open
+      }
+    }
+  }, [forkDialog, forkThread]);
 
   const filteredThreads = searchQuery
     ? threads.filter((c) =>
@@ -180,6 +244,7 @@ export function Sidebar({ projectId }: SidebarProps) {
                     <li key={thread.id}>
                       <button
                         onClick={() => handleThreadClick(thread.id)}
+                        onContextMenu={(e) => handleThreadContextMenu(e, thread)}
                         className={cn(
                           'flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm text-left transition-colors',
                           activeView === 'thread' && activeThreadId === thread.id
@@ -208,6 +273,34 @@ export function Sidebar({ projectId }: SidebarProps) {
           </div>
         )}
       </div>
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <ThreadContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          thread={contextMenu.thread}
+          onRename={handleRename}
+          onFork={handleFork}
+          onDelete={handleDelete}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Dialogs */}
+      <RenameThreadDialog
+        isOpen={!!renameDialog}
+        thread={renameDialog}
+        onClose={() => setRenameDialog(null)}
+        onRename={handleRenameSubmit}
+      />
+
+      <ForkThreadDialog
+        isOpen={!!forkDialog}
+        thread={forkDialog}
+        onClose={() => setForkDialog(null)}
+        onFork={handleForkSubmit}
+      />
     </aside>
   );
 }

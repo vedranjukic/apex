@@ -270,4 +270,11 @@ export const threadsApi = {
     }),
   delete: (id: string) =>
     request<{ ok: boolean }>(`/threads/${id}`, { method: 'DELETE' }),
+  update: (id: string, data: { title?: string }) =>
+    request<Thread>(`/threads/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  fork: (id: string) =>
+    request<Thread>(`/threads/${id}/fork`, { method: 'POST' }),
 };

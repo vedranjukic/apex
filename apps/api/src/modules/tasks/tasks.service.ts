@@ -115,6 +115,45 @@ class ThreadsService {
     return db.select().from(messages).where(eq(messages.taskId, threadId)).orderBy(asc(messages.createdAt));
   }
 
+  async updateTitle(threadId: string, title: string): Promise<Task & { messages?: Message[] }> {
+    await db.update(tasks).set({ title, updatedAt: new Date().toISOString() }).where(eq(tasks.id, threadId));
+    return this.findById(threadId);
+  }
+
+  async forkThread(threadId: string): Promise<Task & { messages?: Message[] }> {
+    // Get the original thread with its messages
+    const originalThread = await this.findById(threadId);
+    
+    // Create new thread with forked title
+    const newThreadId = crypto.randomUUID();
+    const forkTitle = `Fork of ${originalThread.title}`;
+    
+    await db.insert(tasks).values({
+      id: newThreadId,
+      projectId: originalThread.projectId,
+      title: forkTitle,
+      status: 'completed',
+      agentType: originalThread.agentType,
+      mode: originalThread.mode,
+      model: originalThread.model,
+    });
+
+    // Copy all messages from the original thread
+    if (originalThread.messages && originalThread.messages.length > 0) {
+      const messageValues = originalThread.messages.map(msg => ({
+        id: crypto.randomUUID(),
+        taskId: newThreadId,
+        role: msg.role,
+        content: msg.content,
+        metadata: msg.metadata,
+      }));
+      
+      await db.insert(messages).values(messageValues);
+    }
+
+    return this.findById(newThreadId);
+  }
+
   async remove(id: string): Promise<void> {
     await db.delete(tasks).where(eq(tasks.id, id));
   }
