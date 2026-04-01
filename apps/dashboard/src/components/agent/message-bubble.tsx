@@ -732,7 +732,7 @@ function SystemBubble({ message }: { message: Message }) {
   return (
     <div className="flex gap-3 px-4 py-3 bg-surface-thread/60">
       <div className="shrink-0 mt-0.5">
-        <div className="w-7 h-7 rounded-full bg-white/5 flex items-center justify-center">
+        <div className="w-7 h-7 rounded-full bg-surface-secondary flex items-center justify-center">
           <Info className="w-4 h-4 text-text-muted" />
         </div>
       </div>

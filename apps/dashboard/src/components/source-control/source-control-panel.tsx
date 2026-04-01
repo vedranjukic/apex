@@ -316,8 +316,8 @@ export function SourceControlPanel({ gitActions, projectId, socket, sendPrompt, 
           isButtonDisabled
             ? 'bg-sidebar-hover text-text-muted cursor-not-allowed'
             : isClean && hasSyncable
-              ? 'bg-primary hover:bg-primary-hover text-white'
-              : 'bg-primary hover:bg-primary-hover text-white',
+              ? 'bg-primary hover:bg-primary-hover text-on-primary'
+              : 'bg-primary hover:bg-primary-hover text-on-primary',
         )}
       >
         {loading ? (
@@ -451,7 +451,7 @@ function TooManyFilesWarning({
             'w-full py-1.5 px-2 rounded text-xs font-medium flex items-center justify-center gap-1.5 transition-colors',
             generating
               ? 'bg-sidebar-active text-text-muted cursor-wait'
-              : 'bg-primary hover:bg-primary-hover text-white',
+              : 'bg-primary hover:bg-primary-hover text-on-primary',
           )}
         >
           {generating ? (

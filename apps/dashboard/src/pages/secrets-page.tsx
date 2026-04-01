@@ -141,7 +141,7 @@ function SecretForm({
         <button
           type="submit"
           disabled={saving}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm hover:bg-primary-hover transition-colors disabled:opacity-50"
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg text-sm hover:bg-primary-hover transition-colors disabled:opacity-50"
         >
           {saving && <Loader2 className="w-4 h-4 animate-spin" />}
           {initial ? 'Update' : 'Add Secret'}
@@ -257,7 +257,7 @@ export function SecretsPage() {
             {!showForm && !editingId && (
               <button
                 onClick={() => setShowForm(true)}
-                className="flex items-center gap-2 px-3 py-2 bg-primary text-white rounded-lg text-sm hover:bg-primary-hover transition-colors"
+                className="flex items-center gap-2 px-3 py-2 bg-primary text-on-primary rounded-lg text-sm hover:bg-primary-hover transition-colors"
               >
                 <Plus className="w-4 h-4" />
                 Add Secret

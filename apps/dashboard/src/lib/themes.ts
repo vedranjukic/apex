@@ -38,7 +38,7 @@ const midnightBlueTerminal: ITheme = {
 
 const darkTerminal: ITheme = {
   background: '#0f0f0f',
-  foreground: '#cccccc',
+  foreground: '#d4d4d4',
   cursor: '#aeafad',
   cursorAccent: '#0f0f0f',
   selectionBackground: '#264f78',
@@ -50,7 +50,7 @@ const darkTerminal: ITheme = {
   magenta: '#d670d6',
   cyan: '#29b8db',
   white: '#e5e5e5',
-  brightBlack: '#666666',
+  brightBlack: '#777777',
   brightRed: '#f14c4c',
   brightGreen: '#23d18b',
   brightYellow: '#f5f543',

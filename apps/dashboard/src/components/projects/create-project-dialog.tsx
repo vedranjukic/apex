@@ -195,7 +195,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim">
       <div className="bg-surface rounded-xl shadow-xl w-full max-w-md p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">New Project</h2>
@@ -348,7 +348,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
             <button
               type="submit"
               disabled={submitting || !name.trim() || (isLocal && !localDir.trim())}
-              className="px-4 py-2 text-sm rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors disabled:opacity-50"
+              className="px-4 py-2 text-sm rounded-lg bg-primary text-on-primary hover:bg-primary-hover transition-colors disabled:opacity-50"
             >
               {submitting ? 'Creating…' : 'Create Project'}
             </button>

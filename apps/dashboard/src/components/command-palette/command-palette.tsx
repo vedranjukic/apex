@@ -109,7 +109,7 @@ function CommandPaletteInner({ commands, onClose }: InnerProps) {
       className="fixed inset-0 z-[100] flex items-start justify-center pt-[15vh]"
       onClick={onClose}
     >
-      <div className="fixed inset-0 bg-black/50" />
+      <div className="fixed inset-0 bg-scrim" />
 
       <div
         className="relative w-full max-w-xl bg-surface rounded-xl shadow-2xl border border-border overflow-hidden"

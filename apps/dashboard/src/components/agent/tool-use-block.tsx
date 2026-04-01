@@ -542,12 +542,12 @@ function DiffCodeBlock({
         return (
           <div
             key={i}
-            className="flex group hover:bg-white/5 min-w-0"
+            className="flex group hover:bg-sidebar-hover min-w-0"
           >
             <button
               type="button"
               onClick={() => handleLineClick(lineNum)}
-              className="shrink-0 w-8 py-px pr-1.5 text-right text-[10px] font-mono text-text-muted hover:text-text-secondary cursor-pointer select-none border-r border-border/50 hover:bg-white/5"
+              className="shrink-0 w-8 py-px pr-1.5 text-right text-[10px] font-mono text-text-muted hover:text-text-secondary cursor-pointer select-none border-r border-border/50 hover:bg-sidebar-hover"
               title={`Open ${fileName} at line ${lineNum}`}
             >
               {lineNum}
@@ -907,14 +907,14 @@ function AskQuestionBlock({ input, toolUseId }: { input: Input; toolUseId?: stri
                                   : 'border-text-muted',
                               ].join(' ')}
                             >
-                              {isSelected && <Check className="w-2.5 h-2.5 text-white" />}
+                              {isSelected && <Check className="w-2.5 h-2.5 text-on-primary" />}
                             </div>
                           ) : (
                             <div
                               className={[
                                 'w-4 h-4 rounded flex items-center justify-center text-[10px] font-semibold leading-none transition-colors',
                                 isSelected
-                                  ? 'bg-primary text-white'
+                                  ? 'bg-primary text-on-primary'
                                   : 'bg-surface-secondary text-text-secondary border border-border',
                               ].join(' ')}
                             >
@@ -942,7 +942,7 @@ function AskQuestionBlock({ input, toolUseId }: { input: Input; toolUseId?: stri
           <button
             onClick={handleSubmit}
             disabled={!canSubmit}
-            className="flex items-center gap-1.5 px-3 py-1 bg-primary text-white rounded text-xs font-medium hover:bg-primary-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 px-3 py-1 bg-primary text-on-primary rounded text-xs font-medium hover:bg-primary-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Send className="w-3 h-3" />
             Continue
@@ -1019,7 +1019,7 @@ function SearchBlock({ name, input }: { name: string; input: Input }) {
     <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-surface text-xs text-text-secondary flex-wrap">
       <Search className="w-3.5 h-3.5 text-orange-500" />
       <span>{name}:</span>
-      <code className="font-mono text-text-primary bg-white/5 px-1.5 py-0.5 rounded">
+      <code className="font-mono text-text-primary bg-surface-secondary px-1.5 py-0.5 rounded">
         {pattern}
       </code>
       {(path || include) && (

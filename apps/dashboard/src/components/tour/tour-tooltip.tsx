@@ -155,7 +155,7 @@ export function TourTooltip({
       width: targetRect.width + pad * 2,
       height: targetRect.height + pad * 2,
       borderRadius: 8,
-      boxShadow: '0 0 0 9999px rgba(0,0,0,0.5)',
+      boxShadow: '0 0 0 9999px var(--t-scrim)',
       pointerEvents: 'none' as const,
       zIndex: 9998,
     };
@@ -192,7 +192,7 @@ export function TourTooltip({
 
           <button
             onClick={handleDismiss}
-            className="px-3 py-1 text-xs font-medium rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors"
+            className="px-3 py-1 text-xs font-medium rounded-lg bg-primary text-on-primary hover:bg-primary-hover transition-colors"
           >
             Got it
           </button>

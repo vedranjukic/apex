@@ -33,7 +33,7 @@ const STATUS_DOT_COLORS: Record<string, string> = {
   stopping: 'bg-yellow-400',
   deleting: 'bg-yellow-400',
   running: 'bg-green-400',
-  stopped: 'bg-gray-400',
+  stopped: 'bg-text-muted',
   error: 'bg-red-400',
 };
 
@@ -394,7 +394,7 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
             )}
             <button
               onClick={() => setDialogOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm hover:bg-primary-hover transition-colors"
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg text-sm hover:bg-primary-hover transition-colors"
             >
               <Plus className="w-4 h-4" />
               New Project
@@ -756,7 +756,7 @@ function ForkRow({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span
-              className={cn('w-1.5 h-1.5 rounded-full shrink-0 opacity-70', STATUS_DOT_COLORS[project.status] || 'bg-gray-400')}
+              className={cn('w-1.5 h-1.5 rounded-full shrink-0 opacity-70', STATUS_DOT_COLORS[project.status] || 'bg-text-muted')}
               title={STATUS_LABELS[project.status] || project.status}
             />
             <span className="text-sm font-medium truncate">{name}</span>
@@ -846,7 +846,7 @@ function ProjectCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span
-              className={cn('w-2 h-2 rounded-full shrink-0 opacity-70', STATUS_DOT_COLORS[project.status] || 'bg-gray-400')}
+              className={cn('w-2 h-2 rounded-full shrink-0 opacity-70', STATUS_DOT_COLORS[project.status] || 'bg-text-muted')}
               title={STATUS_LABELS[project.status] || project.status}
             />
             <h3 className="font-semibold text-sm truncate hover:text-primary transition-colors cursor-pointer" onClick={onOpen}>{project.name}</h3>
@@ -928,7 +928,7 @@ function ProjectCard({
       </div>
 
       {confirmDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setConfirmDelete(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim" onClick={() => setConfirmDelete(false)}>
           <div className="bg-surface rounded-xl shadow-xl w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-semibold mb-1">Delete project</h3>
 

@@ -410,7 +410,7 @@ export function SettingsPage() {
             <button
               onClick={handleSave}
               disabled={status === "saving"}
-              className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm hover:bg-primary-hover transition-colors disabled:opacity-50"
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg text-sm hover:bg-primary-hover transition-colors disabled:opacity-50"
             >
               {status === "saving" ? (
                 <Loader2 className="w-4 h-4 animate-spin" />

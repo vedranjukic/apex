@@ -46,8 +46,8 @@ const statusConfig: Record<
   },
   stopped: {
     label: 'Stopped',
-    color: 'text-gray-400',
-    dotColor: 'bg-gray-400',
+    color: 'text-text-muted',
+    dotColor: 'bg-text-muted',
   },
   error: {
     label: 'Error',

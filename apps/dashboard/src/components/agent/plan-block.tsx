@@ -56,14 +56,14 @@ export function PlanBlock({ filename, content, isComplete, wasBuilt, threadStatu
       </button>
 
       {expanded && (
-        <div className="px-2.5 py-2 bg-black/20 overflow-x-auto border-t border-border">
+        <div className="px-2.5 py-2 bg-surface-secondary overflow-x-auto border-t border-border">
           <article className="plan-markdown">
             <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
           </article>
         </div>
       )}
 
-      <div className="flex items-center justify-between px-2.5 py-1 bg-black/20 border-t border-border">
+      <div className="flex items-center justify-between px-2.5 py-1 bg-surface-secondary border-t border-border">
         <button
           onClick={() => setExpanded(!expanded)}
           className="text-xs text-text-secondary flex items-center gap-1 hover:text-text-primary transition-colors"
@@ -79,7 +79,7 @@ export function PlanBlock({ filename, content, isComplete, wasBuilt, threadStatu
             'flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-medium transition-all',
             actionDisabled
               ? 'bg-surface text-text-muted border border-border cursor-not-allowed opacity-60'
-              : 'bg-primary text-white hover:bg-primary-hover cursor-pointer',
+              : 'bg-primary text-on-primary hover:bg-primary-hover cursor-pointer',
           ].join(' ')}
         >
           {isRunning
