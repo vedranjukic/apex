@@ -402,7 +402,7 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
             <button
               type="button"
               onClick={() => sendSilentPrompt('Continue. Execute the pending tasks.')}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-primary text-white hover:bg-primary-hover transition-colors font-medium shrink-0"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-primary text-on-primary hover:bg-primary-hover transition-colors font-medium shrink-0"
             >
               <Send className="w-3 h-3" />
               Continue
@@ -472,7 +472,7 @@ function ReasoningToggleButton() {
       className={`shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
         showAll
           ? 'bg-violet-500/15 text-violet-400'
-          : 'bg-white/5 text-text-muted hover:text-text-secondary hover:bg-white/10'
+          : 'bg-surface-secondary text-text-muted hover:text-text-secondary hover:bg-sidebar-hover'
       }`}
     >
       <Brain className="w-3 h-3" />
@@ -490,7 +490,7 @@ function StatsToggleButton({ active, onToggle }: { active: boolean; onToggle: ()
       className={`shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
         active
           ? 'bg-emerald-500/15 text-emerald-400'
-          : 'bg-white/5 text-text-muted hover:text-text-secondary hover:bg-white/10'
+          : 'bg-surface-secondary text-text-muted hover:text-text-secondary hover:bg-sidebar-hover'
       }`}
     >
       <BarChart3 className="w-3 h-3" />

@@ -87,7 +87,7 @@ export function FolderBrowser({ open, initialPath, onSelect, onClose }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-scrim">
       <div className="bg-surface rounded-xl shadow-xl w-full max-w-lg flex flex-col" style={{ maxHeight: '70vh' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
@@ -187,7 +187,7 @@ export function FolderBrowser({ open, initialPath, onSelect, onClose }: Props) {
             </button>
             <button
               onClick={handleSelect}
-              className="px-3 py-1.5 text-xs rounded-lg bg-primary text-white hover:bg-primary-hover transition-colors"
+              className="px-3 py-1.5 text-xs rounded-lg bg-primary text-on-primary hover:bg-primary-hover transition-colors"
             >
               {selected ? 'Select' : 'Use This Folder'}
             </button>

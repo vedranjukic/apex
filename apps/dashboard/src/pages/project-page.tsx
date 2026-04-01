@@ -279,8 +279,8 @@ export function ProjectPage() {
 
   if (loading) {
     return (
-      <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.85)' }}>
-        <Loader2 style={{ width: 32, height: 32, color: '#60a5fa', animation: 'spin 1s linear infinite' }} />
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-scrim">
+        <Loader2 className="w-8 h-8 text-primary animate-spin" />
       </div>
     );
   }
@@ -290,7 +290,7 @@ export function ProjectPage() {
       <AppShell>
         <div className="flex-1 flex flex-col items-center justify-center gap-4">
           <AlertCircle className="w-8 h-8 text-red-400" />
-          <p className="text-sm text-white/70">Project not found</p>
+          <p className="text-sm text-text-secondary">Project not found</p>
           <BackToProjectsButton />
         </div>
       </AppShell>
@@ -428,7 +428,7 @@ function BackToProjectsButton() {
   return (
     <button
       onClick={() => navigate('/')}
-      className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+      className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-border text-text-secondary hover:text-text-primary hover:bg-sidebar-hover transition-colors"
     >
       <ArrowLeft className="w-3 h-3" />
       Back to projects
@@ -461,24 +461,24 @@ function SandboxOverlay({ project, provisionMsg, onStart, onRestart }: { project
                   : 'Restoring workspace…';
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.85)' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', maxWidth: '400px', textAlign: 'center', padding: '0 24px' }}>
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-scrim">
+      <div className="flex flex-col items-center gap-4 max-w-[400px] text-center px-6">
         {isError ? (
-          <AlertCircle style={{ width: 32, height: 32, color: '#f87171' }} />
+          <AlertCircle className="w-8 h-8 text-danger" />
         ) : (
-          <Loader2 style={{ width: 32, height: 32, color: '#60a5fa', animation: 'spin 1s linear infinite' }} />
+          <Loader2 className="w-8 h-8 text-primary animate-spin" />
         )}
 
         <div>
-          <p style={{ fontSize: 14, fontWeight: 500, color: '#ffffff', marginBottom: 4 }}>
+          <p className="text-sm font-medium text-text-primary mb-1">
             {isError ? 'Sandbox Error' : sandboxMissing ? 'Setting up sandbox' : 'Loading project'}
           </p>
-          <p style={{ fontSize: 12, color: '#9ca3af' }}>
+          <p className="text-xs text-text-muted">
             {statusMessage}
           </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+        <div className="flex items-center gap-2 mt-2">
           <BackToProjectsButton />
           {isStopped && onStart && (
             <button

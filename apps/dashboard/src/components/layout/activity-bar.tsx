@@ -71,8 +71,8 @@ function ActivityButton({
       className={cn(
         'relative w-10 h-10 flex items-center justify-center rounded-lg transition-colors',
         isActive
-          ? 'text-white bg-activity-bar-hover'
-          : 'text-gray-400 hover:text-gray-200 hover:bg-activity-bar-hover',
+          ? 'text-panel-icon-active bg-activity-bar-hover'
+          : 'text-panel-icon hover:text-panel-icon-active hover:bg-activity-bar-hover',
       )}
     >
       {isActive && (
@@ -100,7 +100,7 @@ function ProjectsButton() {
     <button
       onClick={handleClick}
       title="Projects"
-      className="relative w-10 h-10 flex items-center justify-center rounded-lg transition-colors text-gray-500 hover:text-gray-300 hover:bg-activity-bar-hover"
+      className="relative w-10 h-10 flex items-center justify-center rounded-lg transition-colors text-panel-icon hover:text-panel-icon-active hover:bg-activity-bar-hover"
     >
       <LayoutGrid className="w-5 h-5" strokeWidth={1.5} />
     </button>

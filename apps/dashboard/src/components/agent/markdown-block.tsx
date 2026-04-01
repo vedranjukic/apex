@@ -27,7 +27,7 @@ export function MarkdownBlock({ title, content }: MarkdownBlockProps) {
       </button>
 
       {expanded && (
-        <div className="px-4 py-3 bg-black/20 overflow-x-auto">
+        <div className="px-4 py-3 bg-surface-secondary overflow-x-auto">
           <article className="plan-markdown">
             <Markdown
               remarkPlugins={[remarkGfm]}

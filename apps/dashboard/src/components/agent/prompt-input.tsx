@@ -675,7 +675,7 @@ Instructions:
                 type="button"
                 onClick={handleSubmit}
                 disabled={disabled || !hasContent}
-                className="p-1.5 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50"
+                className="p-1.5 bg-primary text-on-primary rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50"
               >
                 <Send className="w-3.5 h-3.5" />
               </button>

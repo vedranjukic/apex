@@ -13,7 +13,7 @@ interface ForksPanelProps {
 const statusDot: Record<string, { color: string; animate?: boolean }> = {
   creating: { color: 'bg-yellow-400', animate: true },
   running: { color: 'bg-emerald-400' },
-  stopped: { color: 'bg-gray-400' },
+  stopped: { color: 'bg-text-muted' },
   error: { color: 'bg-red-400' },
 };
 
@@ -81,7 +81,7 @@ export function ForksPanel({ projectId }: ForksPanelProps) {
             <button
               onClick={handleCreate}
               disabled={creating || !branchName.trim()}
-              className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-xs rounded bg-primary text-white hover:bg-primary-hover disabled:opacity-40 transition-colors"
+              className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-xs rounded bg-primary text-on-primary hover:bg-primary-hover disabled:opacity-40 transition-colors"
             >
               {creating ? (
                 <Loader2 className="w-3 h-3 animate-spin" />

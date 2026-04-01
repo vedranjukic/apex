@@ -243,8 +243,8 @@ export function FileTree({ projectId, actions }: FileTreeProps) {
 
   if (!rootPath) {
     return (
-      <div className="flex flex-col items-center justify-center py-12 text-gray-500 text-center">
-        <Folder className="w-8 h-8 mb-2 opacity-40" />
+      <div className="flex flex-col items-center justify-center py-12 text-panel-text-muted text-center">
+        <Folder className="w-8 h-8 mb-2 opacity-50" />
         <p className="text-xs">File explorer will be available when the sandbox is connected.</p>
       </div>
     );
@@ -273,7 +273,7 @@ export function FileTree({ projectId, actions }: FileTreeProps) {
               <div
                 {...item.getProps()}
                 key={itemId}
-                className="flex items-center gap-1 px-1 py-[1px] text-gray-500"
+                className="flex items-center gap-1 px-1 py-[1px] text-panel-text-muted"
                 style={{ paddingLeft: `${level * 12 + 4}px` }}
               >
                 <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
@@ -318,7 +318,7 @@ export function FileTree({ projectId, actions }: FileTreeProps) {
               ) : (
                 <span className="w-3.5 shrink-0" />
               )}
-              <FileIcon className="w-3.5 h-3.5 shrink-0 opacity-70" />
+              <FileIcon className="w-3.5 h-3.5 shrink-0 opacity-85" />
               {isRenaming ? (
                 <InlineInput
                   defaultValue={data.name}
@@ -334,13 +334,13 @@ export function FileTree({ projectId, actions }: FileTreeProps) {
 
         {inlineEdit && (inlineEdit.type === 'new-file' || inlineEdit.type === 'new-folder') && (
           <div
-            className="flex items-center gap-1 px-1 py-[1px] text-gray-300"
+            className="flex items-center gap-1 px-1 py-[1px] text-panel-text"
             style={{ paddingLeft: '16px' }}
           >
             {inlineEdit.type === 'new-folder' ? (
-              <Folder className="w-3.5 h-3.5 shrink-0 opacity-70" />
+              <Folder className="w-3.5 h-3.5 shrink-0 opacity-85" />
             ) : (
-              <File className="w-3.5 h-3.5 shrink-0 opacity-70" />
+              <File className="w-3.5 h-3.5 shrink-0 opacity-85" />
             )}
             <InlineInput
               defaultValue=""
