@@ -20,14 +20,18 @@ import { usersService } from './modules/users/users.service';
 import { settingsService } from './modules/settings/settings.service';
 import { threadsService } from './modules/tasks/tasks.service';
 import { projectsService } from './modules/projects/projects.service';
+import { gitHubMergePollerService } from './modules/github/github-merge-poller.service';
 import { initCA } from './modules/secrets-proxy/ca-manager';
 import { startSecretsProxy, stopSecretsProxy } from './modules/secrets-proxy/secrets-proxy';
 
 function setupGracefulShutdown() {
-  const shutdown = () => {
+  const shutdown = async () => {
+    console.log('[main] Performing graceful shutdown...');
+    await gitHubMergePollerService.shutdown();
     stopSecretsProxy();
     process.exit(0);
   };
+  
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
@@ -50,6 +54,9 @@ async function bootstrap() {
   }
   await projectsService.init();
   projectsService.registerAutoStartHandler(autoExecuteThread);
+  
+  // Initialize GitHub merge status polling service
+  await gitHubMergePollerService.init();
 
   const dashboardDir = process.env.DASHBOARD_DIR || join(__dirname, '../../dashboard/dist');
 

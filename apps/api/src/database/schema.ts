@@ -38,6 +38,14 @@ export const projects = sqliteTable('projects', {
     branch?: string;
     labels?: string[];
   } | null>(),
+  mergeStatus: text('merge_status', { mode: 'json' }).$type<{
+    mergeable: boolean | null;
+    mergeable_state: string;
+    checks_status: 'pending' | 'success' | 'failure' | 'neutral';
+    merge_behind_by: number;
+    last_checked: string;
+    pr_state: 'open' | 'closed' | 'merged';
+  } | null>(),
   forkedFromId: text('forked_from_id'),
   branchName: text('branch_name'),
   localDir: text('local_dir'),

@@ -38,6 +38,7 @@ export interface IProject {
   agentConfig: IAgentConfig;
   forkedFromId: string | null;
   branchName: string | null;
+  mergeStatus: IMergeStatusData | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -88,4 +89,14 @@ export interface IMessage {
   content: IContentBlock[];
   metadata: IMessageMetadata;
   createdAt: string;
+}
+
+// ── Merge Status ─────────────────────────────────────
+export interface IMergeStatusData {
+  mergeable: boolean | null;
+  mergeable_state: string;
+  checks_status: 'pending' | 'success' | 'failure' | 'neutral';
+  merge_behind_by: number;
+  last_checked: string;
+  pr_state: 'open' | 'closed' | 'merged';
 }
