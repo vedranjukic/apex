@@ -50,6 +50,13 @@ export const projects = sqliteTable('projects', {
   branchName: text('branch_name'),
   localDir: text('local_dir'),
   autoStartPrompt: text('auto_start_prompt'),
+  sandboxConfig: text('sandbox_config', { mode: 'json' }).$type<{
+    customImage?: string;
+    environmentVariables?: Record<string, string>;
+    memoryMB?: number;
+    cpus?: number;
+    diskGB?: number;
+  } | null>(),
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()).$onUpdateFn(() => new Date().toISOString()),
   deletedAt: text('deleted_at'),

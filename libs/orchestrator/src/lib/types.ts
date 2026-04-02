@@ -376,6 +376,14 @@ export interface SandboxSession {
   endTime?: number;
 }
 
+export interface SandboxAdvancedSettings {
+  customImage?: string;
+  environmentVariables?: Record<string, string>;
+  memoryMB?: number;
+  cpus?: number;
+  diskGB?: number;
+}
+
 export interface OrchestratorConfig {
   anthropicApiKey?: string;
   openaiApiKey?: string;

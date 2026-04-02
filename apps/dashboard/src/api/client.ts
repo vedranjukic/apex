@@ -62,7 +62,7 @@ export interface Project {
 export const projectsApi = {
   list: () => request<Project[]>('/projects'),
   get: (id: string) => request<Project>(`/projects/${id}`),
-  create: (data: { name: string; description?: string; agentType?: string; provider?: string; gitRepo?: string; gitBranch?: string; localDir?: string; githubContext?: GitHubContextData; autoStartPrompt?: string }) =>
+  create: (data: { name: string; description?: string; agentType?: string; provider?: string; gitRepo?: string; gitBranch?: string; localDir?: string; githubContext?: GitHubContextData; autoStartPrompt?: string; sandboxConfig?: { customImage?: string; environmentVariables?: Record<string, string>; memoryMB?: number; cpus?: number; diskGB?: number } }) =>
     request<Project>('/projects', {
       method: 'POST',
       body: JSON.stringify(data),
