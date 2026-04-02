@@ -56,8 +56,8 @@ export interface SettingsState extends PortForwardingSettings, GeneralSettings {
 
 // Default settings
 const DEFAULT_PORT_FORWARDING_SETTINGS: PortForwardingSettings = {
-  portRange: { start: 8000, end: 9000 },
-  autoForwardEnabled: false,
+  portRange: { start: 3000, end: 9000 },
+  autoForwardEnabled: true,
   maxConcurrentForwards: 20,
   excludedPorts: [],
   preferredPortOffset: 0,
@@ -302,17 +302,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
   };
 });
 
-// Export selectors for common use cases
-export const usePortForwardingSettings = () => useSettingsStore((state) => ({
-  portRange: state.portRange,
-  autoForwardEnabled: state.autoForwardEnabled,
-  maxConcurrentForwards: state.maxConcurrentForwards,
-  excludedPorts: state.excludedPorts,
-  preferredPortOffset: state.preferredPortOffset,
-}));
+export function usePortForwardingSettings() {
+  const portRange = useSettingsStore((s) => s.portRange);
+  const autoForwardEnabled = useSettingsStore((s) => s.autoForwardEnabled);
+  const maxConcurrentForwards = useSettingsStore((s) => s.maxConcurrentForwards);
+  const excludedPorts = useSettingsStore((s) => s.excludedPorts);
+  const preferredPortOffset = useSettingsStore((s) => s.preferredPortOffset);
+  return { portRange, autoForwardEnabled, maxConcurrentForwards, excludedPorts, preferredPortOffset };
+}
 
-export const useGeneralSettings = () => useSettingsStore((state) => ({
-  notificationsEnabled: state.notificationsEnabled,
-  autoCloseInactiveTimeout: state.autoCloseInactiveTimeout,
-  showAdvancedOptions: state.showAdvancedOptions,
-}));
+export function useGeneralSettings() {
+  const notificationsEnabled = useSettingsStore((s) => s.notificationsEnabled);
+  const autoCloseInactiveTimeout = useSettingsStore((s) => s.autoCloseInactiveTimeout);
+  const showAdvancedOptions = useSettingsStore((s) => s.showAdvancedOptions);
+  return { notificationsEnabled, autoCloseInactiveTimeout, showAdvancedOptions };
+}

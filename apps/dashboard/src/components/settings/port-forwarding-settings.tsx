@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Settings, Wifi, WifiOff, Plus, X, RotateCcw, ChevronDown, ChevronRight, AlertTriangle, Info } from 'lucide-react';
+import { Settings, Plus, X, RotateCcw, ChevronDown, ChevronRight, Info } from 'lucide-react';
 import { useSettingsStore, usePortForwardingSettings, useGeneralSettings } from '../../stores/settings-store';
 import { cn } from '../../lib/cn';
 
@@ -10,7 +10,6 @@ interface PortForwardingSettingsProps {
 export function PortForwardingSettings({ className }: PortForwardingSettingsProps) {
   const {
     portRange,
-    autoForwardEnabled,
     maxConcurrentForwards,
     excludedPorts,
     preferredPortOffset,
@@ -24,7 +23,6 @@ export function PortForwardingSettings({ className }: PortForwardingSettingsProp
 
   const {
     setPortRange,
-    setAutoForwardEnabled,
     setMaxConcurrentForwards,
     addExcludedPort,
     removeExcludedPort,
@@ -33,8 +31,6 @@ export function PortForwardingSettings({ className }: PortForwardingSettingsProp
     setAutoCloseInactiveTimeout,
     setShowAdvancedOptions,
     resetToDefaults,
-    isPortInRange,
-    getNextAvailablePortInRange,
   } = useSettingsStore();
 
   const [portRangeStart, setPortRangeStart] = useState(portRange.start.toString());
@@ -66,8 +62,6 @@ export function PortForwardingSettings({ className }: PortForwardingSettingsProp
     }
   }, [newExcludedPort, excludedPorts, addExcludedPort]);
 
-  const availablePortsInRange = portRange.end - portRange.start + 1 - excludedPorts.filter(p => isPortInRange(p)).length;
-  const nextAvailablePort = getNextAvailablePortInRange();
 
   return (
     <div className={cn("space-y-6", className)}>
@@ -86,49 +80,13 @@ export function PortForwardingSettings({ className }: PortForwardingSettingsProp
         </button>
       </div>
 
-      {/* Auto Forward Toggle */}
-      <div className="space-y-3">
-        <h3 className="text-sm font-medium text-text-secondary">Automatic Port Forwarding</h3>
-        <div className="flex items-center justify-between p-3 border border-border/50 rounded-lg">
-          <div className="flex items-center gap-3">
-            {autoForwardEnabled ? (
-              <Wifi className="w-5 h-5 text-green-400" />
-            ) : (
-              <WifiOff className="w-5 h-5 text-text-muted" />
-            )}
-            <div>
-              <div className="text-sm font-medium text-text-primary">
-                Auto-forward detected ports
-              </div>
-              <div className="text-xs text-text-muted">
-                Automatically forward ports when services are detected
-              </div>
-            </div>
-          </div>
-          <button
-            onClick={() => setAutoForwardEnabled(!autoForwardEnabled)}
-            className={cn(
-              "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
-              autoForwardEnabled ? "bg-accent" : "bg-background-muted"
-            )}
-          >
-            <span
-              className={cn(
-                "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
-                autoForwardEnabled ? "translate-x-6" : "translate-x-1"
-              )}
-            />
-          </button>
-        </div>
-      </div>
-
       {/* Port Range Configuration */}
       <div className="space-y-3">
         <h3 className="text-sm font-medium text-text-secondary">Port Range Configuration</h3>
         <div className="space-y-4 p-3 border border-border/50 rounded-lg">
           <div className="flex items-center gap-2 text-xs text-text-muted">
             <Info className="w-4 h-4" />
-            <span>Configure the port range for conflict resolution (default: 8000-9000)</span>
+            <span>Fallback range when the original port is taken (default: 3000-9000)</span>
           </div>
           
           <div className="flex items-center gap-3">
@@ -140,7 +98,7 @@ export function PortForwardingSettings({ className }: PortForwardingSettingsProp
                 onChange={(e) => handlePortRangeStartChange(e.target.value)}
                 min={1024}
                 max={65535}
-                className="w-full px-2 py-1.5 text-xs border border-border rounded-md bg-background-primary text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
+                className="w-full px-2 py-1.5 text-xs border border-border rounded-md bg-surface-secondary text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
               />
             </div>
             <div className="flex-1">
@@ -151,16 +109,9 @@ export function PortForwardingSettings({ className }: PortForwardingSettingsProp
                 onChange={(e) => handlePortRangeEndChange(e.target.value)}
                 min={1024}
                 max={65535}
-                className="w-full px-2 py-1.5 text-xs border border-border rounded-md bg-background-primary text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
+                className="w-full px-2 py-1.5 text-xs border border-border rounded-md bg-surface-secondary text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
               />
             </div>
-          </div>
-          
-          <div className="flex items-center justify-between text-xs text-text-muted">
-            <span>Available ports in range: {availablePortsInRange}</span>
-            {nextAvailablePort && (
-              <span>Next available: {nextAvailablePort}</span>
-            )}
           </div>
         </div>
       </div>
@@ -183,7 +134,7 @@ export function PortForwardingSettings({ className }: PortForwardingSettingsProp
               min={1}
               max={65535}
               className="flex-1 px-2 py-1.5 text-xs border border-border rounded-md bg-background-primary text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent"
-              onKeyPress={(e) => e.key === 'Enter' && handleAddExcludedPort()}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddExcludedPort()}
             />
             <button
               onClick={handleAddExcludedPort}
@@ -245,7 +196,7 @@ export function PortForwardingSettings({ className }: PortForwardingSettingsProp
                 onChange={(e) => setMaxConcurrentForwards(parseInt(e.target.value, 10) || 1)}
                 min={1}
                 max={100}
-                className="w-20 px-2 py-1.5 text-xs border border-border rounded-md bg-background-primary text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
+                className="w-20 px-2 py-1.5 text-xs border border-border rounded-md bg-surface-secondary text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
               />
               <span className="text-xs text-text-muted">
                 Maximum number of simultaneous port forwards
@@ -265,7 +216,7 @@ export function PortForwardingSettings({ className }: PortForwardingSettingsProp
                 onChange={(e) => setPreferredPortOffset(parseInt(e.target.value, 10) || 0)}
                 min={0}
                 max={1000}
-                className="w-20 px-2 py-1.5 text-xs border border-border rounded-md bg-background-primary text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
+                className="w-20 px-2 py-1.5 text-xs border border-border rounded-md bg-surface-secondary text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
               />
               <span className="text-xs text-text-muted">
                 Offset added to port numbers for conflict resolution
@@ -307,7 +258,7 @@ export function PortForwardingSettings({ className }: PortForwardingSettingsProp
                 onChange={(e) => setAutoCloseInactiveTimeout(parseInt(e.target.value, 10) || 60)}
                 min={1}
                 max={1440}
-                className="w-20 px-2 py-1.5 text-xs border border-border rounded-md bg-background-primary text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
+                className="w-20 px-2 py-1.5 text-xs border border-border rounded-md bg-surface-secondary text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
               />
               <span className="text-xs text-text-muted">
                 Automatically close port forwards after inactivity
@@ -339,15 +290,6 @@ export function PortForwardingSettings({ className }: PortForwardingSettingsProp
         </div>
       )}
 
-      {/* Warnings */}
-      {availablePortsInRange < 10 && (
-        <div className="flex items-center gap-2 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
-          <AlertTriangle className="w-4 h-4 text-yellow-500" />
-          <div className="text-xs text-yellow-600">
-            Warning: Only {availablePortsInRange} ports available in range. Consider expanding the range or reducing excluded ports.
-          </div>
-        </div>
-      )}
     </div>
   );
 }

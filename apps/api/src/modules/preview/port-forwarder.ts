@@ -1,4 +1,5 @@
 import { createServer, connect, type Server, type Socket } from 'net';
+import { spawn, type ChildProcess } from 'child_process';
 
 export interface ForwardEntry {
   server: Server;
@@ -11,6 +12,7 @@ export interface ForwardEntry {
   status: 'active' | 'failed' | 'stopped';
   error?: string;
   healthCheckInterval?: NodeJS.Timeout;
+  sshProcess?: ChildProcess;
 }
 
 export interface PortForwarderConfig {
@@ -44,14 +46,14 @@ export interface PortStatus {
 
 const DEFAULT_CONFIG: PortForwarderConfig = {
   portRange: {
-    start: 8000,
+    start: 3000,
     end: 9000
   },
-  excludedPorts: [8080, 8443, 8888], // Common development ports to avoid
+  excludedPorts: [],
   enableHealthChecks: true,
-  healthCheckInterval: 30000, // 30 seconds
+  healthCheckInterval: 30000,
   maxRetries: 3,
-  retryDelay: 1000 // 1 second
+  retryDelay: 1000
 };
 
 const forwards = new Map<string, ForwardEntry>();
@@ -84,16 +86,13 @@ async function findFreePort(startPort: number, maxAttempts = 100): Promise<numbe
  * Enhanced port allocation with range and exclusion support
  */
 async function findFreePortInRange(preferredPort?: number): Promise<number> {
-  // If a specific port is requested, try it first
   if (preferredPort && !config.excludedPorts.includes(preferredPort)) {
     if (await isPortFree(preferredPort)) {
       return preferredPort;
     }
   }
 
-  // Search within the configured range
   const { start, end } = config.portRange;
-  
   for (let port = start; port <= end; port++) {
     if (config.excludedPorts.includes(port)) continue;
     if (await isPortFree(port)) {
@@ -101,7 +100,20 @@ async function findFreePortInRange(preferredPort?: number): Promise<number> {
     }
   }
   
-  throw new Error(`No free port found in range ${start}-${end}`);
+  // Fall back to OS-assigned ephemeral port
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address();
+      if (addr && typeof addr === 'object') {
+        const port = addr.port;
+        srv.close(() => resolve(port));
+      } else {
+        srv.close(() => reject(new Error('Could not allocate ephemeral port')));
+      }
+    });
+    srv.on('error', reject);
+  });
 }
 
 /**
@@ -253,23 +265,116 @@ async function createForward(
   return localPort;
 }
 
+/**
+ * Forward a port via SSH tunnel (ssh -L). Used for Daytona/remote sandboxes
+ * where direct TCP is not possible.
+ */
+export async function forwardPortViaSsh(
+  sandboxId: string,
+  remotePort: number,
+  ssh: { user: string; host: string; port: number },
+  preferredLocalPort?: number,
+): Promise<number> {
+  const key = forwardKey(sandboxId, remotePort);
+
+  const existing = forwards.get(key);
+  if (existing && existing.status === 'active') {
+    return existing.localPort;
+  }
+
+  const localPort = await findFreePortInRange(preferredLocalPort);
+
+  const sshArgs = [
+    '-L', `${localPort}:localhost:${remotePort}`,
+    '-p', String(ssh.port),
+    `${ssh.user}@${ssh.host}`,
+    '-N',
+    '-o', 'StrictHostKeyChecking=no',
+    '-o', 'UserKnownHostsFile=/dev/null',
+    '-o', 'ExitOnForwardFailure=yes',
+    '-o', 'ServerAliveInterval=15',
+    '-o', 'ServerAliveCountMax=3',
+  ];
+
+  const sshProc = spawn('ssh', sshArgs, { stdio: 'pipe' });
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      sshProc.kill();
+      reject(new Error('SSH tunnel setup timed out'));
+    }, 15_000);
+
+    let stderr = '';
+    sshProc.stderr?.on('data', (d) => { stderr += d.toString(); });
+
+    sshProc.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+
+    sshProc.on('exit', (code) => {
+      clearTimeout(timeout);
+      if (code !== null && code !== 0) {
+        reject(new Error(`SSH exited with code ${code}: ${stderr.trim()}`));
+      }
+    });
+
+    // SSH -L doesn't print anything on success; wait for the local port to become bound
+    const checkInterval = setInterval(async () => {
+      if (!(await isPortFree(localPort))) {
+        clearInterval(checkInterval);
+        clearTimeout(timeout);
+        resolve();
+      }
+    }, 200);
+  });
+
+  // Create a dummy server entry so the rest of the system tracks it
+  const dummyServer = createServer();
+  const entry: ForwardEntry = {
+    server: dummyServer,
+    localPort,
+    remoteHost: ssh.host,
+    remotePort,
+    sandboxId,
+    connections: new Set(),
+    createdAt: Date.now(),
+    status: 'active',
+    sshProcess: sshProc,
+  };
+
+  sshProc.on('exit', () => {
+    if (entry.status === 'active') {
+      console.warn(`[port-forward] SSH tunnel died for ${key}`);
+      entry.status = 'failed';
+      entry.error = 'SSH tunnel process exited';
+    }
+  });
+
+  forwards.set(key, entry);
+  console.log(`[port-forward] SSH tunnel: ${sandboxId.slice(0, 12)}:${remotePort} → localhost:${localPort}`);
+
+  return localPort;
+}
+
 /** Stop forwarding a specific port for a sandbox. */
 export function unforwardPort(sandboxId: string, remotePort: number): boolean {
   const key = forwardKey(sandboxId, remotePort);
   const entry = forwards.get(key);
   if (!entry) return false;
 
-  // Clear health check interval
   if (entry.healthCheckInterval) {
     clearInterval(entry.healthCheckInterval);
   }
 
-  // Close all connections
+  if (entry.sshProcess) {
+    entry.sshProcess.kill();
+  }
+
   for (const conn of entry.connections) {
     conn.destroy();
   }
 
-  // Close server
   entry.server.close();
   entry.status = 'stopped';
   forwards.delete(key);
@@ -285,17 +390,9 @@ export function unforwardAll(sandboxId: string): number {
 
   for (const [key, entry] of forwards) {
     if (entry.sandboxId === sandboxId) {
-      // Clear health check interval
-      if (entry.healthCheckInterval) {
-        clearInterval(entry.healthCheckInterval);
-      }
-
-      // Close all connections
-      for (const conn of entry.connections) {
-        conn.destroy();
-      }
-
-      // Close server
+      if (entry.healthCheckInterval) clearInterval(entry.healthCheckInterval);
+      if (entry.sshProcess) entry.sshProcess.kill();
+      for (const conn of entry.connections) conn.destroy();
       entry.server.close();
       entry.status = 'stopped';
       toDelete.push(key);
@@ -418,14 +515,9 @@ export function cleanup(): void {
   console.log('[port-forward] Cleaning up all forwards...');
   
   for (const [, entry] of forwards) {
-    if (entry.healthCheckInterval) {
-      clearInterval(entry.healthCheckInterval);
-    }
-    
-    for (const conn of entry.connections) {
-      conn.destroy();
-    }
-    
+    if (entry.healthCheckInterval) clearInterval(entry.healthCheckInterval);
+    if (entry.sshProcess) entry.sshProcess.kill();
+    for (const conn of entry.connections) conn.destroy();
     entry.server.close();
   }
   

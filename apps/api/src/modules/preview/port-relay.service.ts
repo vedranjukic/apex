@@ -1,5 +1,6 @@
 import { 
-  forwardPortWithRange, 
+  forwardPortWithRange,
+  forwardPortViaSsh,
   unforwardPort, 
   autoForwardPorts, 
   getPortStatus,
@@ -46,9 +47,9 @@ export class PortRelayService {
   constructor(config?: Partial<PortRelayConfig>) {
     this.config = {
       enableAutoForward: true,
-      excludedPorts: [8080, 8443, 8888, 3001], // Common development ports + proxy port
-      maxAutoForwards: 10,
-      supportedProviders: ['docker', 'apple-container'],
+      excludedPorts: [],
+      maxAutoForwards: 20,
+      supportedProviders: ['docker', 'apple-container', 'daytona', 'local'],
       ...config
     };
   }
@@ -86,16 +87,10 @@ export class PortRelayService {
         return;
       }
 
-      // Only support local providers for port forwarding
-      if (!this.config.supportedProviders.includes(project.provider)) {
-        console.log(`[port-relay] Provider ${project.provider} not supported for port forwarding`);
-        return;
-      }
-
       const state: PortRelayState = {
         projectId,
         sandboxId: project.sandboxId,
-        autoForwardEnabled: false, // Default to disabled
+        autoForwardEnabled: true,
         lastKnownPorts: [],
         activeForwards: new Map(),
         provider: project.provider
@@ -177,7 +172,6 @@ export class PortRelayService {
     }
 
     try {
-      // Get preview URL to determine remote host
       const project = await projectsService.findById(projectId);
       const manager = projectsService.getSandboxManager(project.provider);
       
@@ -185,21 +179,32 @@ export class PortRelayService {
         return { success: false, error: 'Sandbox manager not available' };
       }
 
-      const { url } = await manager.getPortPreviewUrl(state.sandboxId, remotePort);
-      const remoteHost = new URL(url).hostname;
+      let localPort: number;
+      const preferred = preferredLocalPort ?? remotePort;
 
-      const localPort = await forwardPortWithRange(
-        state.sandboxId,
-        remoteHost,
-        remotePort,
-        preferredLocalPort
-      );
+      if (project.provider === 'daytona') {
+        const ssh = await manager.createSshAccess(state.sandboxId);
+        localPort = await forwardPortViaSsh(
+          state.sandboxId,
+          remotePort,
+          { user: ssh.sshUser, host: ssh.sshHost, port: ssh.sshPort },
+          preferred,
+        );
+      } else {
+        const { url } = await manager.getPortPreviewUrl(state.sandboxId, remotePort);
+        const remoteHost = new URL(url).hostname;
+        localPort = await forwardPortWithRange(
+          state.sandboxId,
+          remoteHost,
+          remotePort,
+          preferred,
+        );
+      }
 
       state.activeForwards.set(remotePort, localPort);
 
-      console.log(`[port-relay] Manual forward: ${projectId.slice(0, 8)}:${remotePort} → localhost:${localPort}`);
+      console.log(`[port-relay] Forward: ${projectId.slice(0, 8)}:${remotePort} → localhost:${localPort} (${project.provider})`);
 
-      // Emit update
       this.emitForwardsUpdate(projectId);
 
       return { success: true, localPort };
@@ -302,50 +307,22 @@ export class PortRelayService {
     }
 
     try {
-      // Filter for TCP ports and exclude already forwarded ports
       const newTcpPorts = ports.filter(p => 
         p.protocol === 'tcp' && 
         !state.activeForwards.has(p.port) &&
         !this.config.excludedPorts.includes(p.port)
       );
 
-      if (newTcpPorts.length === 0) {
-        console.log(`[port-relay] No new ports to forward for ${projectId}`);
-        return;
-      }
+      if (newTcpPorts.length === 0) return;
 
-      // Limit the number of auto-forwards
       const portsToForward = newTcpPorts.slice(0, this.config.maxAutoForwards);
-      
-      console.log(`[port-relay] Auto-forwarding ${portsToForward.length} ports for ${projectId}`);
+      console.log(`[port-relay] Auto-forwarding ${portsToForward.length} ports for ${projectId}:`, portsToForward.map(p => p.port));
 
-      // Get preview URL to determine remote host
-      const project = await projectsService.findById(projectId);
-      const manager = projectsService.getSandboxManager(project.provider);
-      
-      if (!manager) {
-        console.error(`[port-relay] Manager not available for project ${projectId}`);
-        return;
-      }
+      const results = await Promise.allSettled(
+        portsToForward.map(p => this.forwardPort(projectId, p.port))
+      );
 
-      // Use the first port to get the remote host (all ports share same host)
-      const { url } = await manager.getPortPreviewUrl(state.sandboxId, portsToForward[0].port);
-      const remoteHost = new URL(url).hostname;
-
-      // Forward ports using the autoForwardPorts function
-      const results = await autoForwardPorts(state.sandboxId, remoteHost, portsToForward);
-
-      // Update active forwards map
-      for (const result of results) {
-        if (result.localPort) {
-          state.activeForwards.set(result.remotePort, result.localPort);
-        }
-      }
-
-      // Emit update event
-      this.emitForwardsUpdate(projectId);
-
-      const successful = results.filter(r => r.localPort).length;
+      const successful = results.filter(r => r.status === 'fulfilled' && (r.value as any).success).length;
       console.log(`[port-relay] Auto-forwarded ${successful}/${portsToForward.length} ports for ${projectId}`);
 
     } catch (error) {
