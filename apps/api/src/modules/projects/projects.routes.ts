@@ -13,6 +13,27 @@ export const projectsRoutes = new Elysia({ prefix: '/api/projects' })
   })
   .get('/:id', ({ params }) => projectsService.findById(params.id))
   .patch('/:id', async ({ params, body }) => projectsService.update(params.id, body as any))
+  .patch('/:id/merge-status', async ({ params, body }) => {
+    const { mergeStatus } = body as { mergeStatus: any };
+    return projectsService.updateMergeStatus(params.id, mergeStatus);
+  })
+  .post('/:id/merge-status/refresh', async ({ params, set }) => {
+    try {
+      return await projectsService.refreshMergeStatusFromGitHub(params.id);
+    } catch (err) {
+      set.status = 500;
+      return { error: `Failed to refresh merge status: ${err}` };
+    }
+  })
+  .post('/merge-status/batch-refresh', async ({ body, set }) => {
+    try {
+      const { projectIds } = body as { projectIds?: string[] };
+      return await projectsService.batchRefreshMergeStatus(projectIds);
+    } catch (err) {
+      set.status = 500;
+      return { error: `Failed to batch refresh merge status: ${err}` };
+    }
+  })
   .delete('/:id', async ({ params }) => {
     await projectsService.remove(params.id);
     return { ok: true };

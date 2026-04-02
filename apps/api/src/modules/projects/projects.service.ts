@@ -3,7 +3,7 @@ import { execFile as execFileCb } from 'child_process';
 import { db } from '../../database/db';
 import { projects, tasks } from '../../database/schema';
 import { SandboxManager } from '@apex/orchestrator';
-import { parseGitHubUrl, issueBranchName } from '@apex/shared';
+import { parseGitHubUrl, issueBranchName, IMergeStatusData } from '@apex/shared';
 import { githubService } from '../github/github.service';
 import { projectsWsBroadcast } from './projects.ws';
 import { getCACertPem } from '../secrets-proxy/ca-manager';
@@ -446,11 +446,82 @@ class ProjectsService {
     return saved;
   }
 
-  async update(id: string, data: Partial<Pick<typeof projects.$inferSelect, 'name' | 'description' | 'status' | 'statusError' | 'agentConfig'>>): Promise<Project> {
+  async update(id: string, data: Partial<Pick<typeof projects.$inferSelect, 'name' | 'description' | 'status' | 'statusError' | 'agentConfig' | 'mergeStatus'>>): Promise<Project> {
     await db.update(projects).set({ ...data, updatedAt: new Date().toISOString() } as any).where(eq(projects.id, id));
     const updated = await this.findById(id);
     projectsWsBroadcast('project_updated', updated);
     return updated;
+  }
+
+  async updateMergeStatus(id: string, mergeStatus: IMergeStatusData | null): Promise<Project> {
+    await db.update(projects).set({ 
+      mergeStatus: mergeStatus as any, 
+      updatedAt: new Date().toISOString() 
+    }).where(eq(projects.id, id));
+    const updated = await this.findById(id);
+    projectsWsBroadcast('project_updated', updated);
+    return updated;
+  }
+
+  async refreshMergeStatusFromGitHub(id: string): Promise<Project> {
+    const project = await this.findById(id);
+    
+    try {
+      const mergeStatus = await githubService.getProjectMergeStatus({
+        repoUrl: project.gitRepo,
+        issueUrl: project.githubContext?.url
+      });
+      
+      return await this.updateMergeStatus(id, mergeStatus);
+    } catch (error) {
+      console.log(`[projects] Failed to refresh merge status for project ${id}: ${error instanceof Error ? error.message : error}`);
+      // Don't throw error, just return current project state
+      return project;
+    }
+  }
+
+  async batchRefreshMergeStatus(projectIds?: string[]): Promise<Array<{ projectId: string; success: boolean; error?: string }>> {
+    let targetProjects: Project[];
+    
+    if (projectIds) {
+      targetProjects = await Promise.all(projectIds.map(id => this.findById(id)));
+    } else {
+      // Get all projects that have GitHub URLs
+      const allProjects = await db.query.projects.findMany({
+        where: isNull(projects.deletedAt),
+      });
+      targetProjects = allProjects.filter(p => p.gitRepo || p.githubContext?.url);
+    }
+
+    if (targetProjects.length === 0) {
+      return [];
+    }
+
+    const projectData = targetProjects.map(p => ({
+      id: p.id,
+      repoUrl: p.gitRepo,
+      issueUrl: p.githubContext?.url
+    }));
+
+    const results = await githubService.batchCheckMergeStatus(projectData);
+    const updateResults: Array<{ projectId: string; success: boolean; error?: string }> = [];
+
+    for (const result of results) {
+      try {
+        if (result.mergeStatus) {
+          await this.updateMergeStatus(result.projectId, result.mergeStatus);
+        }
+        updateResults.push({ projectId: result.projectId, success: true });
+      } catch (error) {
+        updateResults.push({ 
+          projectId: result.projectId, 
+          success: false, 
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+
+    return updateResults;
   }
 
   async remove(id: string): Promise<void> {

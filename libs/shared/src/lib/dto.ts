@@ -1,5 +1,5 @@
 import { AgentType, ProjectStatus, TaskStatus } from './enums.js';
-import { IAgentConfig, IContentBlock, IMessageMetadata } from './interfaces.js';
+import { IAgentConfig, IContentBlock, IMessageMetadata, IMergeStatusData } from './interfaces.js';
 
 // ── User DTOs ────────────────────────────────────────
 export interface CreateUserDto {
@@ -30,6 +30,7 @@ export interface UpdateProjectDto {
   description?: string;
   status?: ProjectStatus;
   agentConfig?: IAgentConfig;
+  mergeStatus?: IMergeStatusData | null;
 }
 
 // ── Task DTOs ────────────────────────────────────────

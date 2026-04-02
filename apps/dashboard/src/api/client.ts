@@ -28,6 +28,15 @@ export interface GitHubContextData {
   labels?: string[];
 }
 
+export interface MergeStatusData {
+  mergeable: boolean | null;
+  mergeable_state: string;
+  checks_status: 'pending' | 'success' | 'failure' | 'neutral';
+  merge_behind_by: number;
+  last_checked: string;
+  pr_state: 'open' | 'closed' | 'merged';
+}
+
 export interface Project {
   id: string;
   userId: string;
@@ -44,6 +53,7 @@ export interface Project {
   githubContext: GitHubContextData | null;
   forkedFromId: string | null;
   branchName: string | null;
+  mergeStatus: MergeStatusData | null;
   threads?: Thread[];
   createdAt: string;
   updatedAt: string;

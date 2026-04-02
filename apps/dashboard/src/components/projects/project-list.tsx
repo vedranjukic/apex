@@ -6,6 +6,7 @@ import {
   Play, Square, RotateCw, MoreHorizontal, GitFork, CircleDot, GitPullRequest, Github,
   Search, SlidersHorizontal, X,
 } from 'lucide-react';
+import { MergeStatusIcon } from './merge-status-icon';
 import { cn } from '../../lib/cn';
 import { useProjectsStore } from '../../stores/projects-store';
 import { useProjectsSocket } from '../../hooks/use-projects-socket';
@@ -858,7 +859,11 @@ function ProjectCard({
             </p>
           )}
           {project.gitRepo && (
-            <RepoInfo gitRepo={project.gitRepo} githubContext={project.githubContext} />
+            <RepoInfo 
+              gitRepo={project.gitRepo} 
+              githubContext={project.githubContext} 
+              mergeStatus={project.mergeStatus}
+            />
           )}
           <div className="flex items-center gap-3 mt-1 text-xs text-text-muted">
             <span>{{ claude_code: 'Claude Code', open_code: 'OpenCode', codex: 'Codex' }[project.agentType] || project.agentType}</span>
@@ -956,7 +961,11 @@ function ProjectCard({
   );
 }
 
-function RepoInfo({ gitRepo, githubContext }: { gitRepo: string; githubContext: Project['githubContext'] }) {
+function RepoInfo({ gitRepo, githubContext, mergeStatus }: { 
+  gitRepo: string; 
+  githubContext: Project['githubContext']; 
+  mergeStatus: Project['mergeStatus'];
+}) {
   const slug = extractRepoSlug(gitRepo);
   const repoUrl = slug ? `https://github.com/${slug}` : gitRepo;
   const display = slug ?? gitRepo.replace(/^https?:\/\//, '').replace(/\.git$/, '');
@@ -993,6 +1002,13 @@ function RepoInfo({ gitRepo, githubContext }: { gitRepo: string; githubContext: 
           >
             #{githubContext.number} {githubContext.title}
           </a>
+          {/* Show merge status icon only for PRs with merge status data */}
+          {isPr && mergeStatus && (
+            <>
+              <span className="text-text-muted/50">·</span>
+              <MergeStatusIcon mergeStatus={mergeStatus} />
+            </>
+          )}
         </>
       )}
     </div>

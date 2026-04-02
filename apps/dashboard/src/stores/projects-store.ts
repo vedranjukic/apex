@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { projectsApi, type Project, type GitHubContextData } from '../api/client';
+import { projectsApi, type Project, type GitHubContextData, type MergeStatusData } from '../api/client';
 
 interface ProjectsState {
   projects: Project[];
@@ -22,6 +22,7 @@ interface ProjectsState {
   deleteProject: (id: string) => Promise<void>;
   setProjectStatus: (id: string, status: string) => void;
   setThreadStatus: (threadId: string, status: string) => void;
+  setProjectMergeStatus: (id: string, mergeStatus: MergeStatusData | null) => void;
   fetchForks: (projectId: string) => Promise<void>;
   forkProject: (id: string, branchName: string) => Promise<Project>;
 }
@@ -77,6 +78,14 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         if (!threads?.some((t) => t.id === threadId)) return p;
         return { ...p, threads: threads.map((t) => t.id === threadId ? { ...t, status } : t) };
       }),
+    });
+  },
+
+  setProjectMergeStatus: (id, mergeStatus) => {
+    set({
+      projects: get().projects.map((p) =>
+        p.id === id ? { ...p, mergeStatus } : p,
+      ),
     });
   },
 
