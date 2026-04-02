@@ -436,7 +436,8 @@ async function executeAgainstSandbox(
     activeTimeouts.set(threadId, timer);
   };
 
-  resetTimeout(AGENT_INITIAL_TIMEOUT_MS);
+  // Timeout is started AFTER the prompt is sent (below), not here.
+  // Starting it here would count reconnection time against the agent response timeout.
 
   const prevHealthCheck = activeHealthChecks.get(threadId);
   if (prevHealthCheck) clearInterval(prevHealthCheck);
@@ -629,6 +630,7 @@ async function executeAgainstSandbox(
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timed out connecting to sandbox')), SEND_TIMEOUT_MS)),
     ]);
     emitTo(client, 'prompt_accepted', { threadId });
+    resetTimeout(AGENT_INITIAL_TIMEOUT_MS);
   } catch (err) {
     cleanupHandler();
     await updateThreadStatusAndNotify(threadId, 'error');
