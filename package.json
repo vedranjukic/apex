@@ -21,13 +21,7 @@
     "test:agent-retry-e2e": "APEX_E2E_TEST=1 npx nx e2e @apex/api-e2e --testPathPattern=agent-retry",
     "test:multi-agent-e2e": "npx nx e2e @apex/api-e2e --testPathPattern=multi-agent.spec",
     "test:ask-user-e2e": "npx nx e2e @apex/api-e2e --testPathPattern=ask-user",
-    "test:secrets-proxy-e2e": "npx nx e2e @apex/api-e2e --testPathPattern=secrets-proxy.spec",
-    "test:port-relay": "node scripts/run-port-relay-tests.js",
-    "test:port-relay:smoke": "node scripts/run-port-relay-tests.js smoke",
-    "test:port-relay:integration": "node scripts/run-port-relay-tests.js integration",
-    "test:port-relay:ui": "node scripts/run-port-relay-tests.js ui", 
-    "test:port-relay:performance": "node scripts/run-port-relay-tests.js performance",
-    "test:port-relay:comprehensive": "node scripts/run-port-relay-tests.js comprehensive"
+    "test:secrets-proxy-e2e": "npx nx e2e @apex/api-e2e --testPathPattern=secrets-proxy.spec"
   },
   "private": true,
   "dependencies": {
