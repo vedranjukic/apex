@@ -1197,6 +1197,96 @@ async function reconcileAndStart(projectId: string) {
   }
 }
 
+/**
+ * Re-attach a message handler for a thread that was already running when the
+ * API restarted. Does NOT send a new prompt — just listens for bridge messages,
+ * persists them, and forwards to subscribers.
+ */
+function reattachToRunningThread(
+  sandboxId: string,
+  threadId: string,
+  manager: ReturnType<typeof projectsService.getSandboxManager>,
+) {
+  if (!manager || activeHandlers.has(threadId)) return;
+
+  const cleanupHandler = () => {
+    manager.removeListener('message', messageHandler);
+    activeHandlers.delete(threadId);
+  };
+
+  const messageHandler = async (_sandboxId: string, msg: BridgeMessage) => {
+    if (_sandboxId !== sandboxId) return;
+    const msgThreadId = (msg as any).threadId;
+    if (msgThreadId && msgThreadId !== threadId) return;
+
+    if (msg.type === 'claude_message') {
+      const data = msg.data as any;
+
+      if (data.type === 'system' && data.subtype === 'init' && data.session_id) {
+        await threadsService.updateClaudeSessionId(threadId, data.session_id);
+      }
+
+      if (data.type === 'assistant' && data.message?.content) {
+        const content = data.message.content as Array<{ type?: string; name?: string }>;
+        const isSyntheticAskUser = content.length === 1 && content[0]?.type === 'tool_use' && content[0]?.name === 'AskUserQuestion';
+        if (!isSyntheticAskUser) {
+          await threadsService.addMessage(threadId, {
+            role: 'assistant', content: data.message.content,
+            metadata: { model: data.message.model, stopReason: data.message.stop_reason, usage: data.message.usage },
+          });
+        }
+      }
+      if (data.type === 'user' && data.message?.content?.length) {
+        const hasToolResult = data.message.content.some((b: { type?: string }) => b?.type === 'tool_result');
+        if (hasToolResult) {
+          await threadsService.addMessage(threadId, { role: 'user', content: data.message.content, metadata: null });
+        }
+      }
+      if (data.type === 'result') {
+        if (data.session_id) await threadsService.updateClaudeSessionId(threadId, data.session_id);
+        await threadsService.addMessage(threadId, {
+          role: 'system', content: [],
+          metadata: {
+            costUsd: data.total_cost_usd, durationMs: data.duration_ms,
+            numTurns: data.num_turns, inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens,
+          },
+        });
+        const finalStatus = data.is_error ? 'error' : 'completed';
+        await updateThreadStatusAndNotify(threadId, finalStatus);
+        emitToSubscribers(sandboxId, 'agent_status', { threadId, status: finalStatus });
+        cleanupHandler();
+      }
+      emitToSubscribers(sandboxId, 'agent_message', { threadId, message: msg.data });
+    } else if (msg.type === 'claude_exit') {
+      const status = msg.code === 0 ? 'completed' : 'error';
+      await updateThreadStatusAndNotify(threadId, status);
+      emitToSubscribers(sandboxId, 'agent_status', { threadId, status });
+      cleanupHandler();
+    } else if (msg.type === 'ask_user_pending') {
+      await updateThreadStatusAndNotify(threadId, 'waiting_for_input');
+      emitToSubscribers(sandboxId, 'agent_status', { threadId, status: 'waiting_for_input' });
+    } else if (msg.type === 'ask_user_resolved') {
+      await updateThreadStatusAndNotify(threadId, 'running');
+      emitToSubscribers(sandboxId, 'agent_status', { threadId, status: 'running' });
+    } else if (msg.type === 'claude_catchup') {
+      const blocks = (msg as any).blocks;
+      if (Array.isArray(blocks) && blocks.length > 0) {
+        emitToSubscribers(sandboxId, 'agent_message', {
+          threadId, message: { type: 'assistant', message: { role: 'assistant', model: '', content: blocks, stop_reason: 'end_turn' }, _catchup: true },
+        });
+      }
+    } else if (msg.type === 'claude_error') {
+      await updateThreadStatusAndNotify(threadId, 'error');
+      emitToSubscribers(sandboxId, 'agent_error', { threadId, error: msg.error });
+      cleanupHandler();
+    }
+  };
+
+  activeHandlers.set(threadId, messageHandler);
+  manager.on('message', messageHandler);
+  console.log(`[agent-ws] Re-attached handler for running thread ${threadId.slice(0, 8)}`);
+}
+
 async function reconcileAndReconnect(
   projectId: string,
   _project: Awaited<ReturnType<typeof projectsService.findById>>,
@@ -1212,10 +1302,38 @@ async function reconcileAndReconnect(
       }
       const manager = projectsService.getSandboxManager(reconciled.provider);
       if (manager) {
+        // Listen for running sessions BEFORE reconnecting so we catch
+        // the bridge's recovery report that arrives shortly after bridge_ready.
+        const onRunningSessions = async (sandboxId: string, sessions: Array<{ threadId: string; sessionId: string }>) => {
+          if (sandboxId !== reconciled.sandboxId) return;
+          manager.removeListener('running_sessions', onRunningSessions);
+          for (const s of sessions) {
+            try {
+              const thread = await threadsService.findById(s.threadId);
+              if (!thread || thread.projectId !== projectId) continue;
+              await threadsService.updateClaudeSessionId(s.threadId, s.sessionId);
+              await threadsService.updateStatus(s.threadId, 'running');
+              reattachToRunningThread(sandboxId, s.threadId, manager);
+              emitToSubscribers(sandboxId, 'agent_status', { threadId: s.threadId, status: 'running' });
+              console.log(`[agent-ws] Restored running thread ${s.threadId.slice(0, 8)} (session ${s.sessionId.slice(0, 8)})`);
+            } catch (err) {
+              console.warn(`[agent-ws] Failed to restore thread ${s.threadId.slice(0, 8)}:`, err);
+            }
+          }
+          try {
+            const latest = await projectsService.findById(projectId);
+            projectsWsBroadcast('project_updated', latest);
+          } catch { /* ignore */ }
+        };
+        manager.on('running_sessions', onRunningSessions);
+        // Auto-cleanup if no running_sessions arrives within 30s (recovery waits for OpenCode health)
+        setTimeout(() => manager.removeListener('running_sessions', onRunningSessions), 30_000);
+
         const dirName = await resolveDirName(reconciled);
         try {
           await manager.reconnectSandbox(reconciled.sandboxId!, dirName, reconciled.localDir || undefined);
         } catch (reconnectErr) {
+          manager.removeListener('running_sessions', onRunningSessions);
           console.warn(`[agent-ws] reconnect failed for ${projectId}, marking as error:`, reconnectErr);
           const message = reconnectErr instanceof Error ? reconnectErr.message : String(reconnectErr);
           await projectsService.update(projectId, { status: 'error', statusError: message.slice(0, 500) });
