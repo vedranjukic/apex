@@ -22,7 +22,11 @@ import { useProjectCommands } from '../hooks/use-project-commands';
 import { useEditorStore, type CodeSelection } from '../stores/editor-store';
 import type { ImageAttachment } from '../components/agent/prompt-input';
 import { useAgentSettingsStore, type AgentTypeId } from '../stores/agent-settings-store';
-import { useProjectAgentSettingsStore } from '../stores/project-agent-settings-store';
+import {
+  useProjectAgentSettingsStore,
+  loadAgentSettings,
+  AGENT_SETTINGS_PATH,
+} from '../stores/project-agent-settings-store';
 import { useTerminalStore } from '../stores/terminal-store';
 import { usePortsStore } from '../stores/ports-store';
 import { useGitStore } from '../stores/git-store';
@@ -73,6 +77,41 @@ export function ProjectPage() {
   useEffect(() => {
     resetEditor();
   }, [resetEditor]);
+
+  // Eagerly load per-project agent-limit overrides so they're available for
+  // handleSendPrompt even if the user never opens the settings panel.
+  useEffect(() => {
+    if (!projectId) return;
+    const store = useProjectAgentSettingsStore.getState();
+    if (store.loadedProjects[projectId]) return;
+    let cancelled = false;
+
+    const handler = (data: { payload: { path: string; content?: string; error?: string } }) => {
+      const d = data.payload;
+      if (d.path !== AGENT_SETTINGS_PATH) return;
+      useProjectAgentSettingsStore.getState().hydrateFromJson(
+        projectId,
+        d.error ? '{}' : (d.content || '{}'),
+      );
+      socket.current?.off('file_read_result', handler);
+    };
+
+    const attach = () => {
+      const ws = socket.current;
+      if (!ws || cancelled) return false;
+      ws.on('file_read_result', handler);
+      loadAgentSettings(projectId, socket);
+      return true;
+    };
+
+    if (!attach()) {
+      const poll = setInterval(() => {
+        if (cancelled || attach()) clearInterval(poll);
+      }, 50);
+      return () => { cancelled = true; clearInterval(poll); socket.current?.off('file_read_result', handler); };
+    }
+    return () => { cancelled = true; socket.current?.off('file_read_result', handler); };
+  }, [projectId, socket]);
 
   useEffect(() => {
     if (projectId) {

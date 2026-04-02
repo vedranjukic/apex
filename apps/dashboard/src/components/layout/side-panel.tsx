@@ -176,8 +176,9 @@ function AgentLimitsSection({ projectId, socket }: { projectId: string; socket: 
 
   useEffect(() => {
     if (loaded) return;
-    const ws = socket.current;
-    if (!ws?.connected) return;
+    let cancelled = false;
+    let attachedWs: typeof socket.current = null;
+
     const handler = (data: any) => {
       const d = data.payload;
       if (d.path !== AGENT_SETTINGS_PATH) return;
@@ -187,9 +188,24 @@ function AgentLimitsSection({ projectId, socket }: { projectId: string; socket: 
         hydrateFromJson(projectId, d.content || '{}');
       }
     };
-    ws.on('file_read_result', handler);
-    loadAgentSettings(projectId, socket);
-    return () => { ws.off('file_read_result', handler); };
+
+    const attach = () => {
+      const ws = socket.current;
+      if (!ws || cancelled) return false;
+      attachedWs = ws;
+      ws.on('file_read_result', handler);
+      loadAgentSettings(projectId, socket);
+      return true;
+    };
+
+    if (!attach()) {
+      const poll = setInterval(() => {
+        if (cancelled || attach()) clearInterval(poll);
+      }, 50);
+      return () => { cancelled = true; clearInterval(poll); attachedWs?.off('file_read_result', handler); };
+    }
+
+    return () => { cancelled = true; attachedWs?.off('file_read_result', handler); };
   }, [projectId, loaded, socket, hydrateFromJson]);
 
   const update = useCallback((patch: Partial<AgentSettings>) => {

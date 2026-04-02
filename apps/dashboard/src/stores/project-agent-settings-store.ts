@@ -61,22 +61,24 @@ export function selectLoaded(projectId: string) {
   return (s: ProjectAgentSettingsState) => !!s.loadedProjects[projectId];
 }
 
-/** Send file_read to load settings from sandbox FS. Caller must wire file_read_result listener. */
+/** Send file_read to load settings from sandbox FS. Caller must wire file_read_result listener.
+ *  Uses send() which queues when not yet connected — only gates on null ref. */
 export function loadAgentSettings(
   projectId: string,
   socket: { current: { send: (event: string, data: unknown) => void; connected: boolean } | null },
 ) {
-  if (!socket.current?.connected) return;
+  if (!socket.current) return;
   socket.current.send('file_read', { projectId, path: SETTINGS_PATH });
 }
 
-/** Write current settings to sandbox FS. */
+/** Write current settings to sandbox FS.
+ *  Uses send() which queues when not yet connected — only gates on null ref. */
 export function saveAgentSettings(
   projectId: string,
   settings: AgentSettings,
   socket: { current: { send: (event: string, data: unknown) => void; connected: boolean } | null },
 ) {
-  if (!socket.current?.connected) return;
+  if (!socket.current) return;
   const content = isNonEmpty(settings) ? JSON.stringify(settings, null, 2) : '{}';
   socket.current.send('file_write', { projectId, path: SETTINGS_PATH, content });
 }
