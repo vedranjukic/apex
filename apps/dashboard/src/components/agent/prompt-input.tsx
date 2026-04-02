@@ -11,6 +11,7 @@ import { FilePicker } from './file-picker';
 import { AgentDropdown, ModelDropdown } from './mode-model-dropdowns';
 import { useAgentSettingsStore } from '../../stores/agent-settings-store';
 import { useEditorStore, type CodeSelection } from '../../stores/editor-store';
+import { useThreadsStore } from '../../stores/tasks-store';
 import type { ImageSource, GitHubContextData } from '../../api/client';
 
 export interface ImageAttachment {
@@ -195,6 +196,9 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
     const [empty, setEmpty] = useState(true);
     const [images, setImages] = useState<ImageAttachment[]>([]);
     const triggerRangeRef = useRef<Range | null>(null);
+    
+    // Access thread store for draft management
+    const { activeThreadId, composingNew, setThreadDraft, getThreadDraft, clearThreadDraft } = useThreadsStore();
 
     const showPicker = pickerMode !== null;
 
@@ -204,15 +208,43 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
         if (!el) return;
         el.textContent = text;
         setEmpty(!text);
+        
+        // Update draft when text is programmatically filled
+        const threadKey = composingNew ? 'new-thread' : activeThreadId || '';
+        if (text.trim()) {
+          setThreadDraft(threadKey, text);
+        } else {
+          clearThreadDraft(threadKey);
+        }
+        
         setTimeout(() => el.focus(), 0);
       },
-    }));
+    }), [composingNew, activeThreadId, setThreadDraft, clearThreadDraft]);
 
     useEffect(() => {
       if (autoFocus && editorRef.current) {
         editorRef.current.focus();
       }
     }, [autoFocus]);
+
+    // Restore draft when component mounts or thread changes
+    useEffect(() => {
+      const el = editorRef.current;
+      if (!el) return;
+      
+      const threadKey = composingNew ? 'new-thread' : activeThreadId || '';
+      const savedDraft = getThreadDraft(threadKey);
+      
+      if (savedDraft) {
+        el.innerHTML = '';
+        el.textContent = savedDraft;
+        setEmpty(!savedDraft.trim());
+      } else if (!composingNew) {
+        // Clear editor if switching to a thread with no draft
+        el.innerHTML = '';
+        setEmpty(true);
+      }
+    }, [activeThreadId, composingNew, getThreadDraft]);
 
     useEffect(() => {
       const handleDocCopy = () => {
@@ -296,10 +328,16 @@ Instructions:
         agentType,
         images.length > 0 ? images : undefined,
       );
+      
+      // Clear the editor and draft on successful send
       el.innerHTML = '';
       setEmpty(true);
       setImages([]);
-    }, [onSend, disabled, images, githubContext]);
+      
+      // Clear the draft for the current thread
+      const threadKey = composingNew ? 'new-thread' : activeThreadId || '';
+      clearThreadDraft(threadKey);
+    }, [onSend, disabled, images, githubContext, composingNew, activeThreadId, clearThreadDraft]);
 
     const handleStopOrSubmit = useCallback(() => {
       if (isRunning && empty && images.length === 0 && onStop) {
@@ -434,6 +472,15 @@ Instructions:
       if (!el) return;
       updateEmpty();
 
+      // Save draft text
+      const { text } = extractContent(el);
+      const threadKey = composingNew ? 'new-thread' : activeThreadId || '';
+      if (text.trim()) {
+        setThreadDraft(threadKey, text);
+      } else {
+        clearThreadDraft(threadKey);
+      }
+
       const sel = window.getSelection();
       if (!sel || sel.rangeCount === 0) return;
       const range = sel.getRangeAt(0);
@@ -457,7 +504,7 @@ Instructions:
 
         setPickerMode('categories');
       }
-    }, [showPicker, updateEmpty]);
+    }, [showPicker, updateEmpty, composingNew, activeThreadId, setThreadDraft, clearThreadDraft]);
 
     const handlePaste = useCallback(
       (e: React.ClipboardEvent) => {
