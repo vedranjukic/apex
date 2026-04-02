@@ -186,7 +186,8 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     if (!this.daytona) throw new Error("DaytonaSandboxProvider not initialized");
     const sandbox = await this.daytona.create({
       snapshot: params.snapshot,
-      autoStopInterval: params.autoStopInterval,
+      autoStopInterval: 0,
+      autoDeleteInterval: -1,
       envVars: params.envVars,
       labels: params.labels,
       name: params.name,

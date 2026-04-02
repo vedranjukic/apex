@@ -576,9 +576,27 @@ export class SandboxManager extends EventEmitter {
       return cached.sandbox;
     }
     if (!this.provider) throw new Error("SandboxManager not initialized");
-    const sandbox = await this.provider.get(sandboxId);
-    this.sandboxCache.set(sandboxId, { sandbox, cachedAt: Date.now() });
-    return sandbox;
+    try {
+      const sandbox = await this.provider.get(sandboxId);
+      this.sandboxCache.set(sandboxId, { sandbox, cachedAt: Date.now() });
+      return sandbox;
+    } catch (err) {
+      this.sandboxCache.delete(sandboxId);
+      throw err;
+    }
+  }
+
+  /**
+   * Check whether an error from a provider indicates the sandbox no longer
+   * exists (e.g. Daytona 404, local registry miss).
+   */
+  static isSandboxNotFoundError(err: unknown): boolean {
+    if (!err) return false;
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/not found|does not exist/i.test(msg)) return true;
+    if (typeof (err as any).statusCode === "number" && (err as any).statusCode === 404) return true;
+    if ((err as any).name === "DaytonaNotFoundError") return true;
+    return false;
   }
 
   /**

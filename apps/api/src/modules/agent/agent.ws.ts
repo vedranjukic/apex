@@ -1290,7 +1290,15 @@ async function reconcileAndReconnect(
 ) {
   try {
     const reconciled = await projectsService.reconcileSandboxStatus(projectId);
-    if (reconciled.status === 'stopped' || reconciled.status === 'error') {
+    if (reconciled.status === 'error') {
+      emitTo(client, 'project_updated', reconciled);
+      emitTo(client, 'agent_status', {
+        projectId, status: 'error',
+        message: reconciled.statusError || 'Sandbox is in error state',
+      });
+      return;
+    }
+    if (reconciled.status === 'stopped') {
       await projectsService.startOrProvisionSandbox(projectId);
     } else {
       if (reconciled.provider === 'daytona') {

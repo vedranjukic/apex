@@ -260,6 +260,14 @@ class ProjectsService {
         return updated;
       }
     } catch (err) {
+      if (SandboxManager.isSandboxNotFoundError(err)) {
+        const errMsg = `Sandbox ${project.sandboxId?.slice(0, 8)} no longer exists or is unavailable`;
+        console.error(`[projects] ${errMsg} for project ${projectId}`);
+        await db.update(projects).set({ status: 'error', statusError: errMsg }).where(eq(projects.id, projectId));
+        const updated = await this.findById(projectId);
+        projectsWsBroadcast('project_updated', updated);
+        return updated;
+      }
       console.warn(`[projects] Failed to reconcile sandbox status for ${projectId}:`, err);
     }
     return project;
