@@ -1830,16 +1830,28 @@ export class SandboxManager extends EventEmitter {
       `[bridge:${sid}] alive=${bridgeAlive} firstConnect=${isFirstConnect}`,
     );
 
-    if (!bridgeAlive || isFirstConnect) {
-      // Always restart on first connect (after app restart) so the bridge
-      // picks up the latest uploaded script. Also restart if bridge is dead.
+    if (!bridgeAlive) {
+      // Bridge is dead — full restart needed.
       console.log(
-        `[bridge:${sid}] restarting bridge (${!bridgeAlive ? "dead" : "fresh session"})`,
+        `[bridge:${sid}] restarting bridge (dead)`,
       );
       await this.restartBridge(session);
       console.log(`[bridge:${sid}] bridge restarted, connecting WS`);
       await this.connectToBridge(session);
       console.log(`[bridge:${sid}] WS connected after restart`);
+      return;
+    }
+
+    if (isFirstConnect) {
+      // Bridge is alive but this is the first API connect (e.g. after API restart).
+      // Soft-restart: kill only the bridge to pick up new script, preserve opencode serve.
+      console.log(
+        `[bridge:${sid}] bridge alive, first connect — soft restart (preserving opencode serve)`,
+      );
+      await this.restartBridge(session, true);
+      console.log(`[bridge:${sid}] soft restart done, connecting WS`);
+      await this.connectToBridge(session);
+      console.log(`[bridge:${sid}] WS connected after soft restart`);
       return;
     }
 
@@ -1902,15 +1914,20 @@ export class SandboxManager extends EventEmitter {
     return msg.includes("container is not running") || msg.includes("is not running");
   }
 
-  /** Restart the bridge process inside the sandbox and refresh preview URL */
-  private async restartBridge(session: InternalSession): Promise<void> {
+  /**
+   * Restart the bridge process inside the sandbox and refresh preview URL.
+   * When preserveOpenCode=true, only the bridge Node process is killed;
+   * opencode serve stays running so the new bridge reuses it (fast reconnect).
+   */
+  private async restartBridge(session: InternalSession, preserveOpenCode = false): Promise<void> {
     const { sandbox, projectDir, bridgeDir } = session;
     const sid = session.sandboxId.slice(0, 8);
 
+    const killCmd = preserveOpenCode
+      ? 'pkill -f "node bridge.cjs" 2>/dev/null; pkill -f "node bridge.js" 2>/dev/null; sleep 0.3'
+      : 'pkill -f "node bridge.cjs" 2>/dev/null; pkill -f "node bridge.js" 2>/dev/null; pkill -f "opencode serve" 2>/dev/null; sleep 0.3';
     try {
-      await sandbox.process.executeCommand(
-        'pkill -f "node bridge.cjs" 2>/dev/null; pkill -f "node bridge.js" 2>/dev/null; pkill -f "opencode serve" 2>/dev/null; sleep 0.3',
-      );
+      await sandbox.process.executeCommand(killCmd);
     } catch (err) {
       if (this.isContainerNotRunning(err)) {
         console.log(`[bridge:${sid}] container not running, restarting sandbox`);

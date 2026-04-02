@@ -137,6 +137,52 @@ function loadDotEnv(dir) {
 
 function startOpenCodeServe() {
   if (ocServeProc) return;
+  checkHealthOnce().then(function(alreadyHealthy) {
+    if (alreadyHealthy) {
+      log("\\u{2705}", "opencode serve already healthy on port " + OC_PORT + " (reused from previous bridge)");
+      return verifyProviderConfig().then(function() {
+        connectSSE();
+        startControlListener();
+      });
+    }
+    spawnOpenCodeServe();
+  }).catch(function() { spawnOpenCodeServe(); });
+}
+
+function verifyProviderConfig() {
+  var expectedBase = process.env.ANTHROPIC_BASE_URL || "";
+  if (!expectedBase) { log("\\u{2699}", "No ANTHROPIC_BASE_URL set, skipping config verify"); return Promise.resolve(); }
+  return ocFetch("GET", "/config", null, 5000).then(function(cfg) {
+    var currentBase = "";
+    try { currentBase = cfg.provider.anthropic.options.baseURL || ""; } catch {}
+    if (currentBase === expectedBase) {
+      log("\\u{2705}", "OC provider config matches current env");
+      return;
+    }
+    log("\\u{26A0}", "OC provider base URL changed, restarting opencode serve");
+    log("\\u{26A0}", "  was: " + (currentBase || "(empty)"));
+    log("\\u{26A0}", "  now: " + expectedBase);
+    try { execSync('pkill -f "opencode serve" 2>/dev/null || true'); } catch {}
+    return new Promise(function(resolve) { setTimeout(resolve, 500); }).then(function() {
+      spawnOpenCodeServe();
+      return waitForHealthy(60).then(function(ok) {
+        if (!ok) log("\\u{274C}", "OC serve failed to become healthy after provider URL change");
+      });
+    });
+  }).catch(function(e) {
+    log("\\u{26A0}", "Config verify failed (" + (e.message || e) + "), restarting OC serve");
+    try { execSync('pkill -f "opencode serve" 2>/dev/null || true'); } catch {}
+    return new Promise(function(resolve) { setTimeout(resolve, 500); }).then(function() {
+      spawnOpenCodeServe();
+      return waitForHealthy(60).then(function(ok) {
+        if (!ok) log("\\u{274C}", "OC serve failed to become healthy after restart");
+      });
+    });
+  });
+}
+
+function spawnOpenCodeServe() {
+  if (ocServeProc) return;
   lastOcExitCode = null;
   lastOcStderr = "";
   log("\\u{1F680}", "Starting opencode serve on port " + OC_PORT);
@@ -200,7 +246,7 @@ function restartOpenCodeServe() {
     try { ocServeProc.kill("SIGKILL"); } catch {}
     ocServeProc = null;
   }
-  startOpenCodeServe();
+  spawnOpenCodeServe();
 }
 
 function checkHealthOnce() {
@@ -530,7 +576,7 @@ function pollSession(threadId, sessionId, agentName, modelName) {
   const pollStartedAt = Date.now();
   const MIN_POLL_BEFORE_IDLE_EXIT_MS = 5000;
   let lastProgressAt = Date.now();
-  const STUCK_NO_OUTPUT_MS = 120000;
+  const STUCK_NO_OUTPUT_MS = 60000;
   const STUCK_NO_PROGRESS_MS = 300000;
   let pollErrorCount = 0;
   const MAX_CONSECUTIVE_ERRORS = 20;
@@ -547,6 +593,10 @@ function pollSession(threadId, sessionId, agentName, modelName) {
     pendingText.clear();
   }
 
+  function hasAnyOutput() {
+    return emittedParts.size > 0 || pendingText.size > 0;
+  }
+
   function abortStuck(reason) {
     log("\\u{274C}", "Stuck session " + sessionId + " for thread " + threadId + ": " + reason);
     activeThreads.delete(threadId);
@@ -557,11 +607,11 @@ function pollSession(threadId, sessionId, agentName, modelName) {
   const poll = () => {
     if (!activeThreads.has(threadId)) { log("\\u{26A0}", "Poll skipped: thread " + threadId + " not in activeThreads"); flushPendingText(); return; }
     var now = Date.now();
-    if (seenBusy && emittedParts.size === 0 && now - pollStartedAt > STUCK_NO_OUTPUT_MS) {
+    if (seenBusy && !hasAnyOutput() && now - pollStartedAt > STUCK_NO_OUTPUT_MS) {
       abortStuck("Agent session stuck: busy for " + Math.round((now - pollStartedAt) / 1000) + "s with no output");
       return;
     }
-    if (seenBusy && emittedParts.size > 0 && now - lastProgressAt > STUCK_NO_PROGRESS_MS) {
+    if (seenBusy && hasAnyOutput() && now - lastProgressAt > STUCK_NO_PROGRESS_MS) {
       abortStuck("Agent session stuck: no new output for " + Math.round((now - lastProgressAt) / 1000) + "s");
       return;
     }
