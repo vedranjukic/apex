@@ -115,13 +115,14 @@ function findSecretForDomain(host) {
   }
   
   // Fallback to GitHub token for GitHub domains
+  // Use Basic auth with x-access-token format so git push/pull works
   if (GITHUB_DOMAINS.has(host) && GITHUB_TOKEN) {
     return {
       id: '_github_token',
       name: 'GITHUB_TOKEN',
-      value: GITHUB_TOKEN,
+      value: 'x-access-token:' + GITHUB_TOKEN,
       domain: host,
-      authType: 'bearer'
+      authType: 'basic'
     };
   }
   

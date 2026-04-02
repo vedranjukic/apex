@@ -2117,6 +2117,19 @@ export class SandboxManager extends EventEmitter {
       }
     }
 
+    if (this.config.githubToken) {
+      try {
+        const safeToken = this.config.githubToken.replace(/'/g, "'\\''");
+        await sandbox.process.executeCommand(
+          [
+            `git config --global credential.helper store`,
+            `printf 'protocol=https\\nhost=github.com\\nusername=x-access-token\\npassword=${safeToken}\\n' | git credential approve`,
+            `git config --global "http.https://github.com/.proxy" ""`,
+          ].join(' && '),
+        );
+      } catch { /* non-fatal */ }
+    }
+
     const bridgeSessionId = `bridge-restart-${Date.now()}`;
     session.bridgeSessionId = bridgeSessionId;
     await sandbox.process.createSession(bridgeSessionId);
@@ -2471,6 +2484,16 @@ export class SandboxManager extends EventEmitter {
         const safeEmail = this.config.gitUserEmail.replace(/"/g, '\\"');
         await sandbox.process.executeCommand(
           `git config --global user.name "${safeName}" && git config --global user.email "${safeEmail}"`,
+        );
+      }
+      if (this.config.githubToken) {
+        const safeToken = this.config.githubToken.replace(/'/g, "'\\''");
+        await sandbox.process.executeCommand(
+          [
+            `git config --global credential.helper store`,
+            `printf 'protocol=https\\nhost=github.com\\nusername=x-access-token\\npassword=${safeToken}\\n' | git credential approve`,
+            `git config --global "http.https://github.com/.proxy" ""`,
+          ].join(' && '),
         );
       }
       log("git done");
