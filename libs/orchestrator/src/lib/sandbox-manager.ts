@@ -2352,11 +2352,15 @@ export class SandboxManager extends EventEmitter {
     const secretsProxyAvailableI = isDaytonaI ? useProxyI : !!secretsProxyUrl;
 
     // ── Exec 1: Write infra files (bridge, config, agents) ──
-    // All config goes under HOME — never write to the project working directory.
+    // Config goes under HOME. Bridge files go under bridgeDir which for the
+    // local provider lives inside projectDir (localDir/.apex).  When cloning a
+    // git repo the project directory must be empty, so bridge file writes are
+    // deferred until after the clone for the local provider.
     const ocConfigDir = `${homeDir}/.config/opencode`;
-    await sandbox.process.executeCommand(
-      `mkdir -p '${ocConfigDir}/agents' '${bridgeDir}'`,
-    );
+    const bridgeDirInsideProject = isLocalProvider && bridgeDir.startsWith(projectDir);
+    const mkdirTargets = [`'${ocConfigDir}/agents'`];
+    if (!bridgeDirInsideProject) mkdirTargets.push(`'${bridgeDir}'`);
+    await sandbox.process.executeCommand(`mkdir -p ${mkdirTargets.join(" ")}`);
 
     const bridgeFiles: { path: string; content: string }[] = [
       { path: `${bridgeDir}/bridge.cjs`, content: bridgeCode },
@@ -2385,19 +2389,35 @@ export class SandboxManager extends EventEmitter {
     const promptFiles = skipIfExistsFiles.filter(f => !existingPaths.has(f.path));
     const writeCaCert = this.config.secretsProxyCaCert && secretsProxyAvailableI && !isLocalProvider;
 
-    const writeInfraTask = Promise.all([
-      this.batchWriteFiles(sandbox, bridgeFiles),
-      this.batchWriteFiles(sandbox, mcpFiles),
+    // When bridgeDir is inside projectDir (local provider), bridge files must
+    // be written after git clone so the clone target directory stays empty.
+    const writeBridgeFiles = async () => {
+      if (bridgeDirInsideProject) {
+        await sandbox.process.executeCommand(`mkdir -p '${bridgeDir}'`);
+      }
+      await Promise.all([
+        this.batchWriteFiles(sandbox, bridgeFiles),
+        this.batchWriteFiles(sandbox, mcpFiles),
+      ]);
+    };
+
+    const writeConfigTask = Promise.all([
       this.batchWriteFiles(sandbox, [...configFiles, ...promptFiles]),
-      // CA cert path requires sudo — write separately to avoid breaking the && chain
       ...(writeCaCert ? [
         sandbox.process.executeCommand(
           `printf '%s' '${Buffer.from(this.config.secretsProxyCaCert).toString("base64")}' | base64 -d | sudo tee '${CA_CERT_PATH}' > /dev/null`,
         ),
       ] : []),
-    ]).then(() => log("infra files written"));
+    ]).then(() => log("config files written"));
 
-    // ── Exec 2: git clone/init (parallel with infra writes, projectDir must be empty for clone) ──
+    // ── Exec 2: git clone/init ──
+    // When bridgeDir is outside projectDir (container providers), bridge files
+    // are written in parallel with the clone.  When inside (local provider),
+    // bridge files are written sequentially after the clone.
+    const writeInfraTask = bridgeDirInsideProject
+      ? writeConfigTask
+      : Promise.all([writeBridgeFiles(), writeConfigTask]).then(() => log("infra files written"));
+
     const gitTask = (async () => {
       if (gitRepo) {
         this.emit("status", session.sandboxId, "cloning_repo");
@@ -2412,7 +2432,11 @@ export class SandboxManager extends EventEmitter {
             `https://x-access-token:${this.config.githubToken}@github.com`,
           );
         }
-        await sandbox.process.executeCommand(`git clone${branchFlag} ${cloneUrl} .`, projectDir);
+        const noProxy = `HTTPS_PROXY="" HTTP_PROXY="" https_proxy="" http_proxy="" `;
+        const cloneResult = await sandbox.process.executeCommand(`${noProxy}git clone${branchFlag} ${cloneUrl} .`, projectDir);
+        if (cloneResult.exitCode !== 0) {
+          throw new Error(`git clone failed (exit ${cloneResult.exitCode}): ${cloneResult.result}`);
+        }
         if (isCommitSha) {
           await sandbox.process.executeCommand(`git checkout ${gitBranch}`, projectDir);
         }
@@ -2431,11 +2455,15 @@ export class SandboxManager extends EventEmitter {
         );
       }
       log("git done");
+      if (bridgeDirInsideProject) {
+        await writeBridgeFiles();
+        log("bridge files written (post-clone)");
+      }
     })();
 
-    // ── Exec 3: Update CA certs if needed (after infra files are written) ──
+    // ── Exec 3: Update CA certs if needed (after config files are written) ──
     const caCertTask = writeCaCert
-      ? writeInfraTask.then(() =>
+      ? writeConfigTask.then(() =>
           sandbox.process.executeCommand("sudo update-ca-certificates 2>/dev/null || true"),
         ).then(() => log("CA cert updated"))
       : Promise.resolve();
