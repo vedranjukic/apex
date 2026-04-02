@@ -276,24 +276,45 @@ class GitHubService {
     }
   }
 
-  async getProjectMergeStatus(project: { repoUrl?: string; issueUrl?: string }): Promise<IMergeStatusData | null> {
+  async findPrByBranch(owner: string, repo: string, branch: string): Promise<{ number: number; state: string } | null> {
     try {
-      // Try to parse GitHub URL from either repoUrl or issueUrl
+      const data = await this.ghFetch(`/repos/${owner}/${repo}/pulls?head=${owner}:${branch}&state=all&per_page=1`);
+      if (Array.isArray(data) && data.length > 0) {
+        return { number: data[0].number, state: data[0].state };
+      }
+      return null;
+    } catch (error) {
+      console.log(`[github] Failed to find PR for branch ${branch}: ${error instanceof Error ? error.message : error}`);
+      return null;
+    }
+  }
+
+  async getProjectMergeStatus(project: { repoUrl?: string; issueUrl?: string; branchName?: string }): Promise<IMergeStatusData | null> {
+    try {
       const url = project.issueUrl || project.repoUrl;
       if (!url) return null;
 
       const parsed = parseGitHubUrl(url);
-      if (!parsed || parsed.type !== 'pull' || !parsed.number) {
-        return null;
+      if (!parsed) return null;
+
+      let prNumber: number | undefined = undefined;
+
+      if (parsed.type === 'pull' && parsed.number) {
+        prNumber = parsed.number;
+      } else if (project.branchName && parsed.owner && parsed.repo) {
+        // For issue-based or repo-based projects, look up PR by branch name
+        const pr = await this.findPrByBranch(parsed.owner, parsed.repo, project.branchName);
+        if (pr) {
+          prNumber = pr.number;
+        }
       }
 
-      // Fetch PR data
-      const prData = await this.fetchPullRequestMergeStatus(parsed.owner, parsed.repo, parsed.number);
+      if (!prNumber) return null;
+
+      const prData = await this.fetchPullRequestMergeStatus(parsed.owner, parsed.repo, prNumber);
       
-      // Fetch commit status/checks
       const checksData = await this.fetchCommitChecksStatus(parsed.owner, parsed.repo, prData.head.sha);
 
-      // Determine overall checks status
       let checksStatus: 'pending' | 'success' | 'failure' | 'neutral' = 'pending';
       
       if (checksData.state === 'success' && checksData.check_runs?.every(run => 
@@ -326,7 +347,7 @@ class GitHubService {
     }
   }
 
-  async batchCheckMergeStatus(projects: Array<{ id: string; repoUrl?: string; issueUrl?: string }>): Promise<Array<{ projectId: string; mergeStatus: IMergeStatusData | null }>> {
+  async batchCheckMergeStatus(projects: Array<{ id: string; repoUrl?: string; issueUrl?: string; branchName?: string }>): Promise<Array<{ projectId: string; mergeStatus: IMergeStatusData | null }>> {
     const results = await Promise.allSettled(
       projects.map(async (project) => {
         const mergeStatus = await this.getProjectMergeStatus(project);

@@ -469,7 +469,8 @@ class ProjectsService {
     try {
       const mergeStatus = await githubService.getProjectMergeStatus({
         repoUrl: project.gitRepo,
-        issueUrl: project.githubContext?.url
+        issueUrl: project.githubContext?.url,
+        branchName: project.branchName || undefined,
       });
       
       return await this.updateMergeStatus(id, mergeStatus);
@@ -500,7 +501,8 @@ class ProjectsService {
     const projectData = targetProjects.map(p => ({
       id: p.id,
       repoUrl: p.gitRepo,
-      issueUrl: p.githubContext?.url
+      issueUrl: p.githubContext?.url,
+      branchName: p.branchName || undefined,
     }));
 
     const results = await githubService.batchCheckMergeStatus(projectData);

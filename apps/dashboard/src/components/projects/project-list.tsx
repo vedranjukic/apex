@@ -1002,13 +1002,12 @@ function RepoInfo({ gitRepo, githubContext, mergeStatus }: {
           >
             #{githubContext.number} {githubContext.title}
           </a>
-          {/* Show merge status icon only for PRs with merge status data */}
-          {isPr && mergeStatus && (
-            <>
-              <span className="text-text-muted/50">·</span>
-              <MergeStatusIcon mergeStatus={mergeStatus} />
-            </>
-          )}
+        </>
+      )}
+      {mergeStatus && (
+        <>
+          <span className="text-text-muted/50">·</span>
+          <MergeStatusIcon mergeStatus={mergeStatus} />
         </>
       )}
     </div>
