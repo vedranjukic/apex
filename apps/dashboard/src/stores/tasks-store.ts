@@ -14,6 +14,11 @@ export interface ThreadSessionInfo {
   agentVersion?: string;
 }
 
+export interface DraftSelection {
+  start: number;
+  end: number;
+}
+
 interface ThreadsState {
   projectId: string | null;
   threads: Thread[];
@@ -26,6 +31,7 @@ interface ThreadsState {
   threadScrollOffsets: Record<string, number>;
   threadSessionInfo: Record<string, ThreadSessionInfo>;
   threadDrafts: Record<string, string>;
+  threadDraftSelections: Record<string, DraftSelection>;
   setSearchQuery: (q: string) => void;
   fetchThreads: (projectId: string) => Promise<void>;
   setActiveThread: (threadId: string) => Promise<void>;
@@ -42,6 +48,8 @@ interface ThreadsState {
   setThreadScrollOffset: (threadId: string, offset: number) => void;
   setThreadDraft: (threadId: string, draft: string) => void;
   getThreadDraft: (threadId: string) => string;
+  setThreadDraftSelection: (threadId: string, sel: DraftSelection) => void;
+  getThreadDraftSelection: (threadId: string) => DraftSelection | null;
   clearThreadDraft: (threadId: string) => void;
   reset: () => void;
 }
@@ -58,6 +66,7 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
   threadScrollOffsets: {},
   threadSessionInfo: {},
   threadDrafts: {},
+  threadDraftSelections: {},
 
   setSearchQuery: (q) => set({ searchQuery: q }),
 
@@ -174,10 +183,18 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
 
   getThreadDraft: (threadId) => get().threadDrafts[threadId] || '',
 
+  setThreadDraftSelection: (threadId, sel) =>
+    set((state) => ({
+      threadDraftSelections: { ...state.threadDraftSelections, [threadId]: sel },
+    })),
+
+  getThreadDraftSelection: (threadId) => get().threadDraftSelections[threadId] ?? null,
+
   clearThreadDraft: (threadId) =>
     set((state) => {
-      const { [threadId]: _, ...remaining } = state.threadDrafts;
-      return { threadDrafts: remaining };
+      const { [threadId]: _, ...remainingDrafts } = state.threadDrafts;
+      const { [threadId]: __, ...remainingSelections } = state.threadDraftSelections;
+      return { threadDrafts: remainingDrafts, threadDraftSelections: remainingSelections };
     }),
 
   reset: () =>
@@ -193,5 +210,6 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
       threadScrollOffsets: {},
       threadSessionInfo: {},
       threadDrafts: {},
+      threadDraftSelections: {},
     }),
 }));

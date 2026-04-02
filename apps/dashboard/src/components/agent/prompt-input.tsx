@@ -172,6 +172,107 @@ function isEditorEmpty(el: HTMLElement): boolean {
   return text.trim().length === 0;
 }
 
+// ── Selection offset helpers ─────────────────────────
+// Convert between DOM Selection positions and character offsets so we can
+// persist and restore the caret / selection across thread switches.
+// Counting: text-node characters are 1:1, <br> counts as 1, <div>/<p>
+// boundaries count as 1 when preceded by other content (matching extractContent).
+
+function charOffsetTo(root: HTMLElement, target: Node, targetOff: number): number {
+  let pos = 0;
+
+  function visit(node: Node): boolean {
+    if (node === target) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        pos += targetOff;
+      } else {
+        const kids = Array.from(node.childNodes);
+        for (let i = 0; i < targetOff && i < kids.length; i++) {
+          visit(kids[i]);
+        }
+      }
+      return true;
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      pos += (node.textContent ?? '').length;
+      return false;
+    }
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const tag = (node as HTMLElement).tagName;
+      if (tag === 'BR') { pos += 1; return false; }
+      if ((tag === 'DIV' || tag === 'P') && pos > 0) pos += 1;
+      for (const child of Array.from(node.childNodes)) {
+        if (visit(child)) return true;
+      }
+    }
+    return false;
+  }
+
+  for (const child of Array.from(root.childNodes)) {
+    if (visit(child)) break;
+  }
+  return pos;
+}
+
+function getSelectionOffsets(root: HTMLElement): { start: number; end: number } | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !root.contains(sel.anchorNode)) return null;
+  const range = sel.getRangeAt(0);
+  const start = charOffsetTo(root, range.startContainer, range.startOffset);
+  const end = range.collapsed ? start : charOffsetTo(root, range.endContainer, range.endOffset);
+  return { start, end };
+}
+
+function findDomPosition(root: HTMLElement, charOffset: number): { node: Node; offset: number } {
+  let remaining = charOffset;
+
+  function visit(node: Node): { node: Node; offset: number } | null {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const len = (node.textContent ?? '').length;
+      if (remaining <= len) return { node, offset: remaining };
+      remaining -= len;
+      return null;
+    }
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      if ((node as HTMLElement).tagName === 'BR') {
+        if (remaining <= 0) {
+          const parent = node.parentNode!;
+          return { node: parent, offset: Array.from(parent.childNodes).indexOf(node as ChildNode) };
+        }
+        remaining -= 1;
+        return null;
+      }
+      for (const child of Array.from(node.childNodes)) {
+        const r = visit(child);
+        if (r) return r;
+      }
+    }
+    return null;
+  }
+
+  for (const child of Array.from(root.childNodes)) {
+    const r = visit(child);
+    if (r) return r;
+  }
+
+  if (root.lastChild?.nodeType === Node.TEXT_NODE) {
+    return { node: root.lastChild, offset: (root.lastChild.textContent ?? '').length };
+  }
+  return { node: root, offset: root.childNodes.length };
+}
+
+function restoreSelection(root: HTMLElement, start: number, end: number): void {
+  const startPos = findDomPosition(root, start);
+  const endPos = start === end ? startPos : findDomPosition(root, end);
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.setStart(startPos.node, startPos.offset);
+  range.setEnd(endPos.node, endPos.offset);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
 export const PromptInput = forwardRef<PromptInputHandle, Props>(
   function PromptInput(
     {
@@ -197,10 +298,25 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
     const [images, setImages] = useState<ImageAttachment[]>([]);
     const triggerRangeRef = useRef<Range | null>(null);
     
-    // Access thread store for draft management
-    const { activeThreadId, composingNew, setThreadDraft, getThreadDraft, clearThreadDraft } = useThreadsStore();
+    const { activeThreadId, composingNew, setThreadDraft, getThreadDraft, clearThreadDraft, setThreadDraftSelection, getThreadDraftSelection } = useThreadsStore();
 
     const showPicker = pickerMode !== null;
+
+    // Track the last known caret / selection offsets so we can persist them
+    // when the user clicks away (at which point window.getSelection() no
+    // longer points inside the contentEditable).
+    const lastSelRef = useRef<{ start: number; end: number } | null>(null);
+
+    useEffect(() => {
+      const onSelChange = () => {
+        const el = editorRef.current;
+        if (!el) return;
+        const offsets = getSelectionOffsets(el);
+        if (offsets) lastSelRef.current = offsets;
+      };
+      document.addEventListener('selectionchange', onSelChange);
+      return () => document.removeEventListener('selectionchange', onSelChange);
+    }, []);
 
     useImperativeHandle(ref, () => ({
       fill(text: string) {
@@ -208,15 +324,14 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
         if (!el) return;
         el.textContent = text;
         setEmpty(!text);
-        
-        // Update draft when text is programmatically filled
+
         const threadKey = composingNew ? 'new-thread' : activeThreadId || '';
         if (text.trim()) {
           setThreadDraft(threadKey, text);
         } else {
           clearThreadDraft(threadKey);
         }
-        
+
         setTimeout(() => el.focus(), 0);
       },
     }), [composingNew, activeThreadId, setThreadDraft, clearThreadDraft]);
@@ -227,24 +342,75 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(
       }
     }, [autoFocus]);
 
-    // Restore draft when component mounts or thread changes
+    const prevThreadKeyRef = useRef<string | null>(null);
+
+    // Persist the current editor content + selection for a given thread key.
+    const saveDraftForKey = useCallback((el: HTMLElement, key: string) => {
+      const { text } = extractContent(el);
+      const store = useThreadsStore.getState();
+      if (text.trim()) {
+        store.setThreadDraft(key, text);
+        if (lastSelRef.current) {
+          store.setThreadDraftSelection(key, lastSelRef.current);
+        }
+      } else {
+        store.clearThreadDraft(key);
+      }
+    }, []);
+
     useEffect(() => {
       const el = editorRef.current;
       if (!el) return;
-      
+
       const threadKey = composingNew ? 'new-thread' : activeThreadId || '';
+
+      // Save draft + selection for the thread we're leaving.
+      if (prevThreadKeyRef.current !== null && prevThreadKeyRef.current !== threadKey) {
+        saveDraftForKey(el, prevThreadKeyRef.current);
+      }
+      prevThreadKeyRef.current = threadKey;
+      lastSelRef.current = null;
+
       const savedDraft = getThreadDraft(threadKey);
-      
+
       if (savedDraft) {
         el.innerHTML = '';
-        el.textContent = savedDraft;
-        setEmpty(!savedDraft.trim());
-      } else if (!composingNew) {
-        // Clear editor if switching to a thread with no draft
+        const lines = savedDraft.split('\n');
+        lines.forEach((line, i) => {
+          if (i > 0) el.appendChild(document.createElement('br'));
+          if (line) el.appendChild(document.createTextNode(line));
+        });
+        setEmpty(false);
+
+        const savedSel = getThreadDraftSelection(threadKey);
+        requestAnimationFrame(() => {
+          if (savedSel) {
+            restoreSelection(el, savedSel.start, savedSel.end);
+          } else {
+            const s = window.getSelection();
+            if (s) {
+              const r = document.createRange();
+              r.selectNodeContents(el);
+              r.collapse(false);
+              s.removeAllRanges();
+              s.addRange(r);
+            }
+          }
+          el.focus();
+        });
+      } else {
         el.innerHTML = '';
         setEmpty(true);
       }
-    }, [activeThreadId, composingNew, getThreadDraft]);
+
+      // Cleanup: save draft when the component unmounts (branch switch)
+      // or before the effect re-fires for a new thread.
+      return () => {
+        const currentEl = editorRef.current;
+        if (!currentEl || !prevThreadKeyRef.current) return;
+        saveDraftForKey(currentEl, prevThreadKeyRef.current);
+      };
+    }, [activeThreadId, composingNew, getThreadDraft, getThreadDraftSelection, saveDraftForKey]);
 
     useEffect(() => {
       const handleDocCopy = () => {
@@ -472,11 +638,18 @@ Instructions:
       if (!el) return;
       updateEmpty();
 
-      // Save draft text
       const { text } = extractContent(el);
       const threadKey = composingNew ? 'new-thread' : activeThreadId || '';
       if (text.trim()) {
         setThreadDraft(threadKey, text);
+        // Read selection directly -- the browser updates the selection state
+        // synchronously before firing `input`, even though the
+        // `selectionchange` event is dispatched asynchronously.
+        const offsets = getSelectionOffsets(el);
+        if (offsets) {
+          lastSelRef.current = offsets;
+          setThreadDraftSelection(threadKey, offsets);
+        }
       } else {
         clearThreadDraft(threadKey);
       }
@@ -504,7 +677,7 @@ Instructions:
 
         setPickerMode('categories');
       }
-    }, [showPicker, updateEmpty, composingNew, activeThreadId, setThreadDraft, clearThreadDraft]);
+    }, [showPicker, updateEmpty, composingNew, activeThreadId, setThreadDraft, setThreadDraftSelection, clearThreadDraft]);
 
     const handlePaste = useCallback(
       (e: React.ClipboardEvent) => {
