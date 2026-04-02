@@ -113,7 +113,102 @@ Both applications are built on top of the same sandboxing layer:
 - **MCP LSP Server** — gives agents language intelligence tools (hover, definition, references, diagnostics, completions, symbols) via language servers managed by the bridge
 - **LLM API Key Proxy** — streaming reverse proxy that injects real LLM keys server-side; containers never see credentials
 - **Secrets Proxy** — MITM HTTPS proxy for user-defined API secrets; values never enter containers
+- **Port Relay** — Enterprise-grade port forwarding system with intelligent auto-detection, advanced conflict resolution, health monitoring, cross-provider optimization, and native desktop/web integration
 - **SQLite** database for projects, threads, and messages (shared between IDE and CLI)
+
+## Port Relay
+
+A sophisticated, production-ready port forwarding system that provides VS Code-style port access to services running inside sandboxes. Port Relay automatically detects services, creates secure tunnels, and provides intelligent forwarding management with advanced features for complex development workflows.
+
+### Key Features
+
+- **🔍 Intelligent Auto-Detection**: Real-time discovery of TCP services using advanced port scanning with process identification
+- **⚡ One-Click Forwarding**: Instant port forwarding with smart conflict resolution and preferred port selection
+- **🔄 Smart Auto-Forwarding**: Configurable auto-forwarding policies with exclusion rules, limits, and per-project settings
+- **🖥️ Native Desktop Integration**: True localhost forwarding in the desktop app with native TCP servers and OS integration
+- **🌐 Web-Compatible Access**: Seamless proxy-based access in the web interface with preview URL generation
+- **🛡️ Enterprise Security**: End-to-end encrypted tunnels, authentication, authorization, and localhost-only binding
+- **📊 Advanced Health Monitoring**: Continuous monitoring with automatic failure detection, recovery, and detailed metrics
+- **🔧 Universal Cross-Provider**: Optimized implementations for Docker (direct TCP), Apple Container (Lima), and Daytona (WebSocket tunnels)
+- **🚀 High Performance**: Sub-millisecond local forwarding, connection pooling, batch operations, and efficient resource usage
+- **⚙️ Advanced Configuration**: Customizable port ranges, exclusion lists, connection limits, health check intervals, and security settings
+
+### How It Works
+
+1. **Real-time Service Detection**: The Apex bridge continuously scans sandbox processes for TCP services, identifying ports, processes, and command lines
+2. **Intelligent Processing**: PortRelayService processes detected ports through configurable policies including exclusions, limits, and provider-specific rules
+3. **Advanced Forwarding Engine**: Enhanced PortForwarder creates optimized TCP tunnels with range-based port allocation, conflict resolution, and health monitoring
+4. **Secure Multi-Provider Tunnels**: Provider-specific tunnel implementations (direct TCP for local, WebSocket for Daytona) with encryption and authentication
+5. **Desktop Integration**: PortRelayManager provides native desktop forwarding with persistent configuration and system integration
+6. **Real-time UI Updates**: Live status updates via WebSocket events for instant feedback on port status, connections, and health
+
+### Example Usage
+
+```bash
+# In your sandbox terminal
+npm run dev  # Starts development server on port 3000
+
+# Port Relay automatically detects the service
+# Click "Forward" in the Ports panel
+# Access at http://localhost:8001 (desktop) or preview URL (web)
+```
+
+### Supported Scenarios
+
+- **🌐 Modern Web Development**: React, Next.js, Vue.js, Angular, Svelte development servers with hot reload support
+- **🔌 API Development & Testing**: Express, FastAPI, Django, Flask, Spring Boot REST/GraphQL APIs with debugging capabilities
+- **🗄️ Database Development**: PostgreSQL, MySQL, MongoDB, Redis, Elasticsearch with native client tool support
+- **🏗️ Microservices Architecture**: Docker Compose multi-service applications, Kubernetes development, service mesh testing
+- **🐛 Advanced Debugging**: Connect IDE debuggers, profilers, monitoring tools, and observability platforms to sandbox services
+- **📊 Development Tools Integration**: Webpack dev servers, Vite, Parcel, Metro bundlers with live reloading
+- **🧪 Testing & Quality Assurance**: E2E testing frameworks, load testing tools, API testing with Postman/Insomnia integration
+- **💾 Data Engineering**: Jupyter notebooks, data processing pipelines, ML model serving, and analytics dashboards
+
+### Technical Implementation
+
+Port Relay is built on a multi-layered architecture:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Frontend Layer                           │
+│  React UI Components + Zustand State + Real-time Events    │
+└─────────────────┬───────────────────────────────────────────┘
+                  │
+┌─────────────────▼───────────────────────────────────────────┐
+│               Service Layer                                │
+│  PortRelayService (State + Events + Policy Enforcement)    │
+└─────────────────┬───────────────────────────────────────────┘
+                  │
+┌─────────────────▼───────────────────────────────────────────┐
+│             Forwarding Engine                              │
+│  Enhanced PortForwarder (TCP + Health + Range Allocation) │
+└─────────────────┬───────────────────────────────────────────┘
+                  │
+┌─────────────────▼───────────────────────────────────────────┐
+│             Transport Layer                                │
+│  TCP Servers + WebSocket Tunnels + Provider Abstraction   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Core Components:**
+- **PortRelayService**: Central orchestration with project state management and event coordination
+- **Enhanced PortForwarder**: Low-level TCP forwarding with advanced conflict resolution and batch processing
+- **PortRelayManager**: Desktop-native forwarding with system integration and persistent configuration
+- **Provider Abstraction**: Optimized implementations for Docker, Apple Container, and Daytona providers
+
+**Key Capabilities:**
+- **Smart Port Allocation**: Range-based allocation (8000-9000) with conflict resolution and excluded ports
+- **Batch Auto-Forwarding**: Parallel processing of multiple ports with individual error handling
+- **Health Monitoring**: Periodic health checks with automatic failure detection and recovery
+- **Cross-Provider Optimization**: Direct TCP for local providers, WebSocket tunnels for cloud providers
+- **Real-time Synchronization**: Live UI updates via WebSocket events for instant status feedback
+
+### Documentation
+
+- **[User Guide](docs/port-relay/user-guide.md)** - Complete user manual with UI walkthrough, configuration, and troubleshooting
+- **[Developer Guide](docs/port-relay/developer-guide.md)** - API reference, extension points, testing, and development setup
+- **[Architecture Guide](docs/port-relay/architecture.md)** - System design, security model, performance characteristics
+- **[Setup Guide](docs/port-relay/setup.md)** - Installation, platform-specific configuration, and advanced setup
 
 ## Getting Started
 

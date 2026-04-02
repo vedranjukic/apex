@@ -15,6 +15,8 @@ import { getCombinedProxyServiceScript } from '@apex/orchestrator';
 import type { SandboxProvider, SandboxInstance } from '@apex/orchestrator';
 
 const PROXY_PORT = 3000;
+const MITM_PORT = 9340;
+const PORT_RELAY_PORT = 9341;
 const PROXY_DIR = '/home/daytona/proxy';
 const HEALTH_MAX_ATTEMPTS = 30;
 const HEALTH_INTERVAL_MS = 1000;
@@ -265,7 +267,8 @@ class ProxySandboxService {
         REAL_OPENAI_API_KEY: openaiKey,
         PROXY_AUTH_TOKEN: authToken,
         PROXY_PORT: String(PROXY_PORT),
-        MITM_PROXY_PORT: '9340',
+        MITM_PROXY_PORT: String(MITM_PORT),
+        PORT_RELAY_PORT: String(PORT_RELAY_PORT),
         SECRETS_JSON: secretsJson,
         GITHUB_TOKEN: githubToken,
         CA_CERT_PEM: caCertPem,
@@ -299,7 +302,7 @@ class ProxySandboxService {
       `cd ${PROXY_DIR} && npm init -y && npm install ws node-forge`
     );
 
-    const script = getCombinedProxyServiceScript(PROXY_PORT, 9340);
+    const script = getCombinedProxyServiceScript(PROXY_PORT, MITM_PORT, PORT_RELAY_PORT);
     await sandbox.fs.uploadFile(Buffer.from(script), `${PROXY_DIR}/proxy.cjs`);
 
     const sessionId = `proxy-${Date.now()}`;

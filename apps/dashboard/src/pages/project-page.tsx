@@ -41,7 +41,13 @@ export function ProjectPage() {
   const fileActions = useFileTreeSocket(projectId, socket);
   const { search: searchFiles } = useSearchSocket(projectId, socket);
   const gitActions = useGitSocket(projectId, socket);
-  const { requestPreviewUrl, forwardPort } = usePortsSocket(projectId, socket);
+  const { 
+    requestPreviewUrl, 
+    forwardPort, 
+    enableAutoForward, 
+    disableAutoForward, 
+    togglePortRelay 
+  } = usePortsSocket(projectId, socket);
   useLspSocket(projectId, socket);
   const addMessage = useThreadsStore((s) => s.addMessage);
   const createThread = useThreadsStore((s) => s.createThread);
@@ -314,6 +320,9 @@ export function ProjectPage() {
           unregisterXterm={terminal.unregisterXterm}
           requestPreviewUrl={requestPreviewUrl}
           forwardPort={forwardPort}
+          enableAutoForward={enableAutoForward}
+          disableAutoForward={disableAutoForward}
+          setPortRelay={togglePortRelay}
           provider={project.provider}
         />
       }

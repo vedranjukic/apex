@@ -218,6 +218,25 @@ export interface BridgePortsUpdate {
   ports: PortInfo[];
 }
 
+// ── Port relay types ──────────────────────────────────
+
+export interface BridgePortRelayStarted {
+  type: 'port_relay_started';
+  targetPort: number;
+  localPort: number;
+}
+
+export interface BridgePortRelayStopped {
+  type: 'port_relay_stopped';
+  targetPort: number;
+}
+
+export interface BridgePortRelayError {
+  type: 'port_relay_error';
+  port: number;
+  error: string;
+}
+
 // ── File system types ────────────────────────────────
 
 export interface FileEntry {
@@ -318,6 +337,9 @@ export type BridgeMessage =
   | BridgeLayoutData
   | BridgeFileChanged
   | BridgePortsUpdate
+  | BridgePortRelayStarted
+  | BridgePortRelayStopped
+  | BridgePortRelayError
   | BridgeLspData
   | BridgeLspResponse
   | BridgeLspStatus;

@@ -15,10 +15,14 @@ import type {
   ApexRPCType,
   DetectedIDEs,
   OpenInIDEParams,
+  PortRelayConfig,
 } from '../shared/rpc-types';
+import { PortRelayManager } from './port-relay-manager';
 
 let apiProcess: ReturnType<typeof Bun.spawn> | null = null;
 let serverPort = 0;
+let portRelayManager: PortRelayManager | null = null;
+let apiWebSocket: WebSocket | null = null;
 
 const allWindows = new Map<number, BrowserWindow>();
 
@@ -314,7 +318,7 @@ async function startApi(port: number): Promise<void> {
 
   // Stream API output to console
   (async () => {
-    if (apiProcess?.stdout) {
+    if (apiProcess?.stdout && typeof apiProcess.stdout !== 'number') {
       const reader = apiProcess.stdout.getReader();
       const decoder = new TextDecoder();
       try {
@@ -330,7 +334,7 @@ async function startApi(port: number): Promise<void> {
   })();
 
   (async () => {
-    if (apiProcess?.stderr) {
+    if (apiProcess?.stderr && typeof apiProcess.stderr !== 'number') {
       const reader = apiProcess.stderr.getReader();
       const decoder = new TextDecoder();
       try {
@@ -348,6 +352,89 @@ async function startApi(port: number): Promise<void> {
   })();
 
   await waitForServer(port);
+}
+
+// ── WebSocket Connection ────────────────────────────
+
+function connectToAPI(): void {
+  if (!portRelayManager) return;
+  
+  const wsUrl = `ws://localhost:${serverPort}/socket.io/?EIO=4&transport=websocket`;
+  
+  try {
+    apiWebSocket = new WebSocket(wsUrl);
+    
+    apiWebSocket.onopen = () => {
+      console.log('[port-relay] Connected to API WebSocket');
+      // Send Socket.io handshake
+      if (apiWebSocket) {
+        apiWebSocket.send('40'); // Connect packet
+      }
+    };
+    
+    apiWebSocket.onmessage = (event) => {
+      handleSocketMessage(event.data);
+    };
+    
+    apiWebSocket.onclose = () => {
+      console.log('[port-relay] API WebSocket disconnected, reconnecting in 5s...');
+      apiWebSocket = null;
+      setTimeout(connectToAPI, 5000);
+    };
+    
+    apiWebSocket.onerror = (error) => {
+      console.error('[port-relay] API WebSocket error:', error);
+    };
+  } catch (err) {
+    console.error('[port-relay] Failed to connect to API WebSocket:', err);
+    setTimeout(connectToAPI, 5000);
+  }
+}
+
+function handleSocketMessage(data: string): void {
+  if (!portRelayManager) return;
+  
+  try {
+    // Parse Socket.io message format
+    if (data.startsWith('42')) {
+      const payload = JSON.parse(data.slice(2));
+      if (Array.isArray(payload) && payload.length >= 2) {
+        const [eventType, eventData] = payload;
+        
+        if (eventType === 'ports_update' && eventData?.ports) {
+          handlePortsUpdate(eventData);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[port-relay] Failed to parse socket message:', err);
+  }
+}
+
+async function handlePortsUpdate(data: { ports: Array<{ port: number, protocol: string }>, sandboxId?: string, projectId?: string }): Promise<void> {
+  if (!portRelayManager || !data.ports || !data.projectId) return;
+  
+  try {
+    // Get project info to find sandbox details
+    const projectRes = await fetch(`http://localhost:${serverPort}/api/projects/${data.projectId}`);
+    if (!projectRes.ok) return;
+    
+    const project = await projectRes.json();
+    if (!project.sandboxId) return;
+    
+    // For local providers (docker, apple-container), determine the remote host
+    let remoteHost = 'localhost';
+    if (project.provider === 'docker' || project.provider === 'apple-container') {
+      // For containers, we need to get the container IP
+      // This would typically come from the sandbox manager, but for now use localhost
+      // as the port-forwarder in the API will handle the actual container connection
+      remoteHost = 'localhost';
+    }
+    
+    await portRelayManager.handleNewPorts(project.sandboxId, remoteHost, data.ports);
+  } catch (err) {
+    console.error('[port-relay] Failed to handle ports update:', err);
+  }
 }
 
 // ── RPC Setup ───────────────────────────────────────
@@ -390,6 +477,66 @@ function createRpcHandlers() {
               resolve({ action: null });
             }, 30000);
           });
+        },
+        getPortRelayConfig: () => {
+          return portRelayManager?.getConfig() || {
+            enabled: false,
+            autoForwardNewPorts: false,
+            portRange: { start: 8000, end: 9000 },
+            excludedPorts: []
+          };
+        },
+        setPortRelayConfig: (params) => {
+          try {
+            if (!portRelayManager) {
+              return { ok: false, error: 'Port relay manager not initialized' };
+            }
+            portRelayManager.setConfig(params);
+            return { ok: true };
+          } catch (err) {
+            return { ok: false, error: String(err) };
+          }
+        },
+        forwardPort: async (params) => {
+          try {
+            if (!portRelayManager) {
+              return { ok: false, error: 'Port relay manager not initialized' };
+            }
+            
+            // For manual forwarding, we need to get the sandbox IP
+            // This is a simplified approach - in practice, you'd get this from the sandbox manager
+            const remoteHost = 'localhost';
+            
+            const localPort = await portRelayManager.forwardPort(
+              params.sandboxId, 
+              remoteHost, 
+              params.remotePort, 
+              params.localPort
+            );
+            
+            return { ok: true, localPort };
+          } catch (err) {
+            return { ok: false, error: String(err) };
+          }
+        },
+        unforwardPort: (params) => {
+          try {
+            if (!portRelayManager) {
+              return { ok: false, error: 'Port relay manager not initialized' };
+            }
+            
+            const success = portRelayManager.unforwardPort(params.sandboxId, params.remotePort);
+            return { ok: success };
+          } catch (err) {
+            return { ok: false, error: String(err) };
+          }
+        },
+        getRelayedPorts: (params) => {
+          if (!portRelayManager) {
+            return { ports: [] };
+          }
+          
+          return { ports: portRelayManager.getRelayedPorts(params.sandboxId) };
         },
       },
       messages: {
@@ -443,10 +590,17 @@ function createWindow(urlPath = '/'): BrowserWindow {
 
   // Send config to the webview after the page loads
   win.webview.on('dom-ready', () => {
-    win.webview.rpc.send.setConfig({
+    (win.webview.rpc as any)?.send?.setConfig({
       platform: process.platform,
       detectedIDEs,
     });
+    
+    // Send initial port relay config
+    if (portRelayManager) {
+      (win.webview.rpc as any)?.send?.portRelayConfigUpdate({
+        config: portRelayManager.getConfig()
+      });
+    }
   });
 
   win.on('close', () => {
@@ -516,6 +670,16 @@ function buildAppMenu(): void {
 // ── App Lifecycle ───────────────────────────────────
 
 function killApi() {
+  if (apiWebSocket) {
+    apiWebSocket.close();
+    apiWebSocket = null;
+  }
+  
+  if (portRelayManager) {
+    portRelayManager.destroy();
+    portRelayManager = null;
+  }
+  
   if (apiProcess) {
     apiProcess.kill();
     apiProcess = null;
@@ -527,6 +691,28 @@ async function main() {
   detectedIDEs = detectIDEs();
   console.log('Detected IDEs:', detectedIDEs);
 
+  // Initialize port relay manager
+  const userDataPath = getUserDataPath();
+  portRelayManager = new PortRelayManager(userDataPath);
+  
+  // Set up event listeners for port relay
+  portRelayManager.addEventListener((event) => {
+    if (event.type === 'config-updated') {
+      // Notify all windows of config changes
+      for (const [, win] of allWindows) {
+        (win.webview.rpc as any)?.send?.portRelayConfigUpdate({ config: event.data });
+      }
+    } else if (event.type === 'ports-updated') {
+      // Notify all windows of port status changes
+      for (const sandboxId of event.data.sandboxPorts.keys()) {
+        const ports = event.data.sandboxPorts.get(sandboxId);
+        for (const [, win] of allWindows) {
+          (win.webview.rpc as any)?.send?.portRelayStatusUpdate({ sandboxId, ports });
+        }
+      }
+    }
+  });
+
   serverPort = await getFreePort();
 
   try {
@@ -534,6 +720,10 @@ async function main() {
     await startApi(serverPort);
     console.log('API ready, opening window...');
     createWindow();
+    
+    // Connect to API WebSocket for port events
+    setTimeout(() => connectToAPI(), 2000);
+    
   } catch (err) {
     console.error('Failed to start API:', err);
     new BrowserWindow({

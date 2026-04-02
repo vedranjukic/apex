@@ -22,6 +22,25 @@ export interface ContextMenuItem {
   enabled?: boolean;
 }
 
+export interface PortRelayConfig {
+  enabled: boolean;
+  autoForwardNewPorts: boolean;
+  portRange: {
+    start: number;
+    end: number;
+  };
+  excludedPorts: number[];
+}
+
+export interface RelayedPort {
+  remotePort: number;
+  localPort: number;
+  sandboxId: string;
+  status: 'active' | 'failed' | 'stopped';
+  error?: string;
+  createdAt: number;
+}
+
 export type ApexRPCType = {
   bun: RPCSchema<{
     requests: {
@@ -32,6 +51,26 @@ export type ApexRPCType = {
       showContextMenu: {
         params: { items: ContextMenuItem[] };
         response: { action: string | null };
+      };
+      getPortRelayConfig: {
+        params: {};
+        response: PortRelayConfig;
+      };
+      setPortRelayConfig: {
+        params: PortRelayConfig;
+        response: { ok: boolean; error?: string };
+      };
+      forwardPort: {
+        params: { sandboxId: string; remotePort: number; localPort?: number };
+        response: { ok: boolean; localPort?: number; error?: string };
+      };
+      unforwardPort: {
+        params: { sandboxId: string; remotePort: number };
+        response: { ok: boolean; error?: string };
+      };
+      getRelayedPorts: {
+        params: { sandboxId?: string };
+        response: { ports: RelayedPort[] };
       };
     };
     messages: {
@@ -46,6 +85,13 @@ export type ApexRPCType = {
       setConfig: {
         platform: string;
         detectedIDEs: DetectedIDEs;
+      };
+      portRelayStatusUpdate: {
+        sandboxId: string;
+        ports: RelayedPort[];
+      };
+      portRelayConfigUpdate: {
+        config: PortRelayConfig;
       };
     };
   }>;
