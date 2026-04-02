@@ -33,6 +33,7 @@ const clientMap = new Map<string, WsClient>();
 const activeHandlers = new Map<string, (sandboxId: string, msg: BridgeMessage) => void>();
 const terminalListenersBySandbox = new Set<string>();
 const lastPortsBySandbox = new Map<string, { ports: unknown[] }>();
+const sandboxToProjectId = new Map<string, string>();
 const activeTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 const activeHealthChecks = new Map<string, ReturnType<typeof setInterval>>();
 
@@ -110,6 +111,7 @@ async function tryResolveProject(projectId: string) {
   try {
     const project = await projectsService.findById(projectId);
     if (!project.sandboxId) return null;
+    sandboxToProjectId.set(project.sandboxId, projectId);
     let manager = projectsService.getSandboxManager(project.provider);
     if (!manager) {
       await projectsService.reinitSandboxManager();
@@ -175,19 +177,12 @@ function attachTerminalListeners(sandboxId: string, provider?: string) {
     lastPortsBySandbox.set(sandboxId, { ports: msg.ports });
     emitToSubscribers(sandboxId, 'ports_update', { ports: msg.ports });
     
-    // Handle port relay auto-forwarding
-    // Find project by sandbox ID for port relay service
-    (async () => {
-      try {
-        const projects = await projectsService.listByUser('1'); // TODO: Use proper user context
-        const project = projects.find(p => p.sandboxId === sid);
-        if (project) {
-          await portRelayService.handlePortsUpdate(project.id, msg);
-        }
-      } catch (error) {
+    const projectId = sandboxToProjectId.get(sid);
+    if (projectId) {
+      portRelayService.handlePortsUpdate(projectId, msg).catch((error) => {
         console.warn(`[port-relay] Error handling ports update for sandbox ${sid}:`, error);
-      }
-    })();
+      });
+    }
   });
   manager.on('lsp_response', (sid: string, msg: any) => {
     if (sid !== sandboxId) return;
@@ -659,6 +654,7 @@ async function handleMessage(client: WsClient, message: unknown) {
           break;
         }
         if (project.sandboxId) {
+          sandboxToProjectId.set(project.sandboxId, project.id);
           subscribeTo(project.sandboxId, client.id);
           attachTerminalListeners(project.sandboxId, project.provider);
           reconcileAndReconnect(payload.projectId, project, client).catch((err) => {
