@@ -1908,6 +1908,19 @@ export class SandboxManager extends EventEmitter {
       return;
     }
 
+    if (isFirstConnect) {
+      // Bridge is alive but this is the first API connect (e.g. after API restart).
+      // Soft-restart: kill only the bridge to pick up new script, preserve opencode serve.
+      console.log(
+        `[bridge:${sid}] bridge alive, first connect — soft restart (preserving opencode serve)`,
+      );
+      await this.restartBridge(session, true);
+      console.log(`[bridge:${sid}] soft restart done, connecting WS`);
+      await this.connectToBridge(session);
+      console.log(`[bridge:${sid}] WS connected after soft restart`);
+      return;
+    }
+
     let lastError: Error | null = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
