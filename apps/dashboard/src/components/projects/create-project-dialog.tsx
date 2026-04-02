@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback, FormEvent } from 'react';
-import { X, Cloud, Container, Laptop, FolderOpen, FolderSearch, GitBranch, CircleDot, GitPullRequest, Loader2 } from 'lucide-react';
+import { X, Cloud, Container, Laptop, FolderOpen, FolderSearch, GitBranch, CircleDot, GitPullRequest, Loader2, Settings } from 'lucide-react';
 import { useProjectsStore } from '../../stores/projects-store';
 import { configApi, githubApi, type ProviderStatus, type GitHubResolveResult, type GitHubContextData } from '../../api/client';
 import { cn } from '../../lib/cn';
 import { FolderBrowser } from './folder-browser';
+import { AdvancedSettingsPanel, type AdvancedSettings, DEFAULT_SETTINGS } from './advanced-settings-panel';
 
 interface Props {
   open: boolean;
@@ -56,6 +57,29 @@ function slugifyTitle(title: string): string {
     .replace(/-{2,}/g, '-') || 'project';
 }
 
+function parseEnvironmentVariables(envVarText: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!envVarText.trim()) return result;
+
+  const lines = envVarText.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    
+    const equalIndex = trimmed.indexOf('=');
+    if (equalIndex === -1) continue;
+    
+    const key = trimmed.substring(0, equalIndex).trim();
+    const value = trimmed.substring(equalIndex + 1);
+    
+    if (key) {
+      result[key] = value;
+    }
+  }
+  
+  return result;
+}
+
 export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   const createProject = useProjectsStore((s) => s.createProject);
   const [name, setName] = useState('');
@@ -74,6 +98,10 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   const [resolveError, setResolveError] = useState<string | null>(null);
   const resolveTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const lastResolvedUrl = useRef('');
+
+  // Advanced settings state
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [advancedSettings, setAdvancedSettings] = useState<AdvancedSettings>(DEFAULT_SETTINGS);
 
   useEffect(() => {
     if (!open) return;
@@ -167,6 +195,39 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
         autoStartPrompt = `${header}\n\n---\n\n${instruction}\n\nIMPORTANT: Work fully autonomously. Do NOT use the ask_user tool or ask for user confirmation or clarification. Make your best judgment and proceed.`;
       }
 
+      // Build sandboxConfig from advanced settings
+      let sandboxConfig: { customImage?: string; environmentVariables?: Record<string, string>; memoryMB?: number; cpus?: number } | undefined;
+      const hasAdvancedSettings = advancedSettings.customImage.trim() || 
+        advancedSettings.environmentVariables.trim() || 
+        advancedSettings.memoryMB.trim() || 
+        advancedSettings.cpus.trim();
+
+      if (hasAdvancedSettings) {
+        sandboxConfig = {};
+        
+        if (advancedSettings.customImage.trim()) {
+          sandboxConfig.customImage = advancedSettings.customImage.trim();
+        }
+        
+        if (advancedSettings.environmentVariables.trim()) {
+          sandboxConfig.environmentVariables = parseEnvironmentVariables(advancedSettings.environmentVariables);
+        }
+        
+        if (advancedSettings.memoryMB.trim()) {
+          const memory = parseInt(advancedSettings.memoryMB, 10);
+          if (!isNaN(memory) && memory > 0) {
+            sandboxConfig.memoryMB = memory;
+          }
+        }
+        
+        if (advancedSettings.cpus.trim()) {
+          const cpus = parseInt(advancedSettings.cpus, 10);
+          if (!isNaN(cpus) && cpus > 0) {
+            sandboxConfig.cpus = cpus;
+          }
+        }
+      }
+
       const project = await createProject({
         name: name.trim(),
         description: description.trim(),
@@ -176,6 +237,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
         localDir: isLocal ? localDir.trim() : undefined,
         githubContext,
         autoStartPrompt,
+        sandboxConfig,
       });
       onCreated(project.id);
       setName('');
@@ -188,6 +250,8 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
       setResolveError(null);
       lastResolvedUrl.current = '';
       nameManuallyEdited.current = false;
+      setShowAdvanced(false);
+      setAdvancedSettings(DEFAULT_SETTINGS);
       onClose();
     } finally {
       setSubmitting(false);
@@ -196,7 +260,10 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim">
-      <div className="bg-surface rounded-xl shadow-xl w-full max-w-md p-6">
+      <div className={cn(
+        "bg-surface rounded-xl shadow-xl w-full p-6 transition-all duration-300",
+        showAdvanced ? "max-w-4xl" : "max-w-md"
+      )}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">New Project</h2>
           <button onClick={onClose} className="text-text-muted hover:text-text-primary">
@@ -204,7 +271,14 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className={cn(
+          "transition-all duration-300",
+          showAdvanced ? "flex gap-6" : "space-y-4"
+        )}>
+          <div className={cn(
+            "space-y-4",
+            showAdvanced ? "flex-1" : ""
+          )}>
           <div>
             <label className="block text-sm font-medium mb-1">Name</label>
             <input
@@ -335,7 +409,19 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
                   : 'Start reviewing PR when ready'}
               </span>
             </label>
-          )}
+           )}
+
+          {/* Advanced Settings Toggle */}
+          <div className="flex items-center justify-between pt-2">
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg border border-border hover:bg-surface-secondary transition-colors text-text-secondary hover:text-text-primary"
+            >
+              <Settings className="w-4 h-4" />
+              {showAdvanced ? 'Hide Advanced' : 'Advanced'}
+            </button>
+          </div>
 
           <div className="flex justify-end gap-2 pt-2">
             <button
@@ -351,8 +437,17 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
               className="px-4 py-2 text-sm rounded-lg bg-primary text-on-primary hover:bg-primary-hover transition-colors disabled:opacity-50"
             >
               {submitting ? 'Creating…' : 'Create Project'}
-            </button>
+             </button>
+           </div>
           </div>
+
+          {/* Advanced Settings Panel */}
+          <AdvancedSettingsPanel
+            open={showAdvanced}
+            provider={provider}
+            settings={advancedSettings}
+            onChange={setAdvancedSettings}
+          />
         </form>
       </div>
     </div>

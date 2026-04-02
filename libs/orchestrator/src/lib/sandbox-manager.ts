@@ -372,22 +372,28 @@ export class SandboxManager extends EventEmitter {
     localDir?: string,
     gitBranch?: string,
     createBranch?: string,
+    advancedSettings?: { customImage?: string; environmentVariables?: Record<string, string>; memoryMB?: number; cpus?: number; diskGB?: number; } | null,
   ): Promise<string> {
     if (!this.provider) throw new Error("SandboxManager not initialized");
 
-    const envVars = this.config.provider !== "local"
-      ? this.buildContainerEnvVars()
-      : undefined;
+    let envVars: Record<string, string> | undefined;
+    if (this.config.provider !== "local") {
+      envVars = this.buildContainerEnvVars();
+      // Merge custom environment variables if provided
+      if (advancedSettings?.environmentVariables) {
+        envVars = { ...envVars, ...advancedSettings.environmentVariables };
+      }
+    }
 
     const sandbox = await this.provider.create({
       snapshot: snapshot || this.config.snapshot,
-      image: this.config.image,
+      image: advancedSettings?.customImage || this.config.image,
       autoStopInterval: 0,
       envVars,
       onStatusChange,
       localDir,
-      memoryMB: this.config.memoryMB,
-      cpus: this.config.cpus,
+      memoryMB: advancedSettings?.memoryMB || this.config.memoryMB,
+      cpus: advancedSettings?.cpus || this.config.cpus,
     });
 
     if (projectName) this.projectNames.set(sandbox.id, projectName);

@@ -16,6 +16,14 @@ export interface UpdateUserDto {
 }
 
 // ── Project DTOs ─────────────────────────────────────
+export interface ProjectAdvancedSettings {
+  customImage?: string;
+  environmentVariables?: Record<string, string>;
+  memoryMB?: number;
+  cpus?: number;
+  diskGB?: number;
+}
+
 export interface CreateProjectDto {
   name: string;
   description?: string;
@@ -23,6 +31,7 @@ export interface CreateProjectDto {
   sandboxSnapshot?: string;
   provider?: string;
   agentConfig?: IAgentConfig;
+  sandboxConfig?: ProjectAdvancedSettings;
 }
 
 export interface UpdateProjectDto {
