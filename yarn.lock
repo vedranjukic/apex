@@ -10,20 +10,20 @@
     ansi-styles "^6.2.1"
     is-fullwidth-code-point "^4.0.0"
 
-"@apex/api-e2e@file:/home/daytona/port-relay-feature-for-electron-desktop/apps/api-e2e":
+"@apex/api-e2e@file:/home/daytona/preserve-draft-text-when-switching-betwe/apps/api-e2e":
   version "0.0.1"
   resolved "file:apps/api-e2e"
   dependencies:
     dotenv "^16.4.5"
 
-"@apex/api@file:/home/daytona/port-relay-feature-for-electron-desktop/apps/api":
+"@apex/api@file:/home/daytona/preserve-draft-text-when-switching-betwe/apps/api":
   version "0.0.1"
   resolved "file:apps/api"
   dependencies:
     drizzle-orm "*"
     elysia "*"
 
-"@apex/cli@file:/home/daytona/port-relay-feature-for-electron-desktop/apps/cli":
+"@apex/cli@file:/home/daytona/preserve-draft-text-when-switching-betwe/apps/cli":
   version "0.1.0"
   resolved "file:apps/cli"
   dependencies:
@@ -45,28 +45,28 @@
     terminal-kit "^3.1.2"
     ws "^8.16.0"
 
-"@apex/dashboard-e2e@file:/home/daytona/port-relay-feature-for-electron-desktop/apps/dashboard-e2e":
+"@apex/dashboard-e2e@file:/home/daytona/preserve-draft-text-when-switching-betwe/apps/dashboard-e2e":
   version "0.0.1"
   resolved "file:apps/dashboard-e2e"
 
-"@apex/dashboard@file:/home/daytona/port-relay-feature-for-electron-desktop/apps/dashboard":
+"@apex/dashboard@file:/home/daytona/preserve-draft-text-when-switching-betwe/apps/dashboard":
   version "0.0.1"
   resolved "file:apps/dashboard"
 
-"@apex/desktop@file:/home/daytona/port-relay-feature-for-electron-desktop/apps/desktop":
+"@apex/desktop@file:/home/daytona/preserve-draft-text-when-switching-betwe/apps/desktop":
   version "0.0.1"
   resolved "file:apps/desktop"
   dependencies:
     electrobun latest
 
-"@apex/orchestrator@file:/home/daytona/port-relay-feature-for-electron-desktop/libs/orchestrator":
+"@apex/orchestrator@file:/home/daytona/preserve-draft-text-when-switching-betwe/libs/orchestrator":
   version "0.0.1"
   resolved "file:libs/orchestrator"
   dependencies:
     dockerode "^4.0.7"
     tslib "^2.3.0"
 
-"@apex/shared@file:/home/daytona/port-relay-feature-for-electron-desktop/libs/shared":
+"@apex/shared@file:/home/daytona/preserve-draft-text-when-switching-betwe/libs/shared":
   version "0.0.1"
   resolved "file:libs/shared"
   dependencies:
@@ -5910,7 +5910,7 @@ buildcheck@~0.0.6:
   resolved "https://registry.npmjs.org/buildcheck/-/buildcheck-0.0.7.tgz"
   integrity sha512-lHblz4ahamxpTmnsk+MNTRWsjYKv965MwOrSJyeD588rR3Jcu7swE+0wN5F+PbL5cjgu/9ObkhfzEPuofEMwLA==
 
-bun-types@*, bun-types@^1.3.11, bun-types@1.3.11, bun-types@latest:
+bun-types@*, bun-types@1.3.11, bun-types@latest:
   version "1.3.11"
   resolved "https://registry.npmjs.org/bun-types/-/bun-types-1.3.11.tgz"
   integrity sha512-1KGPpoxQWl9f6wcZh57LvrPIInQMn2TQ7jsgxqpRzg+l0QPOFvJVH7HmvHo/AiPgwXy+/Thf6Ov3EdVn1vOabg==
@@ -12452,7 +12452,7 @@ write-file-atomic@^5.0.1:
     imurmurhash "^0.1.4"
     signal-exit "^4.0.1"
 
-ws@*, ws@^8.12.0, ws@^8.13.0, ws@^8.16.0, ws@^8.20.0:
+ws@*, ws@^8.12.0, ws@^8.13.0, ws@^8.16.0, ws@^8.19.0:
   version "8.20.0"
   resolved "https://registry.npmjs.org/ws/-/ws-8.20.0.tgz"
   integrity sha512-sAt8BhgNbzCtgGbt2OxmpuryO63ZoDk/sqaB/znQm94T4fCEsy/yV+7CdC1kJhOU9lboAEU7R3kquuycDoibVA==

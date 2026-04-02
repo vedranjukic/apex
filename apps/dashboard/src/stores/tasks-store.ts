@@ -25,6 +25,7 @@ interface ThreadsState {
   searchQuery: string;
   threadScrollOffsets: Record<string, number>;
   threadSessionInfo: Record<string, ThreadSessionInfo>;
+  threadDrafts: Record<string, string>;
   setSearchQuery: (q: string) => void;
   fetchThreads: (projectId: string) => Promise<void>;
   setActiveThread: (threadId: string) => Promise<void>;
@@ -39,6 +40,9 @@ interface ThreadsState {
   setThreadSessionInfo: (threadId: string, info: ThreadSessionInfo) => void;
   deleteThread: (id: string) => Promise<void>;
   setThreadScrollOffset: (threadId: string, offset: number) => void;
+  setThreadDraft: (threadId: string, draft: string) => void;
+  getThreadDraft: (threadId: string) => string;
+  clearThreadDraft: (threadId: string) => void;
   reset: () => void;
 }
 
@@ -53,6 +57,7 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
   searchQuery: '',
   threadScrollOffsets: {},
   threadSessionInfo: {},
+  threadDrafts: {},
 
   setSearchQuery: (q) => set({ searchQuery: q }),
 
@@ -162,6 +167,19 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
       threadScrollOffsets: { ...state.threadScrollOffsets, [threadId]: offset },
     })),
 
+  setThreadDraft: (threadId, draft) =>
+    set((state) => ({
+      threadDrafts: { ...state.threadDrafts, [threadId]: draft },
+    })),
+
+  getThreadDraft: (threadId) => get().threadDrafts[threadId] || '',
+
+  clearThreadDraft: (threadId) =>
+    set((state) => {
+      const { [threadId]: _, ...remaining } = state.threadDrafts;
+      return { threadDrafts: remaining };
+    }),
+
   reset: () =>
     set({
       projectId: null,
@@ -174,5 +192,6 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
       searchQuery: '',
       threadScrollOffsets: {},
       threadSessionInfo: {},
+      threadDrafts: {},
     }),
 }));
