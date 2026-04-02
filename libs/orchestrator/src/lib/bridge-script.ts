@@ -1369,6 +1369,55 @@ const server = http.createServer((req, res) => {
       } catch (e) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: e.message })); }
     }); return;
   }
+  if (req.method === "POST" && req.url === "/internal/start-port-relay") {
+    let body = ""; req.on("data", (c) => body += c); req.on("end", () => {
+      try {
+        const { port } = JSON.parse(body);
+        if (!port || isNaN(port) || port <= 0 || port > 65535) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid port number" }));
+          return;
+        }
+        startPortRelay(port);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, port: port }));
+      } catch (e) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    }); return;
+  }
+  if (req.method === "POST" && req.url === "/internal/stop-port-relay") {
+    let body = ""; req.on("data", (c) => body += c); req.on("end", () => {
+      try {
+        const { port } = JSON.parse(body);
+        if (!port || isNaN(port)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid port number" }));
+          return;
+        }
+        stopPortRelay(port);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, port: port }));
+      } catch (e) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    }); return;
+  }
+  if (req.method === "GET" && req.url === "/internal/port-relay-status") {
+    const relays = [];
+    for (const [targetPort, info] of activePortRelays) {
+      relays.push({
+        targetPort: targetPort,
+        localPort: info.localPort,
+        status: "active"
+      });
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ relays }));
+    return;
+  }
   res.writeHead(200); res.end("bridge-ok");
 });
 
@@ -1503,6 +1552,30 @@ wss.on("connection", (ws) => {
               }
             });
           }
+        }
+      }
+      else if (msg.type === "start_port_relay") {
+        try {
+          startPortRelay(msg.port);
+        } catch (e) {
+          log("\\u{274C}", \`start_port_relay error: \${e.message}\`);
+          ws.send(JSON.stringify({
+            type: "port_relay_error",
+            port: msg.port,
+            error: e.message
+          }));
+        }
+      }
+      else if (msg.type === "stop_port_relay") {
+        try {
+          stopPortRelay(msg.port);
+        } catch (e) {
+          log("\\u{274C}", \`stop_port_relay error: \${e.message}\`);
+          ws.send(JSON.stringify({
+            type: "port_relay_error", 
+            port: msg.port,
+            error: e.message
+          }));
         }
       }
       else if (msg.type === "ping") { ws.send(JSON.stringify({ type: "pong" })); }
@@ -1739,6 +1812,179 @@ function startTunnelClient() {
 // Start tunnel client if configured
 if (TUNNEL_ENDPOINT_URL) {
   startTunnelClient();
+}
+
+// ── Port Relay Tunnel Manager ────────────────────────
+const PORT_RELAY_BASE_URL = process.env.PORT_RELAY_BASE_URL || "";
+const activePortRelays = new Map();
+
+function startPortRelay(port) {
+  if (activePortRelays.has(port)) {
+    log("\\u{26A0}", \`Port relay for port \${port} already active\`);
+    return;
+  }
+  
+  if (!PORT_RELAY_BASE_URL) {
+    log("\\u{26A0}", "No PORT_RELAY_BASE_URL configured, port relay disabled");
+    return;
+  }
+  
+  log("\\u{1F4E1}", \`Starting port relay for port \${port}\`);
+  
+  const relayServer = net.createServer((clientSocket) => {
+    log("\\u{1F4E1}", \`Port relay \${port}: New connection\`);
+    
+    let wsConnected = false;
+    
+    try {
+      const wsUrl = PORT_RELAY_BASE_URL.replace(/\\/$/, '') + '/port-relay/' + port;
+      const ws = new WebSocket(wsUrl, {
+        handshakeTimeout: 10000, // 10 second handshake timeout
+        perMessageDeflate: false // Disable compression for raw TCP tunneling
+      });
+      
+      ws.on('open', () => {
+        log("\\u{1F517}", \`Port relay \${port}: WebSocket connected\`);
+        wsConnected = true;
+        
+        // Handle client to WebSocket data flow with backpressure
+        clientSocket.on('data', (data) => {
+          if (!wsConnected || ws.readyState !== WebSocket.OPEN) {
+            log("\\u{26A0}", \`Port relay \${port}: Dropping client data, WebSocket not ready\`);
+            return;
+          }
+          
+          try {
+            ws.send(data);
+            // Handle backpressure for large transfers
+            if (ws.bufferedAmount > 64 * 1024) { // 64KB threshold
+              log("\\u{26A0}", \`Port relay \${port}: WebSocket buffer high, pausing client\`);
+              clientSocket.pause();
+              // Resume when buffer clears
+              const checkBuffer = () => {
+                if (ws.bufferedAmount < 16 * 1024 && wsConnected) {
+                  clientSocket.resume();
+                } else if (wsConnected) {
+                  setTimeout(checkBuffer, 50);
+                }
+              };
+              checkBuffer();
+            }
+          } catch (sendErr) {
+            log("\\u{274C}", \`Port relay \${port}: Error sending to WebSocket: \${sendErr.message}\`);
+            clientSocket.destroy();
+          }
+        });
+        
+        // Handle WebSocket to client data flow with backpressure
+        ws.on('message', (data) => {
+          if (!clientSocket.writable) {
+            log("\\u{26A0}", \`Port relay \${port}: Dropping WebSocket data, client not writable\`);
+            return;
+          }
+          
+          const buffer = Buffer.from(data);
+          const success = clientSocket.write(buffer);
+          if (!success) {
+            // Backpressure: pause WebSocket until client drains
+            ws.pause?.();
+            clientSocket.once('drain', () => {
+              log("\\u{1F517}", \`Port relay \${port}: Client drain, resuming WebSocket\`);
+              ws.resume?.();
+            });
+          }
+        });
+      });
+      
+      ws.on('close', (code, reason) => {
+        log("\\u{1F517}", \`Port relay \${port}: WebSocket closed: \${code} \${reason || 'no reason'}\`);
+        wsConnected = false;
+        clientSocket.destroy();
+      });
+      
+      ws.on('error', (err) => {
+        log("\\u{274C}", \`Port relay \${port}: WebSocket error: \${err.message}\`);
+        wsConnected = false;
+        clientSocket.destroy();
+      });
+      
+      clientSocket.on('close', () => {
+        log("\\u{1F4E1}", \`Port relay \${port}: Client connection closed\`);
+        wsConnected = false;
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close(1000, 'Client disconnected');
+        }
+      });
+      
+      clientSocket.on('error', (err) => {
+        log("\\u{274C}", \`Port relay \${port}: Client socket error: \${err.message}\`);
+        wsConnected = false;
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close(1011, 'Socket error');
+        }
+      });
+      
+      // Set timeout for the client socket
+      clientSocket.setTimeout(300000); // 5 minutes timeout
+      clientSocket.on('timeout', () => {
+        log("\\u{26A0}", \`Port relay \${port}: Client socket timeout\`);
+        clientSocket.destroy();
+      });
+      
+    } catch (err) {
+      log("\\u{274C}", \`Port relay \${port}: Failed to create WebSocket: \${err.message}\`);
+      clientSocket.destroy();
+    }
+  });
+  
+  relayServer.on('error', (err) => {
+    log("\\u{274C}", \`Port relay \${port}: Server error: \${err.message}\`);
+  });
+  
+  // Use a dynamic port for the local relay server
+  relayServer.listen(0, '127.0.0.1', () => {
+    const localPort = relayServer.address().port;
+    log("\\u{1F4E1}", \`Port relay \${port}: Listening on local port \${localPort}\`);
+    
+    activePortRelays.set(port, {
+      server: relayServer,
+      localPort: localPort,
+      targetPort: port
+    });
+    
+    // Notify orchestrator about the port relay
+    if (state.ws && state.ws.readyState === 1) {
+      state.ws.send(JSON.stringify({
+        type: "port_relay_started",
+        targetPort: port,
+        localPort: localPort
+      }));
+    }
+  });
+}
+
+function stopPortRelay(port) {
+  const relay = activePortRelays.get(port);
+  if (!relay) {
+    log("\\u{26A0}", \`Port relay for port \${port} not found\`);
+    return;
+  }
+  
+  log("\\u{1F4E1}", \`Stopping port relay for port \${port}\`);
+  
+  relay.server.close(() => {
+    log("\\u{1F4E1}", \`Port relay \${port}: Server closed\`);
+  });
+  
+  activePortRelays.delete(port);
+  
+  // Notify orchestrator about the port relay stop
+  if (state.ws && state.ws.readyState === 1) {
+    state.ws.send(JSON.stringify({
+      type: "port_relay_stopped", 
+      targetPort: port
+    }));
+  }
 }
 
 server.listen(PORT, "0.0.0.0", () => { log("\\u{2705}", "Bridge ready on port " + PORT); });

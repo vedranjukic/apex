@@ -9,6 +9,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { AppShell } from "../components/layout/app-shell";
+import { PortForwardingSettings } from "../components/settings/port-forwarding-settings";
 import {
   settingsApi,
   githubApi,
@@ -404,6 +405,9 @@ export function SettingsPage() {
                 </div>
               </section>
             ))}
+            <section>
+              <PortForwardingSettings />
+            </section>
           </div>
 
           <div className="mt-8 flex items-center gap-3">

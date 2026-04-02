@@ -22,6 +22,9 @@ interface TerminalPanelProps {
   unregisterXterm: (terminalId: string) => void;
   requestPreviewUrl: (port: number) => Promise<{ url: string; token?: string }>;
   forwardPort: (port: number) => Promise<{ localPort: number; url: string }>;
+  enableAutoForward?: () => Promise<{ success: boolean; error?: string }>;
+  disableAutoForward?: () => Promise<{ success: boolean; error?: string }>;
+  setPortRelay?: (port: number, enabled: boolean) => Promise<{ success: boolean; localPort?: number; error?: string }>;
   provider: string;
 }
 
@@ -37,6 +40,9 @@ export function TerminalPanel({
   unregisterXterm,
   requestPreviewUrl,
   forwardPort,
+  enableAutoForward,
+  disableAutoForward,
+  setPortRelay,
   provider,
 }: TerminalPanelProps) {
   const terminals = useTerminalStore((s) => s.terminals);
@@ -147,7 +153,14 @@ export function TerminalPanel({
       {/* Viewport */}
       <div className="flex-1 overflow-hidden bg-terminal-bg">
         {showPorts && (
-          <PortsPanel requestPreviewUrl={requestPreviewUrl} forwardPort={forwardPort} provider={provider} />
+          <PortsPanel 
+            requestPreviewUrl={requestPreviewUrl} 
+            forwardPort={forwardPort} 
+            enableAutoForward={enableAutoForward}
+            disableAutoForward={disableAutoForward}
+            setPortRelay={setPortRelay}
+            provider={provider} 
+          />
         )}
         {terminals.length === 0 && !showPorts ? (
           <div className="flex items-center justify-center h-full text-text-muted text-sm">

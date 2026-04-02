@@ -113,6 +113,7 @@ Both applications are built on top of the same sandboxing layer:
 - **MCP LSP Server** — gives agents language intelligence tools (hover, definition, references, diagnostics, completions, symbols) via language servers managed by the bridge
 - **LLM API Key Proxy** — streaming reverse proxy that injects real LLM keys server-side; containers never see credentials
 - **Secrets Proxy** — MITM HTTPS proxy for user-defined API secrets; values never enter containers
+- **Port Relay** — VS Code-style port forwarding: auto-detects sandbox ports and makes them available as `localhost:port` on the host (desktop app), with optional Daytona preview URL generation
 - **SQLite** database for projects, threads, and messages (shared between IDE and CLI)
 
 ## Getting Started

@@ -9,6 +9,14 @@ export interface PortInfo {
 
 export type PortOrigin = 'auto' | 'user';
 
+export interface PortRelay {
+  remotePort: number;
+  localPort: number;
+  status: 'forwarding' | 'failed' | 'stopped';
+  error?: string;
+  localhostUrl: string; // localhost:localPort
+}
+
 export interface MergedPort {
   port: number;
   protocol: 'tcp';
@@ -17,6 +25,7 @@ export interface MergedPort {
   origin: PortOrigin;
   active: boolean;
   previewUrl: string;
+  relay?: PortRelay; // Port forwarding info for desktop
 }
 
 function userPortsKey(projectId: string): string {
@@ -52,6 +61,8 @@ interface PortsState {
   previewUrls: Record<number, string>;
   /** Auto-detected ports the user has explicitly closed (suppressed until they disappear and reappear) */
   closedPorts: number[];
+  /** Port forwarding relays for desktop environments */
+  portRelays: Record<number, PortRelay>;
 
   bindProject: (projectId: string) => void;
   setPorts: (ports: PortInfo[]) => void;
@@ -59,6 +70,10 @@ interface PortsState {
   removeUserPort: (port: number) => void;
   setPreviewUrl: (port: number, url: string) => void;
   closePort: (port: number) => void;
+  /** Set port relay status for a specific port */
+  setPortRelay: (remotePort: number, relay: PortRelay | null) => void;
+  /** Update port relays from WebSocket events */
+  updatePortRelays: (relays: PortRelay[]) => void;
   /** Merged list of auto-detected + user ports, with origin annotation */
   allPorts: () => MergedPort[];
   reset: () => void;
@@ -70,6 +85,7 @@ export const usePortsStore = create<PortsState>((set, get) => ({
   userPorts: [],
   previewUrls: {},
   closedPorts: [],
+  portRelays: {},
 
   bindProject: (projectId) => {
     if (get().projectId === projectId) return;
@@ -78,6 +94,7 @@ export const usePortsStore = create<PortsState>((set, get) => ({
       ports: [],
       previewUrls: {},
       closedPorts: [],
+      portRelays: {},
       userPorts: loadUserPorts(projectId),
     });
   },
@@ -110,20 +127,44 @@ export const usePortsStore = create<PortsState>((set, get) => ({
   },
 
   closePort: (port) => {
-    const { userPorts, previewUrls, closedPorts, projectId } = get();
+    const { userPorts, previewUrls, closedPorts, projectId, portRelays } = get();
     const newPreviewUrls = { ...previewUrls };
     delete newPreviewUrls[port];
+    const newPortRelays = { ...portRelays };
+    delete newPortRelays[port];
     const updatedUserPorts = userPorts.filter((p) => p !== port);
     saveUserPorts(projectId, updatedUserPorts);
     set({
       userPorts: updatedUserPorts,
       previewUrls: newPreviewUrls,
+      portRelays: newPortRelays,
       closedPorts: closedPorts.includes(port) ? closedPorts : [...closedPorts, port],
     });
   },
 
+  setPortRelay: (remotePort, relay) => {
+    const { portRelays } = get();
+    const newPortRelays = { ...portRelays };
+    if (relay) {
+      newPortRelays[remotePort] = relay;
+    } else {
+      delete newPortRelays[remotePort];
+    }
+    set({ portRelays: newPortRelays });
+  },
+
+
+
+  updatePortRelays: (relays) => {
+    const portRelays: Record<number, PortRelay> = {};
+    for (const relay of relays) {
+      portRelays[relay.remotePort] = relay;
+    }
+    set({ portRelays });
+  },
+
   allPorts: () => {
-    const { ports, userPorts, previewUrls, closedPorts } = get();
+    const { ports, userPorts, previewUrls, closedPorts, portRelays } = get();
     const userSet = new Set(userPorts);
     const closedSet = new Set(closedPorts);
     const seen = new Set<number>();
@@ -137,6 +178,7 @@ export const usePortsStore = create<PortsState>((set, get) => ({
         origin: userSet.has(p.port) ? 'user' : 'auto',
         active: true,
         previewUrl: previewUrls[p.port] ?? '',
+        relay: portRelays[p.port],
       });
     }
 
@@ -150,6 +192,7 @@ export const usePortsStore = create<PortsState>((set, get) => ({
         origin: 'user',
         active: false,
         previewUrl: previewUrls[port] ?? '',
+        relay: portRelays[port],
       });
     }
 
@@ -158,6 +201,12 @@ export const usePortsStore = create<PortsState>((set, get) => ({
 
   reset: () => {
     const { projectId } = get();
-    set({ ports: [], previewUrls: {}, closedPorts: [], userPorts: loadUserPorts(projectId) });
+    set({ 
+      ports: [], 
+      previewUrls: {}, 
+      closedPorts: [], 
+      portRelays: {},
+      userPorts: loadUserPorts(projectId) 
+    });
   },
 }));

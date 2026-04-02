@@ -15,10 +15,13 @@ import type {
   ApexRPCType,
   DetectedIDEs,
   OpenInIDEParams,
+  PortRelayConfig,
 } from '../shared/rpc-types';
+import { PortRelayManager } from './port-relay-manager';
 
 let apiProcess: ReturnType<typeof Bun.spawn> | null = null;
 let serverPort = 0;
+let portRelayManager: PortRelayManager | null = null;
 
 const allWindows = new Map<number, BrowserWindow>();
 
@@ -314,7 +317,7 @@ async function startApi(port: number): Promise<void> {
 
   // Stream API output to console
   (async () => {
-    if (apiProcess?.stdout) {
+    if (apiProcess?.stdout && typeof apiProcess.stdout !== 'number') {
       const reader = apiProcess.stdout.getReader();
       const decoder = new TextDecoder();
       try {
@@ -330,7 +333,7 @@ async function startApi(port: number): Promise<void> {
   })();
 
   (async () => {
-    if (apiProcess?.stderr) {
+    if (apiProcess?.stderr && typeof apiProcess.stderr !== 'number') {
       const reader = apiProcess.stderr.getReader();
       const decoder = new TextDecoder();
       try {
@@ -391,6 +394,73 @@ function createRpcHandlers() {
             }, 30000);
           });
         },
+        getPortRelayConfig: () => {
+          return portRelayManager?.getConfig() || {
+            enabled: false,
+            autoForwardNewPorts: false,
+            portRange: { start: 8000, end: 9000 },
+            excludedPorts: []
+          };
+        },
+        setPortRelayConfig: (params) => {
+          try {
+            if (!portRelayManager) {
+              return { ok: false, error: 'Port relay manager not initialized' };
+            }
+            portRelayManager.setConfig(params);
+            return { ok: true };
+          } catch (err) {
+            return { ok: false, error: String(err) };
+          }
+        },
+        forwardPort: async (params) => {
+          try {
+            if (!portRelayManager) {
+              return { ok: false, error: 'Port relay manager not initialized' };
+            }
+            
+            const previewRes = await fetch(
+              `http://localhost:${serverPort}/api/preview/${params.sandboxId}/${params.remotePort}`
+            );
+            let remoteHost = 'localhost';
+            if (previewRes.ok) {
+              const preview = await previewRes.json();
+              if (preview.url) {
+                try { remoteHost = new URL(preview.url).hostname; } catch { /* keep localhost */ }
+              }
+            }
+            
+            const localPort = await portRelayManager.forwardPort(
+              params.sandboxId, 
+              remoteHost, 
+              params.remotePort, 
+              params.localPort
+            );
+            
+            return { ok: true, localPort };
+          } catch (err) {
+            return { ok: false, error: String(err) };
+          }
+        },
+        unforwardPort: (params) => {
+          try {
+            if (!portRelayManager) {
+              return { ok: false, error: 'Port relay manager not initialized' };
+            }
+            
+            const success = portRelayManager.unforwardPort(params.sandboxId, params.remotePort);
+            return { ok: success };
+          } catch (err) {
+            return { ok: false, error: String(err) };
+          }
+        },
+        getRelayedPorts: (params) => {
+          if (!portRelayManager) {
+            return { ports: [] };
+          }
+          
+          return { ports: portRelayManager.getRelayedPorts(params.sandboxId) };
+        },
       },
       messages: {
         openWindow: ({ urlPath }) => {
@@ -443,10 +513,17 @@ function createWindow(urlPath = '/'): BrowserWindow {
 
   // Send config to the webview after the page loads
   win.webview.on('dom-ready', () => {
-    win.webview.rpc.send.setConfig({
+    (win.webview.rpc as any)?.send?.setConfig({
       platform: process.platform,
       detectedIDEs,
     });
+    
+    // Send initial port relay config
+    if (portRelayManager) {
+      (win.webview.rpc as any)?.send?.portRelayConfigUpdate({
+        config: portRelayManager.getConfig()
+      });
+    }
   });
 
   win.on('close', () => {
@@ -516,6 +593,11 @@ function buildAppMenu(): void {
 // ── App Lifecycle ───────────────────────────────────
 
 function killApi() {
+  if (portRelayManager) {
+    portRelayManager.destroy();
+    portRelayManager = null;
+  }
+  
   if (apiProcess) {
     apiProcess.kill();
     apiProcess = null;
@@ -527,6 +609,28 @@ async function main() {
   detectedIDEs = detectIDEs();
   console.log('Detected IDEs:', detectedIDEs);
 
+  // Initialize port relay manager
+  const userDataPath = getUserDataPath();
+  portRelayManager = new PortRelayManager(userDataPath);
+  
+  // Set up event listeners for port relay
+  portRelayManager.addEventListener((event) => {
+    if (event.type === 'config-updated') {
+      // Notify all windows of config changes
+      for (const [, win] of allWindows) {
+        (win.webview.rpc as any)?.send?.portRelayConfigUpdate({ config: event.data });
+      }
+    } else if (event.type === 'ports-updated') {
+      // Notify all windows of port status changes
+      for (const sandboxId of event.data.sandboxPorts.keys()) {
+        const ports = event.data.sandboxPorts.get(sandboxId);
+        for (const [, win] of allWindows) {
+          (win.webview.rpc as any)?.send?.portRelayStatusUpdate({ sandboxId, ports });
+        }
+      }
+    }
+  });
+
   serverPort = await getFreePort();
 
   try {
@@ -534,6 +638,7 @@ async function main() {
     await startApi(serverPort);
     console.log('API ready, opening window...');
     createWindow();
+    
   } catch (err) {
     console.error('Failed to start API:', err);
     new BrowserWindow({

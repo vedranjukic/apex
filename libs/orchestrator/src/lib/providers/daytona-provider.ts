@@ -152,6 +152,14 @@ class DaytonaSandboxInstance implements SandboxInstance {
     return { url: info.url, token: info.token };
   }
 
+  /**
+   * Get a signed preview URL with a 60-minute TTL (3600 seconds).
+   * This is a convenience method that uses the standard TTL for port forwarding.
+   */
+  async getSignedPreviewUrlWithDefaultTTL(port: number): Promise<PreviewInfo> {
+    return this.getSignedPreviewUrl(port, 3600); // 60 minutes
+  }
+
   async createSshAccess(expiresInMinutes: number): Promise<SshAccessInfo> {
     const access = await this.sandbox.createSshAccess(expiresInMinutes);
     return {

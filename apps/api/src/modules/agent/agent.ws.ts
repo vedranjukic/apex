@@ -5,6 +5,7 @@ import { threadsService } from '../tasks/tasks.service';
 import { BridgeMessage, LayoutData, FileEntry, SearchResult } from '@apex/orchestrator';
 import { execFile } from 'child_process';
 import { forwardPort, unforwardPort, listForwards } from '../preview/port-forwarder';
+import { portRelayService } from '../preview/port-relay.service';
 
 const SANDBOX_HOME = '/home/daytona';
 
@@ -32,6 +33,7 @@ const clientMap = new Map<string, WsClient>();
 const activeHandlers = new Map<string, (sandboxId: string, msg: BridgeMessage) => void>();
 const terminalListenersBySandbox = new Set<string>();
 const lastPortsBySandbox = new Map<string, { ports: unknown[] }>();
+const sandboxToProjectId = new Map<string, string>();
 const activeTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 const activeHealthChecks = new Map<string, ReturnType<typeof setInterval>>();
 
@@ -42,6 +44,29 @@ const AGENT_INITIAL_TIMEOUT_MS = process.env.APEX_TEST_AGENT_TIMEOUT_MS
 const AGENT_ACTIVITY_TIMEOUT_MS = 300_000;
 const HEALTH_CHECK_INTERVAL_MS = 10_000;
 const SEND_TIMEOUT_MS = 30_000;
+
+// Set up port relay service event forwarding to WebSocket clients
+portRelayService.onEvent((event) => {
+  // Find sandbox ID for the project to emit the event
+  (async () => {
+    try {
+      const project = await projectsService.findById(event.projectId);
+      if (project.sandboxId) {
+        emitToSubscribers(project.sandboxId, event.type, event.payload);
+      }
+    } catch (error) {
+      console.warn(`[port-relay] Error forwarding event for project ${event.projectId}:`, error);
+    }
+  })();
+});
+
+async function ensurePortRelayInit(projectId: string): Promise<void> {
+  try {
+    await portRelayService.initializeProject(projectId);
+  } catch (error) {
+    console.warn(`[port-relay] Failed to initialize project ${projectId}:`, error);
+  }
+}
 
 function subscribeTo(sandboxId: string, clientId: string) {
   if (!sandboxSubscribers.has(sandboxId)) sandboxSubscribers.set(sandboxId, new Set());
@@ -86,6 +111,7 @@ async function tryResolveProject(projectId: string) {
   try {
     const project = await projectsService.findById(projectId);
     if (!project.sandboxId) return null;
+    sandboxToProjectId.set(project.sandboxId, projectId);
     let manager = projectsService.getSandboxManager(project.provider);
     if (!manager) {
       await projectsService.reinitSandboxManager();
@@ -150,6 +176,13 @@ function attachTerminalListeners(sandboxId: string, provider?: string) {
     if (sid !== sandboxId) return;
     lastPortsBySandbox.set(sandboxId, { ports: msg.ports });
     emitToSubscribers(sandboxId, 'ports_update', { ports: msg.ports });
+    
+    const projectId = sandboxToProjectId.get(sid);
+    if (projectId) {
+      portRelayService.handlePortsUpdate(projectId, msg).catch((error) => {
+        console.warn(`[port-relay] Error handling ports update for sandbox ${sid}:`, error);
+      });
+    }
   });
   manager.on('lsp_response', (sid: string, msg: any) => {
     if (sid !== sandboxId) return;
@@ -621,6 +654,7 @@ async function handleMessage(client: WsClient, message: unknown) {
           break;
         }
         if (project.sandboxId) {
+          sandboxToProjectId.set(project.sandboxId, project.id);
           subscribeTo(project.sandboxId, client.id);
           attachTerminalListeners(project.sandboxId, project.provider);
           reconcileAndReconnect(payload.projectId, project, client).catch((err) => {
@@ -648,34 +682,21 @@ async function handleMessage(client: WsClient, message: unknown) {
         break;
       }
       case 'send_prompt': {
-        const { threadId, prompt, mode, model, agentType, images, agentSettings } = payload;
-        if (mode) await threadsService.updateMode(threadId, mode);
-        if (agentType) await threadsService.updateAgentType(threadId, agentType);
-        if (model !== undefined) await threadsService.updateModel(threadId, model);
-
-        const contentBlocks: any[] = [];
-        if (Array.isArray(images) && images.length > 0) {
-          for (const img of images) {
-            contentBlocks.push({ type: 'image', source: img });
-          }
-        }
-        contentBlocks.push({ type: 'text', text: prompt });
-        await threadsService.addMessage(threadId, { role: 'user', content: contentBlocks });
-
-        await executeAgainstSandbox(client, threadId, prompt, mode, model, images, agentSettings);
+        const { threadId, prompt } = payload;
+        const thread = await threadsService.findById(threadId);
+        await ensurePortRelayInit(thread.projectId);
+        await executeAgainstSandbox(client, threadId, prompt);
         break;
       }
       case 'execute_thread': {
-        const { threadId, mode, model, agentType } = payload;
-        if (mode) await threadsService.updateMode(threadId, mode);
-        if (agentType) await threadsService.updateAgentType(threadId, agentType);
-        if (model !== undefined) await threadsService.updateModel(threadId, model);
+        const { threadId } = payload;
         const thread = await threadsService.findById(threadId);
-        const firstUserMsg = thread.messages?.find((m) => m.role === 'user');
+        await ensurePortRelayInit(thread.projectId);
+        const firstUserMsg = await threadsService.getFirstUserMessage(threadId);
         if (!firstUserMsg) { emitTo(client, 'agent_error', { threadId, error: 'No user message found' }); break; }
-        const prompt = firstUserMsg.content?.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n') || '';
+        const prompt = firstUserMsg.content.find(b => b.type === 'text')?.text || '';
         if (!prompt) { emitTo(client, 'agent_error', { threadId, error: 'Empty prompt' }); break; }
-        await executeAgainstSandbox(client, threadId, prompt, mode, model);
+        await executeAgainstSandbox(client, threadId, prompt);
         break;
       }
       case 'save_plan': {
@@ -786,10 +807,23 @@ async function handleMessage(client: WsClient, message: unknown) {
       case 'port_preview_url': {
         const resolved = await tryResolveProject(payload.projectId);
         if (!resolved) { emitTo(client, 'port_preview_url_result', { port: payload.port, error: 'Sandbox not ready' }); break; }
-        let { url, token } = await resolved.manager.getPortPreviewUrl(resolved.sandboxId, payload.port);
-        if (resolved.project.provider === 'docker' || resolved.project.provider === 'apple-container') {
-          url = `/preview/${resolved.project.id}/${payload.port}`;
+        
+        // Use signed preview URLs for Daytona projects (60-minute TTL)
+        let url: string, token: string | undefined;
+        if (resolved.project.provider === 'daytona') {
+          const previewData = await resolved.manager.getSignedPortPreviewUrl(resolved.sandboxId, payload.port, 3600);
+          url = previewData.url;
+          token = previewData.token;
+        } else {
+          const previewData = await resolved.manager.getPortPreviewUrl(resolved.sandboxId, payload.port);
+          url = previewData.url;
+          token = previewData.token;
+          // Handle local preview URLs for docker/apple-container providers
+          if (resolved.project.provider === 'docker' || resolved.project.provider === 'apple-container') {
+            url = `/preview/${resolved.project.id}/${payload.port}`;
+          }
         }
+        
         emitTo(client, 'port_preview_url_result', { port: payload.port, url, token });
         break;
       }
@@ -835,7 +869,10 @@ async function handleMessage(client: WsClient, message: unknown) {
       case 'project_info': {
         const resolved = await tryResolveProject(payload.projectId);
         let project: Awaited<ReturnType<typeof projectsService.findById>>;
-        try { project = await projectsService.findById(payload.projectId); } catch {
+        try { 
+          project = await projectsService.findById(payload.projectId); 
+          await ensurePortRelayInit(payload.projectId);
+        } catch {
           emitTo(client, 'project_info', { gitBranch: null, projectDir: null, error: 'Project not found' });
           break;
         }
@@ -1043,6 +1080,92 @@ async function handleMessage(client: WsClient, message: unknown) {
         const resolved = await tryResolveProject(payload.projectId);
         if (!resolved) { emitTo(client, 'lsp_status', { language: payload.language, status: 'error', error: 'Sandbox not ready' }); break; }
         await resolved.manager.sendLspData(resolved.sandboxId, payload.language, payload.jsonrpc);
+        break;
+      }
+      case 'auto_forward_ports': {
+        // Enable/disable automatic port forwarding
+        try {
+          const result = await portRelayService.setAutoForward(payload.projectId, payload.enabled);
+          emitTo(client, 'auto_forward_ports_result', { 
+            projectId: payload.projectId, 
+            enabled: payload.enabled,
+            success: result.success,
+            error: result.error 
+          });
+        } catch (err) {
+          emitTo(client, 'auto_forward_ports_result', { 
+            projectId: payload.projectId,
+            enabled: payload.enabled,
+            success: false,
+            error: String(err) 
+          });
+        }
+        break;
+      }
+      case 'set_port_relay': {
+        // Manual port forwarding control
+        if (payload.action === 'forward') {
+          try {
+            const result = await portRelayService.forwardPort(
+              payload.projectId, 
+              payload.remotePort, 
+              payload.preferredLocalPort
+            );
+            emitTo(client, 'set_port_relay_result', { 
+              action: 'forward',
+              projectId: payload.projectId,
+              remotePort: payload.remotePort,
+              localPort: result.localPort,
+              success: result.success,
+              error: result.error 
+            });
+          } catch (err) {
+            emitTo(client, 'set_port_relay_result', { 
+              action: 'forward',
+              projectId: payload.projectId,
+              remotePort: payload.remotePort,
+              success: false,
+              error: String(err) 
+            });
+          }
+        } else if (payload.action === 'unforward') {
+          try {
+            const result = await portRelayService.unforwardPort(payload.projectId, payload.remotePort);
+            emitTo(client, 'set_port_relay_result', { 
+              action: 'unforward',
+              projectId: payload.projectId,
+              remotePort: payload.remotePort,
+              success: result.success,
+              error: result.error 
+            });
+          } catch (err) {
+            emitTo(client, 'set_port_relay_result', { 
+              action: 'unforward',
+              projectId: payload.projectId,
+              remotePort: payload.remotePort,
+              success: false,
+              error: String(err) 
+            });
+          }
+        }
+        break;
+      }
+      case 'get_relay_status': {
+        // Get current port relay status
+        try {
+          const status = portRelayService.getRelayStatus(payload.projectId);
+          emitTo(client, 'get_relay_status_result', { 
+            projectId: payload.projectId,
+            status,
+            success: true 
+          });
+        } catch (err) {
+          emitTo(client, 'get_relay_status_result', { 
+            projectId: payload.projectId,
+            success: false,
+            error: String(err) 
+          });
+        }
         break;
       }
     }
@@ -1253,7 +1376,11 @@ export const agentWs = new Elysia()
       clientMap.delete(id);
       for (const [sandboxId, subs] of sandboxSubscribers) {
         subs.delete(id);
-        if (subs.size === 0) sandboxSubscribers.delete(sandboxId);
+        if (subs.size === 0) {
+          sandboxSubscribers.delete(sandboxId);
+          // If no more clients for this sandbox, we could optionally clean up port relays
+          // For now, we'll keep them active as other clients might reconnect
+        }
       }
     },
   });

@@ -334,6 +334,7 @@ export class SandboxManager extends EventEmitter {
         envVars["https_proxy"] = "http://localhost:9339";
         envVars["http_proxy"] = "http://localhost:9339";
         envVars["TUNNEL_ENDPOINT_URL"] = `${proxyBase}/tunnel`;
+        envVars["PORT_RELAY_BASE_URL"] = `${proxyBase?.replace(':3000', ':9341') || ''}`;
       } else {
         // For other providers: use direct proxy URL
         envVars["HTTPS_PROXY"] = secretsProxyUrl!;
@@ -937,6 +938,32 @@ export class SandboxManager extends EventEmitter {
     port: number,
   ): Promise<{ url: string; token: string }> {
     const sandbox = await this.ensureSandbox(sandboxId);
+    const previewInfo = await sandbox.getPreviewLink(port);
+    return { url: previewInfo.url, token: previewInfo.token ?? "" };
+  }
+
+  /**
+   * Get a signed preview URL for a port with time-limited access.
+   * Falls back to regular preview URL if signed URLs are not supported.
+   * 
+   * @param sandboxId - The sandbox ID
+   * @param port - The port number
+   * @param ttlSecs - Time-to-live in seconds (default: 3600 = 60 minutes)
+   */
+  async getSignedPortPreviewUrl(
+    sandboxId: string,
+    port: number,
+    ttlSecs = 3600,
+  ): Promise<{ url: string; token: string }> {
+    const sandbox = await this.ensureSandbox(sandboxId);
+    
+    // Use signed preview URL if available (Daytona provider)
+    if (sandbox.getSignedPreviewUrl) {
+      const signedInfo = await sandbox.getSignedPreviewUrl(port, ttlSecs);
+      return { url: signedInfo.url, token: signedInfo.token ?? "" };
+    }
+    
+    // Fall back to regular preview URL for other providers
     const previewInfo = await sandbox.getPreviewLink(port);
     return { url: previewInfo.url, token: previewInfo.token ?? "" };
   }

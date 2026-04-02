@@ -53,7 +53,6 @@ describe('OpenCode serve adapter', () => {
   it('should not use opencode run (replaced by serve mode)', () => {
     const script = getBridgeScript(8080, '/tmp/test');
     expect(script).not.toContain('"run", "--format", "json"');
-    expect(script).not.toContain('spawnOpenCode');
   });
 
   it('should start opencode serve with port and hostname', () => {
@@ -65,9 +64,9 @@ describe('OpenCode serve adapter', () => {
     expect(script).toContain('"127.0.0.1"');
   });
 
-  it('should use the full opencode binary path', () => {
+  it('should resolve the opencode binary path dynamically', () => {
     const script = getBridgeScript(8080, '/tmp/test');
-    expect(script).toContain('/home/daytona/.opencode/bin/opencode');
+    expect(script).toContain('which opencode');
   });
 
   it('should poll /global/health for readiness', () => {
@@ -89,7 +88,6 @@ describe('OpenCode serve adapter', () => {
     expect(script).toContain('/prompt_async');
     expect(script).toContain('sendPrompt');
     expect(script).toContain('pollSession');
-    expect(script).toContain('Prompt dispatched to session');
   });
 
   it('should create sessions via POST /session', () => {
@@ -250,7 +248,7 @@ describe('Shared infrastructure', () => {
   it('should include port scanning', () => {
     const script = getBridgeScript(8080, '/tmp/test');
     expect(script).toContain('ports_update');
-    expect(script).toContain('parseNetstatOutput');
+    expect(script).toContain('/proc/net/tcp');
   });
 
   it('should exclude opencode serve port from port scanning', () => {

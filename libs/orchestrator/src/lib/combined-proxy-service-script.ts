@@ -5,11 +5,13 @@
  * 1. LLM proxy (existing functionality on port 3000)
  * 2. MITM secrets proxy (port 9340, internal only) 
  * 3. TCP-over-WebSocket tunnel bridge (/tunnel endpoint)
+ * 4. Port relay bridge service (port 9341, /port-relay/:port endpoints)
  *
  * The service is uploaded via sandbox.fs.uploadFile() and handles:
  * - LLM API proxying with real key injection
  * - MITM HTTPS proxying with secrets injection  
  * - WebSocket-to-TCP tunneling for CONNECT requests from regular sandboxes
+ * - Port relay tunneling for arbitrary TCP port forwarding
  *
  * Environment variables consumed at runtime:
  * - PROXY_AUTH_TOKEN      — auth token for LLM proxy
@@ -17,6 +19,7 @@
  * - REAL_OPENAI_API_KEY   — real OpenAI key 
  * - PROXY_PORT            — LLM proxy listen port (default 3000)
  * - MITM_PROXY_PORT       — MITM proxy listen port (default 9340)
+ * - PORT_RELAY_PORT       — port relay bridge listen port (default 9341)
  * - SECRETS_JSON          — JSON array of secrets for MITM proxy
  * - GITHUB_TOKEN          — GitHub API token fallback
  * - CA_CERT_PEM           — CA certificate for MITM
@@ -24,7 +27,8 @@
  */
 export function getCombinedProxyServiceScript(
   llmPort = 3000,
-  mitmPort = 9340
+  mitmPort = 9340,
+  portRelayPort = 9341
 ): string {
   return `"use strict";
 const http = require("http");
@@ -39,6 +43,7 @@ const forge = require("node-forge");
 // Configuration
 const LLM_PORT = Number(process.env.PROXY_PORT || ${llmPort});
 const MITM_PORT = Number(process.env.MITM_PROXY_PORT || ${mitmPort});
+const PORT_RELAY_PORT = Number(process.env.PORT_RELAY_PORT || ${portRelayPort});
 const AUTH_TOKEN = process.env.PROXY_AUTH_TOKEN || "";
 const ANTHROPIC_KEY = process.env.REAL_ANTHROPIC_API_KEY || "";
 const OPENAI_KEY = process.env.REAL_OPENAI_API_KEY || "";
@@ -50,6 +55,7 @@ const CA_KEY_PEM = process.env.CA_KEY_PEM || "";
 console.log("[combined-proxy] Starting combined proxy service...");
 console.log("[combined-proxy] LLM port:", LLM_PORT);
 console.log("[combined-proxy] MITM port:", MITM_PORT);
+console.log("[combined-proxy] Port relay port:", PORT_RELAY_PORT);
 
 // Parse secrets
 let secrets = [];
@@ -492,7 +498,8 @@ const httpServer = http.createServer((req, res) => {
       services: {
         llm_proxy: "running",
         mitm_proxy: "running",
-        tunnel_bridge: "running"
+        tunnel_bridge: "running",
+        port_relay_bridge: "running"
       }
     });
   }
@@ -605,11 +612,149 @@ wss.on('connection', (ws) => {
   tcp.setTimeout(30000); // 30 second timeout
 });
 
+// Port relay WebSocket server
+const portRelayWss = new WebSocket.Server({ noServer: true });
+
+portRelayWss.on('connection', (ws, req) => {
+  const urlParts = req.url.split('/');
+  if (urlParts.length < 3 || urlParts[1] !== 'port-relay') {
+    console.log('[port-relay] Invalid URL format:', req.url);
+    ws.close(1008, 'Invalid URL format');
+    return;
+  }
+  
+  const targetPort = parseInt(urlParts[2]);
+  if (isNaN(targetPort) || targetPort <= 0 || targetPort > 65535) {
+    console.log('[port-relay] Invalid port:', urlParts[2]);
+    ws.close(1008, 'Invalid port number');
+    return;
+  }
+  
+  console.log(\`[port-relay] New port relay connection for port \${targetPort}\`);
+  
+  // Connect to the target port on localhost
+  const tcp = net.connect(targetPort, '127.0.0.1');
+  let isConnected = false;
+  
+  tcp.on('connect', () => {
+    console.log(\`[port-relay] Connected to localhost:\${targetPort}\`);
+    isConnected = true;
+    
+    // Handle WebSocket to TCP data flow with backpressure
+    ws.on('message', (data) => {
+      if (!isConnected || !tcp.writable) {
+        console.warn('[port-relay] Dropping WS message, TCP not writable');
+        return;
+      }
+      
+      const success = tcp.write(data);
+      if (!success) {
+        // Backpressure: pause WebSocket until TCP drain
+        ws.pause?.();
+        tcp.once('drain', () => {
+          console.log('[port-relay] TCP drain, resuming WebSocket');
+          ws.resume?.();
+        });
+      }
+    });
+    
+    // Handle TCP to WebSocket data flow with backpressure  
+    tcp.on('data', (data) => {
+      if (ws.readyState !== WebSocket.OPEN) {
+        console.warn('[port-relay] Dropping TCP data, WebSocket not open');
+        return;
+      }
+      
+      try {
+        ws.send(data);
+        // Handle backpressure for large transfers
+        if (ws.bufferedAmount > 64 * 1024) { // 64KB threshold
+          console.warn(\`[port-relay] WebSocket buffer high: \${ws.bufferedAmount}\`);
+          tcp.pause();
+          // Resume when buffer clears (simplified approach)
+          setTimeout(() => {
+            if (tcp.readable && ws.bufferedAmount < 16 * 1024) {
+              tcp.resume();
+            }
+          }, 100);
+        }
+      } catch (err) {
+        console.error('[port-relay] Error sending to WebSocket:', err);
+        tcp.destroy();
+      }
+    });
+  });
+  
+  tcp.on('close', () => {
+    console.log(\`[port-relay] TCP connection to port \${targetPort} closed\`);
+    isConnected = false;
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.close(1000, 'TCP connection closed');
+    }
+  });
+  
+  tcp.on('error', (err) => {
+    console.error(\`[port-relay] TCP error for port \${targetPort}:\`, err);
+    isConnected = false;
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.close(1011, 'TCP error: ' + err.message);
+    }
+  });
+  
+  tcp.on('timeout', () => {
+    console.warn(\`[port-relay] TCP timeout for port \${targetPort}\`);
+    tcp.destroy();
+  });
+  
+  ws.on('close', (code, reason) => {
+    console.log(\`[port-relay] WebSocket closed for port \${targetPort}: \${code} \${reason}\`);
+    isConnected = false;
+    tcp.destroy();
+  });
+  
+  ws.on('error', (err) => {
+    console.error(\`[port-relay] WebSocket error for port \${targetPort}:\`, err);
+    isConnected = false;
+    tcp.destroy();
+  });
+  
+  // Set reasonable timeout for the TCP connection
+  tcp.setTimeout(30000); // 30 second timeout
+});
+
 // Handle WebSocket upgrades
 httpServer.on('upgrade', (req, socket, head) => {
   if (req.url === '/tunnel') {
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit('connection', ws, req);
+    });
+  } else if (req.url.startsWith('/port-relay/')) {
+    portRelayWss.handleUpgrade(req, socket, head, (ws) => {
+      portRelayWss.emit('connection', ws, req);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+// Create port relay HTTP server for WebSocket upgrades
+const portRelayServer = http.createServer((req, res) => {
+  if (req.url === "/health" || req.url === "/health/") {
+    return sendJson(res, 200, { 
+      status: "ok", 
+      service: "port_relay_bridge"
+    });
+  }
+
+  console.log("[port-relay] HTTP request to: " + req.url);
+  return sendJson(res, 404, { error: "Not found - use WebSocket endpoints /port-relay/:port" });
+});
+
+// Handle port relay WebSocket upgrades
+portRelayServer.on('upgrade', (req, socket, head) => {
+  if (req.url.startsWith('/port-relay/')) {
+    portRelayWss.handleUpgrade(req, socket, head, (ws) => {
+      portRelayWss.emit('connection', ws, req);
     });
   } else {
     socket.destroy();
@@ -619,6 +764,11 @@ httpServer.on('upgrade', (req, socket, head) => {
 // Start servers
 mitmServer.listen(MITM_PORT, "127.0.0.1", () => {
   console.log("[mitm-proxy] listening on port " + MITM_PORT);
+});
+
+portRelayServer.listen(PORT_RELAY_PORT, "0.0.0.0", () => {
+  console.log("[port-relay] HTTP server listening on port " + PORT_RELAY_PORT);
+  console.log("[port-relay] Port relay WebSocket available at /port-relay/:port");
 });
 
 httpServer.listen(LLM_PORT, "0.0.0.0", () => {
