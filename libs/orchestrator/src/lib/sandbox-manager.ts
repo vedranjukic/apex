@@ -156,6 +156,7 @@ export interface SandboxManagerEvents {
     status: SandboxSession["status"],
     error?: string,
   ) => void;
+  running_sessions: (sandboxId: string, sessions: Array<{ threadId: string; sessionId: string }>) => void;
   terminal_created: (sandboxId: string, msg: BridgeTerminalCreated) => void;
   terminal_output: (sandboxId: string, msg: BridgeTerminalOutput) => void;
   terminal_exit: (sandboxId: string, msg: BridgeTerminalExit) => void;
@@ -1830,8 +1831,22 @@ export class SandboxManager extends EventEmitter {
       `[bridge:${sid}] alive=${bridgeAlive} firstConnect=${isFirstConnect}`,
     );
 
+    if (isFirstConnect) {
+      // First API connect (e.g. after API/desktop restart).
+      // Always preserve opencode serve so running sessions can be recovered.
+      // OpenCode is a separate detached process that survives bridge death.
+      const restartMode = bridgeAlive ? 'soft restart' : 'restart (bridge dead, preserving opencode)';
+      console.log(
+        `[bridge:${sid}] ${restartMode} — first connect, preserving opencode serve`,
+      );
+      await this.restartBridge(session, true);
+      console.log(`[bridge:${sid}] ${restartMode} done, connecting WS`);
+      await this.connectToBridge(session);
+      console.log(`[bridge:${sid}] WS connected after ${restartMode}`);
+      return;
+    }
+
     if (!bridgeAlive) {
-      // Bridge is dead — full restart needed.
       console.log(
         `[bridge:${sid}] restarting bridge (dead)`,
       );
@@ -1839,19 +1854,6 @@ export class SandboxManager extends EventEmitter {
       console.log(`[bridge:${sid}] bridge restarted, connecting WS`);
       await this.connectToBridge(session);
       console.log(`[bridge:${sid}] WS connected after restart`);
-      return;
-    }
-
-    if (isFirstConnect) {
-      // Bridge is alive but this is the first API connect (e.g. after API restart).
-      // Soft-restart: kill only the bridge to pick up new script, preserve opencode serve.
-      console.log(
-        `[bridge:${sid}] bridge alive, first connect — soft restart (preserving opencode serve)`,
-      );
-      await this.restartBridge(session, true);
-      console.log(`[bridge:${sid}] soft restart done, connecting WS`);
-      await this.connectToBridge(session);
-      console.log(`[bridge:${sid}] WS connected after soft restart`);
       return;
     }
 
@@ -2671,6 +2673,8 @@ export class SandboxManager extends EventEmitter {
             session.error = msg.error;
             session.endTime = Date.now();
             this.emit("status", session.sandboxId, "error", msg.error);
+          } else if (msg.type === "running_sessions") {
+            this.emit("running_sessions", session.sandboxId, msg.sessions);
           }
 
           this.emit("message", session.sandboxId, msg);

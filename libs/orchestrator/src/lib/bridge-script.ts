@@ -48,6 +48,24 @@ const pendingAskUser = new Map();
 let lastSeenAskTool = "";
 const sessionEmittedParts = new Map();
 const suppressedAborts = new Set();
+const SESSIONS_FILE = (process.env.HOME || "/home/daytona") + "/.apex/active-sessions.json";
+
+function saveActiveSessions() {
+  try {
+    var data = {};
+    for (var [tid, sid] of threadToSession) {
+      data[sid] = { threadId: tid };
+    }
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(data));
+  } catch (e) { /* best-effort */ }
+}
+
+function loadPersistedSessions() {
+  try {
+    var raw = fs.readFileSync(SESSIONS_FILE, "utf8");
+    return JSON.parse(raw);
+  } catch { return null; }
+}
 
 // ── Shell detection ──────────────────────────────────
 const fs = require("fs");
@@ -159,14 +177,24 @@ function verifyProviderConfig() {
       log("\\u{2705}", "OC provider config matches current env");
       return;
     }
-    log("\\u{26A0}", "OC provider base URL changed, restarting opencode serve");
-    log("\\u{26A0}", "  was: " + (currentBase || "(empty)"));
-    log("\\u{26A0}", "  now: " + expectedBase);
-    try { execSync('pkill -f "opencode serve" 2>/dev/null || true'); } catch {}
-    return new Promise(function(resolve) { setTimeout(resolve, 500); }).then(function() {
-      spawnOpenCodeServe();
-      return waitForHealthy(60).then(function(ok) {
-        if (!ok) log("\\u{274C}", "OC serve failed to become healthy after provider URL change");
+    // Hot-patch provider URL via PATCH /config instead of restarting OpenCode
+    // (restarting would kill all running sessions)
+    log("\\u{2699}", "OC provider base URL changed, patching config");
+    log("\\u{2699}", "  was: " + (currentBase || "(empty)"));
+    log("\\u{2699}", "  now: " + expectedBase);
+    var patch = { provider: { anthropic: { options: { baseURL: expectedBase } } } };
+    var openaiBase = process.env.OPENAI_BASE_URL || "";
+    if (openaiBase) { patch.provider.openai = { options: { baseURL: openaiBase } }; }
+    return ocFetch("PATCH", "/config", patch, 10000).then(function() {
+      log("\\u{2705}", "OC provider config patched successfully");
+    }).catch(function(pe) {
+      log("\\u{26A0}", "PATCH /config failed: " + (pe.message || pe) + ", restarting OC serve as fallback");
+      try { execSync('pkill -f "opencode serve" 2>/dev/null || true'); } catch {}
+      return new Promise(function(resolve) { setTimeout(resolve, 500); }).then(function() {
+        spawnOpenCodeServe();
+        return waitForHealthy(60).then(function(ok) {
+          if (!ok) log("\\u{274C}", "OC serve failed to become healthy after provider URL change");
+        });
       });
     });
   }).catch(function(e) {
@@ -403,6 +431,7 @@ function handleSSEEvent(evType, data) {
     const threadId = sessionToThread.get(sessionId);
     if (!threadId) return;
     activeThreads.delete(threadId);
+    saveActiveSessions();
     const errMsg = (props.error && props.error.data && props.error.data.message) || (props.error && props.error.message) || (props.e || "OpenCode session error");
     log("\\u{274C}", "Session error for thread " + threadId + ": " + errMsg);
     emitAgentError(threadId, errMsg);
@@ -513,6 +542,7 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images, age
   sessionToThread.set(ocSessionId, threadId);
   activeThreads.add(threadId);
   sessionCosts.set(ocSessionId, 0);
+  saveActiveSessions();
 
   emitAgentMessage(threadId, { type: "system", subtype: "init", session_id: ocSessionId, tools: [], model: ocModel || ocAgent, cwd: PROJECT_DIR });
 
@@ -562,15 +592,15 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images, age
   pollSession(threadId, ocSessionId, ocAgent, ocModel);
 }
 
-function pollSession(threadId, sessionId, agentName, modelName) {
+function pollSession(threadId, sessionId, agentName, modelName, recovered) {
   if (!sessionEmittedParts.has(sessionId)) sessionEmittedParts.set(sessionId, new Set());
   const emittedParts = sessionEmittedParts.get(sessionId);
   const pendingText = new Map();
   const taskChildren = new Map();
   const toolOutputLen = new Map();
   let lastCost = 0;
-  let seenBusy = false;
-  let seenBusyFromStatus = false;
+  let seenBusy = !!recovered;
+  let seenBusyFromStatus = !!recovered;
   let idleCount = 0;
   const runningToolPids = new Set();
   const pollStartedAt = Date.now();
@@ -600,6 +630,7 @@ function pollSession(threadId, sessionId, agentName, modelName) {
   function abortStuck(reason) {
     log("\\u{274C}", "Stuck session " + sessionId + " for thread " + threadId + ": " + reason);
     activeThreads.delete(threadId);
+    saveActiveSessions();
     ocFetch("POST", "/session/" + sessionId + "/abort", {}, 10000).catch(function() {});
     emitAgentError(threadId, reason);
   }
@@ -780,6 +811,7 @@ function pollSession(threadId, sessionId, agentName, modelName) {
             flushPendingText();
             log("\\u{1F916}", "Session " + sessionId + " idle (seenBusy=" + seenBusy + " idleCount=" + idleCount + " age=" + Math.round(pollAge/1000) + "s + parts=" + emittedParts.size + ")");
             activeThreads.delete(threadId);
+            saveActiveSessions();
             if (!seenBusy && emittedParts.size === 0) {
               var diag = "agent=" + (agentName || "?") + " model=" + (modelName || "auto") + " session=" + sessionId + " polls=" + idleCount + " age=" + Math.round(pollAge/1000) + "s oc=" + (ocServeProc ? "alive" : "dead");
               log("\\u{274C}", "No output diagnostics: " + diag);
@@ -827,6 +859,7 @@ async function handleStartAgent(msg) {
     setTimeout(function() { suppressedAborts.delete(existingSession); }, 10000);
     try { await ocFetch("POST", "/session/" + existingSession + "/abort", {}, 10000); } catch {}
     activeThreads.delete(threadId);
+    saveActiveSessions();
   }
   try {
     await ensureOpenCodeHealthy();
@@ -1347,6 +1380,82 @@ wss.on("connection", (ws) => {
   lastPortsKey = "";
   ws.send(JSON.stringify({ type: "bridge_ready", port: PORT }));
 
+  // Detect orphaned sessions from a previous bridge instance and resume polling.
+  // Two strategies: (1) persisted file mapping, (2) session titles (set to threadId on creation).
+  (async function recoverSessions() {
+    try {
+      var healthy = await waitForHealthy(30);
+      if (!healthy) {
+        log("\\u{26A0}", "Session recovery: OpenCode not healthy after 30 attempts, skipping");
+        return;
+      }
+      var statuses = await ocFetch("GET", "/session/status", null, 5000);
+      if (!statuses || typeof statuses !== "object") return;
+
+      var persisted = loadPersistedSessions() || {};
+      var running = [];
+
+      // Build a set of busy session IDs
+      var busyIds = Object.keys(statuses).filter(function(sid) { return statuses[sid] && statuses[sid].type === "busy"; });
+      if (busyIds.length === 0) return;
+
+      for (var bi = 0; bi < busyIds.length; bi++) {
+        var sid = busyIds[bi];
+        if (activeThreads.size > 0) break;
+        var threadId = null;
+
+        // Strategy 1: check persisted mapping
+        if (persisted[sid] && persisted[sid].threadId) {
+          threadId = persisted[sid].threadId;
+        }
+
+        // Strategy 2: session title is the threadId (set during creation)
+        if (!threadId) {
+          try {
+            var sessInfo = await ocFetch("GET", "/session/" + sid, null, 5000);
+            if (sessInfo && sessInfo.title && sessInfo.title.match(/^[0-9a-f]{8}-/)) {
+              threadId = sessInfo.title;
+            }
+          } catch (e2) { /* ignore */ }
+        }
+
+          if (threadId && !activeThreads.has(threadId)) {
+          threadToSession.set(threadId, sid);
+          sessionToThread.set(sid, threadId);
+          activeThreads.add(threadId);
+          running.push({ threadId: threadId, sessionId: sid });
+          // Pre-populate emitted parts to avoid re-sending old messages
+          try {
+            var priorMsgs = await ocFetch("GET", "/session/" + sid + "/message?limit=50", null, 10000);
+            if (Array.isArray(priorMsgs)) {
+              var prior = new Set();
+              for (var pm = 0; pm < priorMsgs.length; pm++) {
+                if (!priorMsgs[pm].parts) continue;
+                for (var pp = 0; pp < priorMsgs[pm].parts.length; pp++) {
+                  var pid = priorMsgs[pm].parts[pp].id;
+                  if (pid) { prior.add(pid); prior.add(pid + ":running"); prior.add(pid + ":r"); }
+                }
+              }
+              sessionEmittedParts.set(sid, prior);
+              log("\\u{1F504}", "Pre-populated " + prior.size + " part IDs for recovered session " + sid);
+            }
+          } catch (e3) { /* best-effort */ }
+          log("\\u{1F504}", "Resuming poll for orphaned session " + sid + " thread=" + threadId);
+          pollSession(threadId, sid, "build", "", true);
+        }
+      }
+
+      if (running.length > 0) {
+        saveActiveSessions();
+        if (state.ws && state.ws.readyState === 1) {
+          state.ws.send(JSON.stringify({ type: "running_sessions", sessions: running }));
+        }
+      }
+    } catch (e) {
+      log("\\u{26A0}", "Session recovery failed: " + (e.message || e));
+    }
+  })();
+
   ws.on("message", (data) => {
     try {
       const msg = JSON.parse(data.toString());
@@ -1404,12 +1513,8 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
-    log("\\u{1F50C}", "Orchestrator disconnected");
-    for (const tid of activeThreads) {
-      const sid = threadToSession.get(tid);
-      if (sid) { ocFetch("POST", "/session/" + sid + "/abort", {}).catch(() => {}); }
-    }
-    activeThreads.clear();
+    log("\\u{1F50C}", "Orchestrator disconnected — keeping " + activeThreads.size + " session(s) alive for recovery");
+    state.ws = null;
   });
 });
 

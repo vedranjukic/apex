@@ -295,6 +295,11 @@ export interface BridgeLayoutData {
   data: LayoutData | null;
 }
 
+export interface BridgeRunningSessions {
+  type: 'running_sessions';
+  sessions: Array<{ threadId: string; sessionId: string }>;
+}
+
 // ── Union of all bridge messages ─────────────────────
 
 export type BridgeMessage =
@@ -320,7 +325,8 @@ export type BridgeMessage =
   | BridgePortsUpdate
   | BridgeLspData
   | BridgeLspResponse
-  | BridgeLspStatus;
+  | BridgeLspStatus
+  | BridgeRunningSessions;
 
 // ── Sandbox session tracking ─────────────────────────
 export type SandboxSessionStatus =
