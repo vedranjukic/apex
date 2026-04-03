@@ -26,9 +26,9 @@ const MAX_SCROLLBACK = 5000;
 const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY || "";
 const DAYTONA_API_URL = (process.env.DAYTONA_API_URL || "https://app.daytona.io/api").replace(/\\/$/, "");
 const SANDBOX_ID = process.env.DAYTONA_SANDBOX_ID || "";
-const APEX_PROXY_BASE_URL = (process.env.APEX_PROXY_BASE_URL || "").replace(/\\/$/, "");
+let APEX_PROXY_BASE_URL = (process.env.APEX_PROXY_BASE_URL || "").replace(/\\/$/, "");
 const APEX_PROJECT_ID = process.env.APEX_PROJECT_ID || "";
-const TUNNEL_ENDPOINT_URL = process.env.TUNNEL_ENDPOINT_URL || "";
+let TUNNEL_ENDPOINT_URL = process.env.TUNNEL_ENDPOINT_URL || "";
 const https = require("https");
 const urlMod = require("url");
 const net = require("net");
@@ -798,7 +798,7 @@ function pollSession(threadId, sessionId, agentName, modelName, recovered) {
         return (childPolls.length > 0 ? Promise.all(childPolls) : Promise.resolve()).then(function() { return ocFetch("GET", "/session/status", null, 10000); });
       })
       .then((statuses) => {
-        if (!statuses) return;
+        if (!statuses) { setTimeout(poll, 3000); return; }
         const st = statuses[sessionId];
         if (st && st.type === "busy") { seenBusy = true; seenBusyFromStatus = true; idleCount = 0; }
         if (!st || st.type === "idle") {
@@ -850,8 +850,18 @@ async function ensureOpenCodeHealthy() {
   }
 }
 
+function emitStartAck(threadId, status, sessionId, error) {
+  if (state.ws && state.ws.readyState === 1) {
+    var payload = { type: "start_claude_ack", threadId: threadId, status: status };
+    if (sessionId) payload.sessionId = sessionId;
+    if (error) payload.error = error;
+    state.ws.send(JSON.stringify(payload));
+  }
+}
+
 async function handleStartAgent(msg) {
   const threadId = msg.threadId || "default";
+  emitStartAck(threadId, "processing");
   const existingSession = threadToSession.get(threadId);
   if (existingSession && activeThreads.has(threadId)) {
     log("\\u{1F916}", "Aborting running session for thread " + threadId);
@@ -860,10 +870,15 @@ async function handleStartAgent(msg) {
     try { await ocFetch("POST", "/session/" + existingSession + "/abort", {}, 10000); } catch {}
     activeThreads.delete(threadId);
     saveActiveSessions();
+    // Wait for in-flight poll callbacks to drain before starting the new
+    // session. Without this, the old poll may re-process the aborted session
+    // after sendPrompt re-adds threadId to activeThreads.
+    await new Promise(function(r) { setTimeout(r, 2000); });
   }
   try {
     await ensureOpenCodeHealthy();
     await sendPrompt(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId, msg.images, msg.agentSettings);
+    emitStartAck(threadId, "started", threadToSession.get(threadId));
   } catch (e) {
     log("\\u{26A0}", "First attempt failed: " + (e.message || String(e)) + ", retrying after restart...");
     try {
@@ -875,7 +890,9 @@ async function handleStartAgent(msg) {
       }
       threadToSession.delete(threadId);
       await sendPrompt(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId, msg.images, msg.agentSettings);
+      emitStartAck(threadId, "started", threadToSession.get(threadId));
     } catch (retryErr) {
+      emitStartAck(threadId, "failed", null, retryErr.message || String(retryErr));
       emitAgentError(threadId, retryErr.message || String(retryErr));
     }
   }
@@ -1508,7 +1525,7 @@ wss.on("connection", (ws) => {
   ws.on("message", (data) => {
     try {
       const msg = JSON.parse(data.toString());
-      if (msg.type === "start_claude") { handleStartAgent(msg).catch(e => log("\\u{274C}", "start_claude error: " + e)); }
+      if (msg.type === "start_claude") { handleStartAgent(msg).catch(e => { log("\\u{274C}", "start_claude error: " + e); emitAgentError(msg.threadId || "default", "Bridge failed to start agent: " + (e.message || String(e))); }); }
       else if (msg.type === "claude_user_answer") { handleUserAnswer(msg); }
       else if (msg.type === "stop_claude") { handleStopAgent(msg).catch(e => log("\\u{274C}", "stop_claude error: " + e)); }
       else if (msg.type === "terminal_create") {
@@ -1517,6 +1534,22 @@ wss.on("connection", (ws) => {
           if (result.error) ws.send(JSON.stringify({ type: "terminal_error", terminalId: msg.terminalId, error: result.error }));
           else ws.send(JSON.stringify({ type: "terminal_created", terminalId: msg.terminalId, name: result.name }));
         } catch (ptyErr) { ws.send(JSON.stringify({ type: "terminal_error", terminalId: msg.terminalId, error: String(ptyErr) })); }
+      }
+      else if (msg.type === "update_proxy_url") {
+        var oldTunnelUrl = TUNNEL_ENDPOINT_URL;
+        if (msg.proxyBaseUrl) {
+          APEX_PROXY_BASE_URL = msg.proxyBaseUrl.replace(/\\/$/, "");
+          TUNNEL_ENDPOINT_URL = APEX_PROXY_BASE_URL + "/tunnel";
+          process.env.ANTHROPIC_BASE_URL = APEX_PROXY_BASE_URL + "/llm-proxy/anthropic/v1";
+          process.env.OPENAI_BASE_URL = APEX_PROXY_BASE_URL + "/llm-proxy/openai/v1";
+          process.env.TUNNEL_ENDPOINT_URL = TUNNEL_ENDPOINT_URL;
+          process.env.APEX_PROXY_BASE_URL = APEX_PROXY_BASE_URL;
+          log("\\u{1F504}", "Proxy URL updated: " + APEX_PROXY_BASE_URL + (oldTunnelUrl !== TUNNEL_ENDPOINT_URL ? " (tunnel endpoint changed)" : ""));
+        }
+        if (msg.authToken) {
+          process.env.ANTHROPIC_API_KEY = msg.authToken;
+          process.env.OPENAI_API_KEY = msg.authToken;
+        }
       }
       else if (msg.type === "terminal_input") { const e = terminals.get(msg.terminalId); if (e) e.pty.write(msg.data); }
       else if (msg.type === "terminal_resize") { const e = terminals.get(msg.terminalId); if (e) { e.pty.resize(msg.cols, msg.rows); e.cols = msg.cols; e.rows = msg.rows; } }

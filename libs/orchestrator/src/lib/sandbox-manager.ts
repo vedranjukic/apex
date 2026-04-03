@@ -202,6 +202,7 @@ export class SandboxManager extends EventEmitter {
   private config: Required<OrchestratorConfig>;
   private provider: SandboxProvider | null = null;
   private sessions: Map<string, InternalSession> = new Map();
+  private forceFullRestart = new Set<string>();
   private lastPortsBySandbox = new Map<string, BridgePortsUpdate>();
   private sandboxCache = new Map<
     string,
@@ -275,8 +276,24 @@ export class SandboxManager extends EventEmitter {
    * subsequent bridge starts and sandbox creations use the new URL.
    */
   updateProxyConfig(proxyBaseUrl: string, authToken: string): void {
+    const changed = this.config.proxyBaseUrl !== proxyBaseUrl;
     this.config.proxyBaseUrl = proxyBaseUrl;
     this.config.proxyAuthToken = authToken;
+    if (changed) {
+      for (const [sid, session] of this.sessions) {
+        this.forceFullRestart.add(sid);
+        if (session.ws?.readyState === WebSocket.OPEN) {
+          try {
+            session.ws.send(JSON.stringify({
+              type: "update_proxy_url",
+              proxyBaseUrl,
+              authToken,
+            }));
+            console.log(`[sandbox-mgr] Sent proxy URL update to bridge ${sid.slice(0, 8)}`);
+          } catch { /* best-effort */ }
+        }
+      }
+    }
   }
 
   /**
@@ -470,6 +487,17 @@ export class SandboxManager extends EventEmitter {
     this.reconnectPromises.set(sandboxId, promise);
     try {
       await promise;
+    } catch (err) {
+      if (SandboxManager.isSandboxNotFoundError(err)) {
+        const session = this.sessions.get(sandboxId);
+        if (session) {
+          session.ws?.close();
+          this.sessions.delete(sandboxId);
+        }
+        this.sandboxCache.delete(sandboxId);
+        this.startedAt.delete(sandboxId);
+      }
+      throw err;
     } finally {
       this.reconnectPromises.delete(sandboxId);
     }
@@ -709,6 +737,23 @@ export class SandboxManager extends EventEmitter {
   isBridgeConnected(sandboxId: string): boolean {
     const session = this.sessions.get(sandboxId);
     return !!session?.ws && session.ws.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Disconnect the bridge WebSocket and force a FULL bridge + opencode restart
+   * on next `ensureConnected`. Deletes the session entirely so `doReconnect`
+   * creates a fresh one, and marks the sandbox so `connectWithRetry` doesn't
+   * preserve the old opencode serve (which has stale env vars like proxy URLs).
+   */
+  forceDisconnect(sandboxId: string): void {
+    const session = this.sessions.get(sandboxId);
+    if (session) {
+      session.ws?.close();
+      this.sessions.delete(sandboxId);
+    }
+    this.forceFullRestart.add(sandboxId);
+    this.sandboxCache.delete(sandboxId);
+    this.startedAt.delete(sandboxId);
   }
 
   /** Get session info for a sandbox */
@@ -1884,14 +1929,17 @@ export class SandboxManager extends EventEmitter {
     );
 
     if (isFirstConnect) {
-      // First API connect (e.g. after API/desktop restart).
-      // Always preserve opencode serve so running sessions can be recovered.
-      // OpenCode is a separate detached process that survives bridge death.
-      const restartMode = bridgeAlive ? 'soft restart' : 'restart (bridge dead, preserving opencode)';
+      const flaggedForRestart = this.forceFullRestart.delete(session.sandboxId);
+      const isDaytona = this.config.provider === "daytona";
+      const needsFullRestart = flaggedForRestart || isDaytona;
+      const preserveOpenCode = !needsFullRestart;
+      const restartMode = needsFullRestart
+        ? isDaytona && !flaggedForRestart ? 'full restart (daytona — fresh env vars)' : 'full restart (proxy recovery)'
+        : bridgeAlive ? 'soft restart' : 'restart (bridge dead, preserving opencode)';
       console.log(
-        `[bridge:${sid}] ${restartMode} — first connect, preserving opencode serve`,
+        `[bridge:${sid}] ${restartMode} — first connect${preserveOpenCode ? ', preserving opencode serve' : ''}`,
       );
-      await this.restartBridge(session, true);
+      await this.restartBridge(session, preserveOpenCode);
       console.log(`[bridge:${sid}] ${restartMode} done, connecting WS`);
       await this.connectToBridge(session);
       console.log(`[bridge:${sid}] WS connected after ${restartMode}`);

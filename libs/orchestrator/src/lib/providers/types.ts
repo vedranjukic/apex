@@ -29,6 +29,10 @@ export interface CreateSandboxParams {
   image?: string;
   /** Disable auto-stop (0 = never). */
   autoStopInterval?: number;
+  /** Auto-delete interval in minutes (-1 = never, 0 = immediately on stop). */
+  autoDeleteInterval?: number;
+  /** Auto-archive interval in minutes (0 = max/30 days). */
+  autoArchiveInterval?: number;
   /** Environment variables injected at creation time. */
   envVars?: Record<string, string>;
   /** Metadata labels. */

@@ -319,6 +319,14 @@ export interface BridgeRunningSessions {
   sessions: Array<{ threadId: string; sessionId: string }>;
 }
 
+export interface BridgeStartClaudeAck {
+  type: 'start_claude_ack';
+  threadId: string;
+  status: 'processing' | 'started' | 'failed';
+  sessionId?: string;
+  error?: string;
+}
+
 // ── Union of all bridge messages ─────────────────────
 
 export type BridgeMessage =
@@ -348,7 +356,8 @@ export type BridgeMessage =
   | BridgeLspData
   | BridgeLspResponse
   | BridgeLspStatus
-  | BridgeRunningSessions;
+  | BridgeRunningSessions
+  | BridgeStartClaudeAck;
 
 // ── Sandbox session tracking ─────────────────────────
 export type SandboxSessionStatus =
