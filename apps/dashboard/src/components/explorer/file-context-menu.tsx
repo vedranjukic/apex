@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { FilePlus, FolderPlus, Pencil, Trash2 } from 'lucide-react';
 
 export interface ContextMenuAction {
@@ -15,8 +15,23 @@ interface FileContextMenuProps {
   onClose: () => void;
 }
 
+const VIEWPORT_PADDING = 8;
+
 export function FileContextMenu({ x, y, actions, onClose }: FileContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: x, top: y });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    setPos({
+      left: x + rect.width > vw - VIEWPORT_PADDING ? Math.max(VIEWPORT_PADDING, vw - rect.width - VIEWPORT_PADDING) : x,
+      top: y + rect.height > vh - VIEWPORT_PADDING ? Math.max(VIEWPORT_PADDING, vh - rect.height - VIEWPORT_PADDING) : y,
+    });
+  }, [x, y]);
 
   useEffect(() => {
     const handler = (e: MouseEvent | KeyboardEvent) => {
@@ -37,7 +52,7 @@ export function FileContextMenu({ x, y, actions, onClose }: FileContextMenuProps
     <div
       ref={ref}
       className="fixed z-50 min-w-[160px] rounded-md border border-panel-border bg-surface-secondary py-1 shadow-xl text-[13px]"
-      style={{ left: x, top: y }}
+      style={{ left: pos.left, top: pos.top }}
     >
       {actions.map((action) => (
         <button
