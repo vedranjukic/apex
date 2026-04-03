@@ -860,6 +860,10 @@ async function handleStartAgent(msg) {
     try { await ocFetch("POST", "/session/" + existingSession + "/abort", {}, 10000); } catch {}
     activeThreads.delete(threadId);
     saveActiveSessions();
+    // Wait for in-flight poll callbacks to drain before starting the new
+    // session. Without this, the old poll may re-process the aborted session
+    // after sendPrompt re-adds threadId to activeThreads.
+    await new Promise(function(r) { setTimeout(r, 2000); });
   }
   try {
     await ensureOpenCodeHealthy();

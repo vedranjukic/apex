@@ -125,6 +125,8 @@ class ProxySandboxService {
     params: {
       snapshot: string;
       autoStopInterval: number;
+      autoDeleteInterval?: number;
+      autoArchiveInterval?: number;
       envVars: Record<string, string>;
       labels: Record<string, string>;
     },
@@ -262,6 +264,8 @@ class ProxySandboxService {
     const sandbox = await this.createProxySandboxWithConflictResolution(daytonaProvider, {
       snapshot,
       autoStopInterval: 0,
+      autoDeleteInterval: -1,
+      autoArchiveInterval: 0,
       envVars: {
         REAL_ANTHROPIC_API_KEY: anthropicKey,
         REAL_OPENAI_API_KEY: openaiKey,
