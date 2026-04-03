@@ -352,7 +352,7 @@ export class SandboxManager extends EventEmitter {
     }
 
     if (this.config.githubToken && secretsProxyAvailable) {
-      envVars["GH_TOKEN"] = "gh-proxy-placeholder";
+      envVars["GH_TOKEN"] = "ghp_proxy0placeholder0000000000000000000";
     }
 
     for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
@@ -2142,19 +2142,6 @@ export class SandboxManager extends EventEmitter {
       }
     }
 
-    if (this.config.githubToken) {
-      try {
-        const safeToken = this.config.githubToken.replace(/'/g, "'\\''");
-        await sandbox.process.executeCommand(
-          [
-            `git config --global credential.helper store`,
-            `printf 'protocol=https\\nhost=github.com\\nusername=x-access-token\\npassword=${safeToken}\\n' | git credential approve`,
-            `git config --global "http.https://github.com/.proxy" ""`,
-          ].join(' && '),
-        );
-      } catch { /* non-fatal */ }
-    }
-
     const bridgeSessionId = `bridge-restart-${Date.now()}`;
     session.bridgeSessionId = bridgeSessionId;
     await sandbox.process.createSession(bridgeSessionId);
@@ -2475,62 +2462,73 @@ export class SandboxManager extends EventEmitter {
       ? writeConfigTask
       : Promise.all([writeBridgeFiles(), writeConfigTask]).then(() => log("infra files written"));
 
-    const gitTask = (async () => {
-      if (gitRepo) {
-        this.emit("status", session.sandboxId, "cloning_repo");
-        await sandbox.process.executeCommand(`mkdir -p '${projectDir}'`);
-        const isCommitSha = gitBranch && /^[0-9a-f]{7,40}$/i.test(gitBranch);
-        const branchArg = (gitBranch && !isCommitSha) ? gitBranch : undefined;
-        const branchFlag = branchArg ? ` --branch ${branchArg}` : '';
-        const cloneResult = await sandbox.process.executeCommand(`git clone${branchFlag} ${gitRepo} .`, projectDir);
-        if (cloneResult.exitCode !== 0) {
-          throw new Error(`git clone failed (exit ${cloneResult.exitCode}): ${cloneResult.result}`);
-        }
-        if (isCommitSha) {
-          await sandbox.process.executeCommand(`git checkout ${gitBranch}`, projectDir);
-        }
-        if (createBranch) {
-          const safeBranch = createBranch.replace(/[^a-zA-Z0-9/_.-]/g, "");
-          await sandbox.process.executeCommand(`git checkout -b "${safeBranch}"`, projectDir);
-        }
-      } else {
-        await sandbox.process.executeCommand(`mkdir -p '${projectDir}' && git init '${projectDir}'`);
-      }
-      if (this.config.gitUserName && this.config.gitUserEmail) {
-        const safeName = this.config.gitUserName.replace(/"/g, '\\"');
-        const safeEmail = this.config.gitUserEmail.replace(/"/g, '\\"');
-        await sandbox.process.executeCommand(
-          `git config --global user.name "${safeName}" && git config --global user.email "${safeEmail}"`,
-        );
-      }
-      if (this.config.githubToken) {
-        const safeToken = this.config.githubToken.replace(/'/g, "'\\''");
-        await sandbox.process.executeCommand(
-          [
-            `git config --global credential.helper store`,
-            `printf 'protocol=https\\nhost=github.com\\nusername=x-access-token\\npassword=${safeToken}\\n' | git credential approve`,
-            `git config --global "http.https://github.com/.proxy" ""`,
-          ].join(' && '),
-        );
-      }
-      log("git done");
-      if (bridgeDirInsideProject) {
-        await writeBridgeFiles();
-        log("bridge files written (post-clone)");
-      }
-    })();
-
-    // ── Exec 3: Update CA certs if needed (after config files are written) ──
+    // ── Exec 2b: Update CA certs if needed (after config files are written) ──
     const caCertTask = writeCaCert
       ? writeConfigTask.then(() =>
           sandbox.process.executeCommand("sudo update-ca-certificates 2>/dev/null || true"),
         ).then(() => log("CA cert updated"))
       : Promise.resolve();
 
-    // Wait for infrastructure and CA cert tasks first to avoid race condition
+    // Wait for infra + CA cert before git clone so the proxy's dynamic cert
+    // is trusted and all config files are in place.
     await Promise.all([writeInfraTask, caCertTask]);
-    // Git clone now runs after CA cert is in the system bundle  
-    await gitTask;
+
+    // ── Exec 2c: Git clone / init ──
+    if (gitRepo) {
+      this.emit("status", session.sandboxId, "cloning_repo");
+      await sandbox.process.executeCommand(`mkdir -p '${projectDir}'`);
+      const isCommitSha = gitBranch && /^[0-9a-f]{7,40}$/i.test(gitBranch);
+      const branchArg = (gitBranch && !isCommitSha) ? gitBranch : undefined;
+      const branchFlag = branchArg ? ` --branch ${branchArg}` : '';
+
+      // For Daytona the MITM proxy tunnel (localhost:9339) isn't up yet —
+      // the bridge starts it later. Bypass the proxy for the initial clone
+      // and use a token-in-URL for auth, then immediately scrub it from
+      // the remote so it never persists in .git/config.
+      const needsProxyBypass = isDaytonaI && this.config.githubToken && gitRepo.includes("github.com");
+      const clonePrefix = needsProxyBypass
+        ? `HTTPS_PROXY="" HTTP_PROXY="" https_proxy="" http_proxy="" `
+        : '';
+      let cloneUrl = gitRepo;
+      if (needsProxyBypass) {
+        cloneUrl = gitRepo.replace(
+          /^https:\/\/github\.com/,
+          `https://x-access-token:${this.config.githubToken}@github.com`,
+        );
+      }
+      const cloneResult = await sandbox.process.executeCommand(
+        `${clonePrefix}git clone${branchFlag} ${cloneUrl} .`, projectDir,
+      );
+      if (cloneResult.exitCode !== 0) {
+        throw new Error(`git clone failed (exit ${cloneResult.exitCode}): ${cloneResult.result}`);
+      }
+      if (needsProxyBypass) {
+        await sandbox.process.executeCommand(
+          `git remote set-url origin ${gitRepo}`, projectDir,
+        );
+      }
+      if (isCommitSha) {
+        await sandbox.process.executeCommand(`git checkout ${gitBranch}`, projectDir);
+      }
+      if (createBranch) {
+        const safeBranch = createBranch.replace(/[^a-zA-Z0-9/_.-]/g, "");
+        await sandbox.process.executeCommand(`git checkout -b "${safeBranch}"`, projectDir);
+      }
+    } else {
+      await sandbox.process.executeCommand(`mkdir -p '${projectDir}' && git init '${projectDir}'`);
+    }
+    if (this.config.gitUserName && this.config.gitUserEmail) {
+      const safeName = this.config.gitUserName.replace(/"/g, '\\"');
+      const safeEmail = this.config.gitUserEmail.replace(/"/g, '\\"');
+      await sandbox.process.executeCommand(
+        `git config --global user.name "${safeName}" && git config --global user.email "${safeEmail}"`,
+      );
+    }
+    log("git done");
+    if (bridgeDirInsideProject) {
+      await writeBridgeFiles();
+      log("bridge files written (post-clone)");
+    }
     log("setup complete");
 
     // ── Exec 4: Start bridge ────────────────────────
