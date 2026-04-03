@@ -225,17 +225,26 @@ function forwardRequest(domain, port, method, path, headers, body, secret, clien
   console.log(\`[mitm-proxy] Forwarding \${method} \${domain}:\${port}\${path} with auth\`);
   
   const req = https.request(opts, (res) => {
-    clientSocket.write(\`HTTP/1.1 \${res.statusCode} \${res.statusMessage}\\r\\n\`);
-    
-    // Forward response headers
-    for (const [key, value] of Object.entries(res.headers)) {
-      if (key.toLowerCase() !== 'connection') {
-        clientSocket.write(\`\${key}: \${value}\\r\\n\`);
+    // Node decodes chunked transfer-encoding automatically, so we must
+    // buffer the decoded body and send with Content-Length instead.
+    // Go's strict HTTP parser (gh CLI) rejects chunked header + unchunked body.
+    const skipH = new Set(['transfer-encoding', 'content-length', 'connection']);
+    const chunks = [];
+    res.on('data', (c) => chunks.push(c));
+    res.on('end', () => {
+      const respBody = Buffer.concat(chunks);
+      clientSocket.write(\`HTTP/1.1 \${res.statusCode} \${res.statusMessage}\\r\\n\`);
+      for (const [key, value] of Object.entries(res.headers)) {
+        if (!skipH.has(key.toLowerCase())) {
+          clientSocket.write(\`\${key}: \${value}\\r\\n\`);
+        }
       }
-    }
-    clientSocket.write('\\r\\n');
-    
-    res.pipe(clientSocket);
+      clientSocket.write(\`content-length: \${respBody.length}\\r\\n\`);
+      clientSocket.write('\\r\\n');
+      clientSocket.write(respBody);
+      clientSocket.end();
+    });
+    res.on('error', () => { try { clientSocket.end(); } catch {} });
   });
   
   req.on('error', (err) => {

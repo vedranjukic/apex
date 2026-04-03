@@ -110,14 +110,31 @@ function forwardRequest(
   const upstreamReq = https.request(
     { hostname: domain, port, method, path, headers: outHeaders, rejectUnauthorized: true },
     (upstreamRes) => {
-      let head = `HTTP/${upstreamRes.httpVersion} ${upstreamRes.statusCode} ${upstreamRes.statusMessage || ''}\r\n`;
-      const raw = upstreamRes.rawHeaders;
-      for (let i = 0; i < raw.length; i += 2) head += `${raw[i]}: ${raw[i + 1]}\r\n`;
-      head += '\r\n';
-      try {
-        clientSocket.write(head);
-        upstreamRes.pipe(clientSocket);
-      } catch { upstreamRes.destroy(); }
+      // Node's http client decodes chunked transfer-encoding and content-encoding
+      // automatically, so we must strip those headers and re-frame the response
+      // with Content-Length. Go's strict HTTP parser (used by gh CLI) rejects
+      // a mismatch between "Transfer-Encoding: chunked" headers and unchunked body.
+      const skipHeaders = new Set(['transfer-encoding', 'content-length']);
+      const chunks: Buffer[] = [];
+      upstreamRes.on('data', (chunk: Buffer) => chunks.push(chunk));
+      upstreamRes.on('end', () => {
+        const body = Buffer.concat(chunks);
+        let head = `HTTP/1.1 ${upstreamRes.statusCode} ${upstreamRes.statusMessage || ''}\r\n`;
+        const raw = upstreamRes.rawHeaders;
+        for (let i = 0; i < raw.length; i += 2) {
+          if (!skipHeaders.has(raw[i].toLowerCase())) head += `${raw[i]}: ${raw[i + 1]}\r\n`;
+        }
+        head += `Content-Length: ${body.length}\r\n`;
+        head += '\r\n';
+        try {
+          clientSocket.write(head);
+          clientSocket.write(body);
+          clientSocket.end();
+        } catch { /* closed */ }
+      });
+      upstreamRes.on('error', () => {
+        try { clientSocket.end(); } catch { /* closed */ }
+      });
     },
   );
 
