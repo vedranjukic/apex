@@ -2,6 +2,8 @@ import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
+import { getTableConfig } from 'drizzle-orm/sqlite-core';
+import { SQL } from 'drizzle-orm';
 import * as schema from './schema';
 
 const dbPath = process.env.DB_PATH || 'data/apex.sqlite';
@@ -36,9 +38,13 @@ sqlite.exec(`
     agent_type TEXT NOT NULL DEFAULT 'build',
     git_repo TEXT,
     agent_config TEXT,
+    github_context TEXT,
+    merge_status TEXT,
     forked_from_id TEXT,
     branch_name TEXT,
     local_dir TEXT,
+    auto_start_prompt TEXT,
+    sandbox_config TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     deleted_at TEXT
@@ -84,11 +90,47 @@ sqlite.exec(`
   );
 `);
 
-// Migrations for columns added after initial schema
-try { sqlite.exec(`ALTER TABLE projects ADD COLUMN provider TEXT NOT NULL DEFAULT 'daytona'`); } catch { /* column already exists */ }
-try { sqlite.exec(`ALTER TABLE projects ADD COLUMN local_dir TEXT`); } catch { /* column already exists */ }
-try { sqlite.exec(`ALTER TABLE projects ADD COLUMN github_context TEXT`); } catch { /* column already exists */ }
-try { sqlite.exec(`ALTER TABLE projects ADD COLUMN auto_start_prompt TEXT`); } catch { /* column already exists */ }
-try { sqlite.exec(`ALTER TABLE projects ADD COLUMN merge_status TEXT`); } catch { /* column already exists */ }
+// ── Auto-sync schema ────────────────────────────────────────────────
+// Compare drizzle schema definitions against actual SQLite tables and
+// add any missing columns. This replaces hand-written ALTER TABLE
+// statements and prevents schema drift.
+
+const drizzleTables = [
+  schema.users, schema.projects, schema.tasks,
+  schema.messages, schema.settings, schema.secrets,
+];
+
+for (const table of drizzleTables) {
+  const config = getTableConfig(table);
+  const existing = new Set(
+    (sqlite.query(`PRAGMA table_info("${config.name}")`).all() as { name: string }[])
+      .map(r => r.name),
+  );
+
+  for (const col of config.columns) {
+    if (existing.has(col.name)) continue;
+
+    const sqlType = col.getSQLType();
+    let ddl = `ALTER TABLE "${config.name}" ADD COLUMN "${col.name}" ${sqlType}`;
+
+    if (col.notNull && col.default !== undefined) {
+      const val = col.default instanceof SQL ? null : col.default;
+      if (val !== null && val !== undefined) {
+        ddl += ` NOT NULL DEFAULT ${typeof val === 'string' ? `'${val}'` : val}`;
+      } else {
+        ddl += ` NOT NULL DEFAULT ''`;
+      }
+    } else if (col.notNull) {
+      ddl += ` NOT NULL DEFAULT ''`;
+    }
+
+    try {
+      sqlite.exec(ddl);
+      console.log(`[db] Added column "${config.name}"."${col.name}"`);
+    } catch (e) {
+      console.warn(`[db] Failed to add column "${config.name}"."${col.name}":`, (e as Error).message);
+    }
+  }
+}
 
 export const db = drizzle(sqlite, { schema });
