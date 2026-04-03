@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { FilePlus, FolderPlus, Pencil, Trash2 } from 'lucide-react';
+import { GitFork, Pencil, Trash2 } from 'lucide-react';
+import type { Thread } from '../../api/client';
 
 export interface ContextMenuAction {
   label: string;
@@ -8,18 +9,22 @@ export interface ContextMenuAction {
   danger?: boolean;
 }
 
-interface FileContextMenuProps {
+interface ThreadContextMenuProps {
   x: number;
   y: number;
-  actions: ContextMenuAction[];
+  thread: Thread;
+  onRename: (thread: Thread) => void;
+  onFork: (thread: Thread) => void;
+  onDelete: (thread: Thread) => void;
   onClose: () => void;
 }
 
 const VIEWPORT_PADDING = 8;
 
-export function FileContextMenu({ x, y, actions, onClose }: FileContextMenuProps) {
+export function ThreadContextMenu({ x, y, thread, onRename, onFork, onDelete, onClose }: ThreadContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: x, top: y });
+  const actions = buildThreadActions({ thread, onRename, onFork, onDelete });
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -72,42 +77,28 @@ export function FileContextMenu({ x, y, actions, onClose }: FileContextMenuProps
   );
 }
 
-export function buildFileActions(opts: {
-  path: string;
-  isDirectory: boolean;
-  isRoot: boolean;
-  onNewFile: (parentDir: string) => void;
-  onNewFolder: (parentDir: string) => void;
-  onRename: (path: string) => void;
-  onDelete: (path: string) => void;
+export function buildThreadActions(opts: {
+  thread: Thread;
+  onRename: (thread: Thread) => void;
+  onFork: (thread: Thread) => void;
+  onDelete: (thread: Thread) => void;
 }): ContextMenuAction[] {
-  const actions: ContextMenuAction[] = [];
-  const parentDir = opts.isDirectory ? opts.path : opts.path.substring(0, opts.path.lastIndexOf('/'));
-
-  actions.push({
-    label: 'New File',
-    icon: FilePlus,
-    onClick: () => opts.onNewFile(parentDir),
-  });
-  actions.push({
-    label: 'New Folder',
-    icon: FolderPlus,
-    onClick: () => opts.onNewFolder(parentDir),
-  });
-
-  if (!opts.isRoot) {
-    actions.push({
+  return [
+    {
       label: 'Rename',
       icon: Pencil,
-      onClick: () => opts.onRename(opts.path),
-    });
-    actions.push({
+      onClick: () => opts.onRename(opts.thread),
+    },
+    {
+      label: 'Fork',
+      icon: GitFork,
+      onClick: () => opts.onFork(opts.thread),
+    },
+    {
       label: 'Delete',
       icon: Trash2,
-      onClick: () => opts.onDelete(opts.path),
+      onClick: () => opts.onDelete(opts.thread),
       danger: true,
-    });
-  }
-
-  return actions;
+    },
+  ];
 }

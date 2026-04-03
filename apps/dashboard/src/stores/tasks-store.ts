@@ -45,6 +45,8 @@ interface ThreadsState {
   updateThread: (threadId: string, patch: Partial<Thread>) => void;
   setThreadSessionInfo: (threadId: string, info: ThreadSessionInfo) => void;
   deleteThread: (id: string) => Promise<void>;
+  renameThread: (id: string, newTitle: string) => Promise<void>;
+  forkThread: (id: string) => Promise<Thread>;
   setThreadScrollOffset: (threadId: string, offset: number) => void;
   setThreadDraft: (threadId: string, draft: string) => void;
   getThreadDraft: (threadId: string) => string;
@@ -169,6 +171,22 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
     const threads = get().threads.filter((c) => c.id !== id);
     const activeThreadId = get().activeThreadId === id ? null : get().activeThreadId;
     set({ threads, activeThreadId, messages: activeThreadId ? get().messages : [] });
+  },
+
+  renameThread: async (id, newTitle) => {
+    const updatedThread = await threadsApi.update(id, { title: newTitle });
+    const threads = get().threads.map((c) =>
+      c.id === id ? updatedThread : c,
+    );
+    set({ threads });
+  },
+
+  forkThread: async (id) => {
+    const forkedThread = await threadsApi.fork(id);
+    set({
+      threads: [forkedThread, ...get().threads],
+    });
+    return forkedThread;
   },
 
   setThreadScrollOffset: (threadId, offset) =>

@@ -10,9 +10,5 @@
     "jest.config.ts",
     "src/**/*.ts"
   ],
-  "references": [
-    {
-      "path": "../api"
-    }
-  ]
+  "references": []
 }
