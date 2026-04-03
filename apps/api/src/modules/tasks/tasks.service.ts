@@ -115,6 +115,13 @@ class ThreadsService {
     return db.select().from(messages).where(eq(messages.taskId, threadId)).orderBy(asc(messages.createdAt));
   }
 
+  async getFirstUserMessage(threadId: string): Promise<Message | undefined> {
+    return db.query.messages.findFirst({
+      where: (m, { eq, and }) => and(eq(m.taskId, threadId), eq(m.role, 'user')),
+      orderBy: [asc(messages.createdAt)],
+    });
+  }
+
   async remove(id: string): Promise<void> {
     await db.delete(tasks).where(eq(tasks.id, id));
   }
