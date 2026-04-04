@@ -108,8 +108,10 @@ class ProjectsService {
     try { caCert = getCACertPem(); } catch { /* CA not yet initialized */ }
 
     const secretPlaceholders: Record<string, string> = {};
+    let secretDomains: string[] = [];
     try {
       const domains = await secretsService.getSecretDomains();
+      secretDomains = [...domains];
       if (domains.size > 0) {
         const allSecrets = await secretsService.list(
           '00000000-0000-0000-0000-000000000001',
@@ -146,6 +148,7 @@ class ProjectsService {
       secretsProxyCaCert: caCert,
       secretsProxyPort: getSecretsProxyPort(),
       secretPlaceholders,
+      secretDomains,
     };
 
     for (const status of this.providerStatuses) {
@@ -191,6 +194,18 @@ class ProjectsService {
   async reinitSandboxManager() {
     console.log('[projects] Re-initializing SandboxManagers...');
     await this.initSandboxManagers();
+  }
+
+  async updateSecretDomainsOnManagers() {
+    try {
+      const domains = [...(await secretsService.getSecretDomains())];
+      for (const [, mgr] of this.sandboxManagers) {
+        mgr.updateSecretDomains(domains);
+      }
+      console.log(`[projects] Updated secret domains on managers (${domains.length} domains)`);
+    } catch (err) {
+      console.error('[projects] Failed to update secret domains:', err);
+    }
   }
 
   /**

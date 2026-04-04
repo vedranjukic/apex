@@ -421,6 +421,9 @@ export interface OrchestratorConfig {
   /** Secret env var names to write as placeholders in the container .env.
    *  SDKs can initialize with the placeholder; the proxy replaces it at HTTP level. */
   secretPlaceholders?: Record<string, string>;
+  /** Domains that have secrets configured. The bridge's selective proxy will
+   *  route only these domains through the upstream MITM proxy. */
+  secretDomains?: string[];
   /** Memory allocation in MB for container sandboxes. Defaults to 4096 (4 GB). */
   memoryMB?: number;
   /** Number of CPU cores for container sandboxes. */

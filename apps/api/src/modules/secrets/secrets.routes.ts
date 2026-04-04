@@ -28,6 +28,7 @@ export const secretsRoutes = new Elysia({ prefix: '/api/secrets' })
     };
     const record = await secretsService.create(userId, input);
     await projectsService.reinitSandboxManager();
+    projectsService.updateSecretDomainsOnManagers().catch(() => {});
     return { ...record, value: maskValue(record.value) };
   })
   .put('/:id', async ({ params, body }) => {
@@ -50,6 +51,9 @@ export const secretsRoutes = new Elysia({ prefix: '/api/secrets' })
         headers: { 'Content-Type': 'application/json' },
       });
     }
+    if (updates.domain !== undefined) {
+      projectsService.updateSecretDomainsOnManagers().catch(() => {});
+    }
     return { ...record, value: maskValue(record.value) };
   })
   .delete('/:id', async ({ params }) => {
@@ -62,5 +66,6 @@ export const secretsRoutes = new Elysia({ prefix: '/api/secrets' })
       });
     }
     await projectsService.reinitSandboxManager();
+    projectsService.updateSecretDomainsOnManagers().catch(() => {});
     return { ok: true };
   });

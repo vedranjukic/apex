@@ -224,9 +224,9 @@ export class SandboxManager extends EventEmitter {
       githubToken:
         config.githubToken || process.env["GITHUB_TOKEN"] || "",
       snapshot:
-        config.snapshot || process.env["DAYTONA_SNAPSHOT"] || "apex-default-0.2.1-m",
+        config.snapshot || process.env["DAYTONA_SNAPSHOT"] || "apex-default:0.2.3",
       image:
-        config.image || process.env["SANDBOX_IMAGE"] || "daytonaio/apex-default:0.2.1-m",
+        config.image || process.env["SANDBOX_IMAGE"] || "daytonaio/apex-default:0.2.3",
       timeoutMs: config.timeoutMs || 600000,
       provider:
         (config.provider as SandboxProviderType) ||
@@ -241,6 +241,7 @@ export class SandboxManager extends EventEmitter {
         config.secretsProxyPort ||
         Number(process.env["SECRETS_PROXY_PORT"] || "3001"),
       secretPlaceholders: config.secretPlaceholders || {},
+      secretDomains: config.secretDomains || [],
       memoryMB: config.memoryMB || Number(process.env["SANDBOX_MEMORY_MB"] || "4096"),
       cpus: config.cpus || Number(process.env["SANDBOX_CPUS"] || "2"),
       gitUserName: config.gitUserName || "",
@@ -297,6 +298,26 @@ export class SandboxManager extends EventEmitter {
   }
 
   /**
+   * Hot-update the list of secret domains on all running bridges.
+   * Called when secrets are created/updated/deleted so the bridge's
+   * selective proxy routes the correct domains to the upstream MITM.
+   */
+  updateSecretDomains(domains: string[]): void {
+    this.config.secretDomains = domains;
+    for (const [sid, session] of this.sessions) {
+      if (session.ws?.readyState === WebSocket.OPEN) {
+        try {
+          session.ws.send(JSON.stringify({
+            type: "update_secret_domains",
+            domains,
+          }));
+          console.log(`[sandbox-mgr] Sent secret domains update to bridge ${sid.slice(0, 8)} (${domains.length} domains)`);
+        } catch { /* best-effort */ }
+      }
+    }
+  }
+
+  /**
    * Build env vars to inject into the container/sandbox at creation time.
    * Used for Docker, Apple Container, and Daytona providers.
    * Local provider ignores env vars (user manages their own environment).
@@ -343,22 +364,34 @@ export class SandboxManager extends EventEmitter {
     // not on the host — so availability depends on proxyBase, not secretsProxyUrl.
     const secretsProxyAvailable = isDaytona ? useProxy : !!secretsProxyUrl;
 
-    if (secretsProxyAvailable) {
+    // Compute effective secret domains (user secrets + GitHub if token set).
+    const secretDomainsList = [...(this.config.secretDomains || [])];
+    if (this.config.githubToken) {
+      if (!secretDomainsList.includes("github.com")) secretDomainsList.push("github.com");
+      if (!secretDomainsList.includes("api.github.com")) secretDomainsList.push("api.github.com");
+    }
+    const hasSecretDomains = secretDomainsList.length > 0;
+
+    // Daytona port relay is independent of secrets — always set when proxy infra is up.
+    if (isDaytona && useProxy) {
+      envVars["PORT_RELAY_BASE_URL"] = `${proxyBase?.replace(':3000', ':9341') || ''}`;
+    }
+
+    // Only set HTTPS_PROXY when there are actual secret domains to proxy.
+    // When no secrets exist, traffic goes direct — zero proxy overhead.
+    if (secretsProxyAvailable && hasSecretDomains) {
+      envVars["HTTPS_PROXY"] = "http://localhost:9339";
+      envVars["HTTP_PROXY"] = "http://localhost:9339";
+      envVars["https_proxy"] = "http://localhost:9339";
+      envVars["http_proxy"] = "http://localhost:9339";
+
       if (isDaytona) {
-        // For Daytona: use tunnel client on localhost:9339
-        envVars["HTTPS_PROXY"] = "http://localhost:9339";
-        envVars["HTTP_PROXY"] = "http://localhost:9339";
-        envVars["https_proxy"] = "http://localhost:9339";
-        envVars["http_proxy"] = "http://localhost:9339";
         envVars["TUNNEL_ENDPOINT_URL"] = `${proxyBase}/tunnel`;
-        envVars["PORT_RELAY_BASE_URL"] = `${proxyBase?.replace(':3000', ':9341') || ''}`;
       } else {
-        // For other providers: use direct proxy URL
-        envVars["HTTPS_PROXY"] = secretsProxyUrl!;
-        envVars["HTTP_PROXY"] = secretsProxyUrl!;
-        envVars["https_proxy"] = secretsProxyUrl!;
-        envVars["http_proxy"] = secretsProxyUrl!;
+        envVars["SECRETS_PROXY_UPSTREAM"] = secretsProxyUrl!;
       }
+
+      envVars["SECRET_DOMAINS"] = secretDomainsList.join(",");
       envVars["NO_PROXY"] = "localhost,127.0.0.1,0.0.0.0";
       envVars["no_proxy"] = "localhost,127.0.0.1,0.0.0.0";
       envVars["NODE_EXTRA_CA_CERTS"] = CA_CERT_PATH;
@@ -368,7 +401,7 @@ export class SandboxManager extends EventEmitter {
       envVars["GIT_SSL_CAINFO"] = "/etc/ssl/certs/ca-certificates.crt";
     }
 
-    if (this.config.githubToken && secretsProxyAvailable) {
+    if (this.config.githubToken && secretsProxyAvailable && hasSecretDomains) {
       envVars["GH_TOKEN"] = "ghp_proxy0placeholder0000000000000000000";
     }
 
@@ -2225,36 +2258,30 @@ export class SandboxManager extends EventEmitter {
       ...(this.config.provider === "local"
         ? []
         : [`HOME="/home/daytona"`, `PATH="/home/daytona/.opencode/bin:$PATH"`]),
-      ...(secretsProxyAvailableR
-        ? isDaytonaR
-          ? [
-              // For Daytona: use tunnel client on localhost:9339, pass tunnel URL to bridge
-              `HTTPS_PROXY="http://localhost:9339"`,
-              `HTTP_PROXY="http://localhost:9339"`,
-              `https_proxy="http://localhost:9339"`,
-              `http_proxy="http://localhost:9339"`,
-              `NO_PROXY="localhost,127.0.0.1,0.0.0.0"`,
-              `no_proxy="localhost,127.0.0.1,0.0.0.0"`,
-              `NODE_EXTRA_CA_CERTS="${CA_CERT_PATH}"`,
-              `SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"`,
-              `REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
-              `CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
-              `TUNNEL_ENDPOINT_URL="${proxyBase}/tunnel"`,
-            ]
-          : [
-              // For other providers: use direct proxy URL
-              `HTTPS_PROXY="${secretsProxyUrlR}"`,
-              `HTTP_PROXY="${secretsProxyUrlR}"`,
-              `https_proxy="${secretsProxyUrlR}"`,
-              `http_proxy="${secretsProxyUrlR}"`,
-              `NO_PROXY="localhost,127.0.0.1,0.0.0.0"`,
-              `no_proxy="localhost,127.0.0.1,0.0.0.0"`,
-              `NODE_EXTRA_CA_CERTS="${CA_CERT_PATH}"`,
-              `SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"`,
-              `REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
-              `CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
-            ]
-        : []),
+      ...(() => {
+        const sd = [...(this.config.secretDomains || [])];
+        if (this.config.githubToken) {
+          if (!sd.includes("github.com")) sd.push("github.com");
+          if (!sd.includes("api.github.com")) sd.push("api.github.com");
+        }
+        if (!secretsProxyAvailableR || sd.length === 0) return [];
+        return [
+          `HTTPS_PROXY="http://localhost:9339"`,
+          `HTTP_PROXY="http://localhost:9339"`,
+          `https_proxy="http://localhost:9339"`,
+          `http_proxy="http://localhost:9339"`,
+          `NO_PROXY="localhost,127.0.0.1,0.0.0.0"`,
+          `no_proxy="localhost,127.0.0.1,0.0.0.0"`,
+          `NODE_EXTRA_CA_CERTS="${CA_CERT_PATH}"`,
+          `SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"`,
+          `REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+          `CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+          ...(isDaytonaR
+            ? [`TUNNEL_ENDPOINT_URL="${proxyBase}/tunnel"`]
+            : [`SECRETS_PROXY_UPSTREAM="${secretsProxyUrlR}"`]),
+          `SECRET_DOMAINS="${sd.join(",")}"`,
+        ];
+      })(),
     ];
     for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
       envParts.push(`${name}="${placeholder}"`);
@@ -2617,36 +2644,30 @@ export class SandboxManager extends EventEmitter {
       ...(this.config.provider === "local"
         ? []
         : [`HOME="/home/daytona"`, `PATH="/home/daytona/.opencode/bin:$PATH"`]),
-      ...(secretsProxyAvailableI
-        ? isDaytonaI
-          ? [
-              // For Daytona: use tunnel client on localhost:9339, pass tunnel URL to bridge
-              `HTTPS_PROXY="http://localhost:9339"`,
-              `HTTP_PROXY="http://localhost:9339"`,
-              `https_proxy="http://localhost:9339"`,
-              `http_proxy="http://localhost:9339"`,
-              `NO_PROXY="localhost,127.0.0.1,0.0.0.0"`,
-              `no_proxy="localhost,127.0.0.1,0.0.0.0"`,
-              `NODE_EXTRA_CA_CERTS="${CA_CERT_PATH}"`,
-              `SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"`,
-              `REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
-              `CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
-              `TUNNEL_ENDPOINT_URL="${proxyBaseUrlForEnv}/tunnel"`,
-            ]
-          : [
-              // For other providers: use direct proxy URL
-              `HTTPS_PROXY="${secretsProxyUrl}"`,
-              `HTTP_PROXY="${secretsProxyUrl}"`,
-              `https_proxy="${secretsProxyUrl}"`,
-              `http_proxy="${secretsProxyUrl}"`,
-              `NO_PROXY="localhost,127.0.0.1,0.0.0.0"`,
-              `no_proxy="localhost,127.0.0.1,0.0.0.0"`,
-              `NODE_EXTRA_CA_CERTS="${CA_CERT_PATH}"`,
-              `SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"`,
-              `REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
-              `CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
-            ]
-        : []),
+      ...(() => {
+        const sd = [...(this.config.secretDomains || [])];
+        if (this.config.githubToken) {
+          if (!sd.includes("github.com")) sd.push("github.com");
+          if (!sd.includes("api.github.com")) sd.push("api.github.com");
+        }
+        if (!secretsProxyAvailableI || sd.length === 0) return [];
+        return [
+          `HTTPS_PROXY="http://localhost:9339"`,
+          `HTTP_PROXY="http://localhost:9339"`,
+          `https_proxy="http://localhost:9339"`,
+          `http_proxy="http://localhost:9339"`,
+          `NO_PROXY="localhost,127.0.0.1,0.0.0.0"`,
+          `no_proxy="localhost,127.0.0.1,0.0.0.0"`,
+          `NODE_EXTRA_CA_CERTS="${CA_CERT_PATH}"`,
+          `SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"`,
+          `REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+          `CURL_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"`,
+          ...(isDaytonaI
+            ? [`TUNNEL_ENDPOINT_URL="${proxyBaseUrlForEnv}/tunnel"`]
+            : [`SECRETS_PROXY_UPSTREAM="${secretsProxyUrl}"`]),
+          `SECRET_DOMAINS="${sd.join(",")}"`,
+        ];
+      })(),
     ];
     for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
       envParts.push(`${name}="${placeholder}"`);
