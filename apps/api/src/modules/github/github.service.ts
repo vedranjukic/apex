@@ -142,12 +142,16 @@ class GitHubService {
         }
 
         const body = await res.text();
-        throw new Error(`GitHub API ${res.status}: ${body}`);
+        lastError = new Error(`GitHub API ${res.status}: ${body}`);
+
+        // 4xx client errors (except rate limiting handled above) are definitive — don't retry
+        if (res.status >= 400 && res.status < 500) {
+          break;
+        }
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
         
         if (attempt < retries - 1) {
-          // Network error, retry with exponential backoff
           const delayMs = Math.min(1000 * Math.pow(2, attempt), 10000);
           console.log(`[github] Request failed, retrying in ${delayMs}ms (attempt ${attempt + 1}/${retries}): ${lastError.message}`);
           await this.delay(delayMs);
