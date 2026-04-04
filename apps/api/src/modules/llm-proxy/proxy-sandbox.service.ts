@@ -144,8 +144,9 @@ class ProxySandboxService {
   // ── Private helpers ─────────────────────────────────
 
   /**
-   * Create proxy sandbox with conflict resolution and fallback naming.
-   * Handles 409 name conflicts by cleaning up orphaned sandboxes or using unique names.
+   * Create proxy sandbox with conflict resolution.
+   * On 409 name conflict, falls back to a unique name rather than deleting
+   * sandboxes that may belong to another app instance.
    */
   private async createProxySandboxWithConflictResolution(
     daytonaProvider: SandboxProvider,
@@ -158,97 +159,18 @@ class ProxySandboxService {
       labels: Record<string, string>;
     },
   ): Promise<any> {
-    let sandboxName = 'apex-llm-proxy';
-    let attempts = 0;
-    const maxAttempts = 3;
-
-    while (attempts < maxAttempts) {
-      try {
-        console.log(`[proxy-sandbox] Attempting to create sandbox with name: ${sandboxName}`);
-        
-        return await daytonaProvider.create({
-          ...params,
-          name: sandboxName,
-        });
-      } catch (error: any) {
-        attempts++;
-
-        // Handle 409 conflict - sandbox with this name already exists
-        if (error?.statusCode === 409 || error?.message?.includes('already exists')) {
-          console.log(`[proxy-sandbox] Name conflict detected for '${sandboxName}' (attempt ${attempts}/${maxAttempts})`);
-          
-          if (attempts <= 2) {
-            // First two attempts: try to find and clean orphaned proxy sandboxes
-            const cleanupSuccessful = await this.cleanupOrphanedProxySandboxes(daytonaProvider, sandboxName);
-            
-            if (cleanupSuccessful && attempts === 1) {
-              // First attempt after cleanup - retry with same name
-              console.log(`[proxy-sandbox] Retrying creation with same name after cleanup`);
-              continue;
-            } else {
-              // If cleanup failed or this is attempt 2+, switch to unique naming
-              const shortId = crypto.randomUUID().slice(0, 8);
-              sandboxName = `apex-llm-proxy-${shortId}`;
-              console.log(`[proxy-sandbox] Switching to unique name due to persistent conflict: ${sandboxName}`);
-              continue;
-            }
-          }
-        }
-
-        // For non-conflict errors or after max attempts, re-throw
-        console.error(`[proxy-sandbox] Failed to create sandbox after ${attempts} attempts:`, error);
-        throw error;
-      }
-    }
-
-    throw new Error(`Failed to create proxy sandbox after ${maxAttempts} attempts`);
-  }
-
-  /**
-   * Find and destroy orphaned proxy sandboxes with the target name.
-   * Returns true if cleanup was attempted and may have succeeded.
-   */
-  private async cleanupOrphanedProxySandboxes(
-    daytonaProvider: SandboxProvider,
-    targetName: string,
-  ): Promise<boolean> {
+    const canonicalName = 'apex-llm-proxy';
     try {
-      console.log(`[proxy-sandbox] Searching for orphaned proxy sandboxes named '${targetName}'`);
-      
-      // List all sandboxes and find ones with the target name
-      // Check for both labeled proxy sandboxes and legacy ones with the target name
-      const allSandboxes = await daytonaProvider.list();
-      const orphanedProxySandboxes = allSandboxes.filter(sandbox => 
-        sandbox.name === targetName && (
-          // Modern sandboxes with proper labeling
-          sandbox.labels?.['apex.proxy'] === 'true' ||
-          // Legacy sandboxes that might not have labels but match the proxy naming pattern
-          (targetName.includes('apex-llm-proxy') && !sandbox.labels?.['apex.proxy'])
-        )
-      );
-
-      if (orphanedProxySandboxes.length === 0) {
-        console.log(`[proxy-sandbox] No orphaned proxy sandboxes found with name '${targetName}'`);
-        return false;
+      console.log(`[proxy-sandbox] Attempting to create sandbox with name: ${canonicalName}`);
+      return await daytonaProvider.create({ ...params, name: canonicalName });
+    } catch (error: any) {
+      if (error?.statusCode === 409 || error?.message?.includes('already exists')) {
+        const shortId = crypto.randomUUID().slice(0, 8);
+        const uniqueName = `apex-llm-proxy-${shortId}`;
+        console.log(`[proxy-sandbox] Name '${canonicalName}' already taken, using unique name: ${uniqueName}`);
+        return await daytonaProvider.create({ ...params, name: uniqueName });
       }
-
-      console.log(`[proxy-sandbox] Found ${orphanedProxySandboxes.length} orphaned proxy sandbox(s) to clean up`);
-
-      // Attempt to destroy each orphaned sandbox
-      const destroyPromises = orphanedProxySandboxes.map(sandbox => 
-        this.destroyQuietly(daytonaProvider, sandbox.id)
-      );
-      
-      await Promise.all(destroyPromises);
-      
-      // Wait a moment for cleanup to complete
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      console.log(`[proxy-sandbox] Cleanup completed for orphaned proxy sandboxes`);
-      return true;
-    } catch (error) {
-      console.warn(`[proxy-sandbox] Failed to cleanup orphaned proxy sandboxes:`, error);
-      return false; // Don't fail the entire operation due to cleanup issues
+      throw error;
     }
   }
 
