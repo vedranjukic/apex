@@ -21,7 +21,8 @@
     "test:agent-retry-e2e": "APEX_E2E_TEST=1 npx nx e2e @apex/api-e2e --testPathPattern=agent-retry",
     "test:multi-agent-e2e": "npx nx e2e @apex/api-e2e --testPathPattern=multi-agent.spec",
     "test:ask-user-e2e": "npx nx e2e @apex/api-e2e --testPathPattern=ask-user",
-    "test:secrets-proxy-e2e": "npx nx e2e @apex/api-e2e --testPathPattern=secrets-proxy.spec"
+    "test:secrets-proxy-e2e": "npx nx e2e @apex/api-e2e --testPathPattern=secrets-proxy.spec",
+    "test:agent-interaction-e2e": "DAYTONA_API_KEY=${DAYTONA_API_KEY_E2E:-$DAYTONA_API_KEY} npx nx e2e @apex/api-e2e --testPathPattern=agent-interaction --testPathIgnorePatterns='multi-agent|ask-user|agent-retry|secrets-proxy'"
   },
   "private": true,
   "dependencies": {
@@ -96,6 +97,7 @@
     "jiti": "2.4.2",
     "jsdom": "~22.1.0",
     "nx": "22.5.1",
+    "socket.io-client": "^4.8.3",
     "tailwindcss": "^4.1.18",
     "tslib": "^2.3.0",
     "typescript": "~5.9.2",

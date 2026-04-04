@@ -26,9 +26,9 @@ const MAX_SCROLLBACK = 5000;
 const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY || "";
 const DAYTONA_API_URL = (process.env.DAYTONA_API_URL || "https://app.daytona.io/api").replace(/\\/$/, "");
 const SANDBOX_ID = process.env.DAYTONA_SANDBOX_ID || "";
-const APEX_PROXY_BASE_URL = (process.env.APEX_PROXY_BASE_URL || "").replace(/\\/$/, "");
+let APEX_PROXY_BASE_URL = (process.env.APEX_PROXY_BASE_URL || "").replace(/\\/$/, "");
 const APEX_PROJECT_ID = process.env.APEX_PROJECT_ID || "";
-const TUNNEL_ENDPOINT_URL = process.env.TUNNEL_ENDPOINT_URL || "";
+let TUNNEL_ENDPOINT_URL = process.env.TUNNEL_ENDPOINT_URL || "";
 const https = require("https");
 const urlMod = require("url");
 const net = require("net");
@@ -95,17 +95,17 @@ function log(emoji, msg) {
 // ── Emit helpers ─────────────────────────────────────
 function emitAgentMessage(threadId, data) {
   if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify({ type: "claude_message", threadId: threadId, data: data }));
+    state.ws.send(JSON.stringify({ type: "agent_message", threadId: threadId, data: data }));
   }
 }
 function emitAgentExit(threadId, code) {
   if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify({ type: "claude_exit", threadId: threadId, code: code }));
+    state.ws.send(JSON.stringify({ type: "agent_exit", threadId: threadId, code: code }));
   }
 }
 function emitAgentError(threadId, error) {
   if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify({ type: "claude_error", threadId: threadId, error: error }));
+    state.ws.send(JSON.stringify({ type: "agent_error", threadId: threadId, error: error }));
   }
 }
 
@@ -417,7 +417,7 @@ function handleSSEEvent(evType, data) {
     const permId = props.permissionID || props.id;
     if (sessionId && permId) {
       log("\\u{1F513}", "Auto-approving permission " + permId + " for session " + sessionId);
-      ocFetch("POST", "/session/" + sessionId + "/permissions/" + permId, { response: true }).catch((e) => {
+      ocFetch("POST", "/permission/" + permId + "/reply", { reply: "always" }).catch((e) => {
         log("\\u{26A0}", "Permission approval failed: " + (e.message || String(e)));
       });
     }
@@ -474,10 +474,31 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images, age
   log("\\u{1F916}", "Sending prompt thread=" + threadId + " agent=" + ocAgent + " model=" + (ocModel || "default") + " storedSession=" + (sessionId || "none"));
 
   let ocSessionId = threadToSession.get(threadId);
+
+  // If the thread already has a session and the session is idle (was aborted
+  // or completed), fork it so the agent gets a clean branch point instead of
+  // replaying the old conversation.  This uses POST /session/:id/fork.
+  if (ocSessionId) {
+    try {
+      var curStatuses = await ocFetch("GET", "/session/status", null, 5000);
+      var curSt = curStatuses && curStatuses[ocSessionId];
+      if (!curSt || curSt.type === "idle") {
+        log("\\u{1F500}", "Forking idle session " + ocSessionId + " for thread " + threadId);
+        var forked = await ocFetch("POST", "/session/" + ocSessionId + "/fork", {}, 30000);
+        if (forked && forked.id) {
+          sessionToThread.delete(ocSessionId);
+          sessionEmittedParts.delete(ocSessionId);
+          ocSessionId = forked.id;
+          log("\\u{1F500}", "Forked to new session " + ocSessionId);
+        }
+      }
+    } catch (forkErr) {
+      log("\\u{26A0}", "Fork failed (" + (forkErr.message || forkErr) + "), reusing session as-is");
+    }
+  }
+
   if (!ocSessionId && sessionId) {
     try {
-      // Verify the session actually exists in the current OpenCode serve instance
-      // by checking the status endpoint. After an OC restart, old sessions vanish.
       var allStatuses = await ocFetch("GET", "/session/status", null, 5000);
       if (!allStatuses || !allStatuses[sessionId]) {
         throw new Error("session not in status (OC may have restarted)");
@@ -520,7 +541,7 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images, age
         if (catchupBlocks.length > 0) {
           log("\\u{1F504}", "Emitting " + catchupBlocks.length + " catch-up blocks from last assistant turn");
           if (state.ws && state.ws.readyState === 1) {
-            state.ws.send(JSON.stringify({ type: "claude_catchup", threadId: threadId, blocks: catchupBlocks }));
+            state.ws.send(JSON.stringify({ type: "agent_catchup", threadId: threadId, blocks: catchupBlocks }));
           }
         }
       }
@@ -603,11 +624,13 @@ function pollSession(threadId, sessionId, agentName, modelName, recovered) {
   let seenBusyFromStatus = !!recovered;
   let idleCount = 0;
   const runningToolPids = new Set();
+  const toolRunningStartedAt = new Map();
+  const TOOL_RUNNING_TIMEOUT_MS = 120000;
   const pollStartedAt = Date.now();
   const MIN_POLL_BEFORE_IDLE_EXIT_MS = 5000;
   let lastProgressAt = Date.now();
   const STUCK_NO_OUTPUT_MS = 60000;
-  const STUCK_NO_PROGRESS_MS = 300000;
+  const STUCK_NO_PROGRESS_MS = 120000;
   let pollErrorCount = 0;
   const MAX_CONSECUTIVE_ERRORS = 20;
 
@@ -646,6 +669,15 @@ function pollSession(threadId, sessionId, agentName, modelName, recovered) {
       abortStuck("Agent session stuck: no new output for " + Math.round((now - lastProgressAt) / 1000) + "s");
       return;
     }
+    for (var [stuckPid, startedAt] of toolRunningStartedAt) {
+      if (now - startedAt > TOOL_RUNNING_TIMEOUT_MS) {
+        log("\\u{26A0}", "Tool pid=" + stuckPid + " stuck in running for " + Math.round((now - startedAt) / 1000) + "s, evicting");
+        runningToolPids.delete(stuckPid);
+        toolRunningStartedAt.delete(stuckPid);
+        taskChildren.delete(stuckPid);
+        toolOutputLen.delete(stuckPid);
+      }
+    }
     log("\\u{1F504}", "Polling session " + sessionId + " (seenBusy=" + seenBusy + " idle=" + idleCount + " parts=" + emittedParts.size + ")");
     ocFetch("GET", "/session/" + sessionId + "/message?limit=20", null, 10000)
       .then((msgs) => {
@@ -657,7 +689,7 @@ function pollSession(threadId, sessionId, agentName, modelName, recovered) {
           for (const part of msg.parts) {
             const pid = part.id;
             if (!pid || emittedParts.has(pid)) continue;
-            newPartsThisPoll = true;
+            if (part.type !== "tool") newPartsThisPoll = true;
             if (part.type === "text" && part.text) {
               const prev = pendingText.get(pid);
               if (!prev) {
@@ -705,22 +737,25 @@ function pollSession(threadId, sessionId, agentName, modelName, recovered) {
                   if (state.ws && state.ws.readyState === 1) {
                     state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: threadId, questionId: questionId }));
                   }
-                  log("\\u{2753}", "Aborting session to unblock question tool, then re-prompting with answer");
-                  ocFetch("POST", "/session/" + sessionId + "/abort", {}, 10000)
-                    .then(function() {
-                      return new Promise(function(r) { setTimeout(r, 1000); });
+                  log("\\u{2753}", "Replying to question via /question API: " + toolId);
+                  ocFetch("GET", "/question", null, 5000)
+                    .then(function(questions) {
+                      var pending = Array.isArray(questions) ? questions : [];
+                      var match = pending.find(function(q) { return q.sessionID === sessionId; });
+                      if (match && match.id) {
+                        return ocFetch("POST", "/question/" + match.id + "/reply", { answer: answer }, 10000);
+                      }
+                      log("\\u{26A0}", "No pending question found via /question API, falling back to TUI control response");
+                      return ocFetch("POST", "/tui/control/response", { body: answer }, 10000);
                     })
-                    .then(function() {
-                      return ocFetch("POST", "/session/" + sessionId + "/prompt_async", {
-                        parts: [{ type: "text", text: "The user answered your question: " + answer + "\\n\\nPlease continue based on their answer. Do NOT ask the same question again." }]
-                      }, 10000);
-                    })
-                    .then(function() { log("\\u{2753}", "Re-prompted with user answer successfully"); })
+                    .then(function() { log("\\u{2753}", "Question answered successfully via API"); })
                     .catch(function(e) { log("\\u{274C}", "Question answer flow failed: " + e.message); emitAgentError(threadId, "Failed to deliver answer: " + e.message); });
                 } });
               }
               if (s.status === "completed") {
+                newPartsThisPoll = true;
                 runningToolPids.delete(pid);
+                toolRunningStartedAt.delete(pid);
                 flushPendingText();
                 emittedParts.add(pid);
                 taskChildren.delete(pid);
@@ -730,10 +765,14 @@ function pollSession(threadId, sessionId, agentName, modelName, recovered) {
                   { type: "tool_result", tool_use_id: toolId, content: typeof s.output === "string" ? s.output : JSON.stringify(s.output || "") },
                 ], stop_reason: "tool_use" } });
               } else if (s.status === "running") {
-                runningToolPids.add(pid);
+                if (!runningToolPids.has(pid)) {
+                  runningToolPids.add(pid);
+                  toolRunningStartedAt.set(pid, Date.now());
+                }
                 flushPendingText();
                 if (!emittedParts.has(pid + ":running")) {
                   emittedParts.add(pid + ":running");
+                  newPartsThisPoll = true;
                   emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
                     { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
                   ], stop_reason: "tool_use" } });
@@ -743,6 +782,7 @@ function pollSession(threadId, sessionId, agentName, modelName, recovered) {
                   var partialOutput = typeof metaOutput === "string" ? metaOutput : JSON.stringify(metaOutput);
                   if (partialOutput.length > (toolOutputLen.get(pid) || 0)) {
                     toolOutputLen.set(pid, partialOutput.length);
+                    newPartsThisPoll = true;
                     emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
                       { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
                       { type: "tool_result", tool_use_id: toolId, content: partialOutput, _streaming: true },
@@ -752,6 +792,20 @@ function pollSession(threadId, sessionId, agentName, modelName, recovered) {
                 if (tn === "task" && s.metadata && s.metadata.sessionId && !taskChildren.has(pid)) {
                   taskChildren.set(pid, { childSid: s.metadata.sessionId, toolId: toolId, input: s.input || {}, lastHash: "" });
                 }
+              } else if (s.status && s.status !== "pending") {
+                newPartsThisPoll = true;
+                log("\u{26A0}", "Tool " + nn + " (pid=" + pid + ") in terminal state: " + s.status);
+                runningToolPids.delete(pid);
+                toolRunningStartedAt.delete(pid);
+                flushPendingText();
+                emittedParts.add(pid);
+                taskChildren.delete(pid);
+                toolOutputLen.delete(pid);
+                var errOutput = s.output || s.error || ("Tool ended with status: " + s.status);
+                emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", model: "", content: [
+                  { type: "tool_use", id: toolId, name: nn, input: s.input || {} },
+                  { type: "tool_result", tool_use_id: toolId, content: typeof errOutput === "string" ? errOutput : JSON.stringify(errOutput), is_error: true },
+                ], stop_reason: "tool_use" } });
               }
             } else if (part.type === "step-finish" && !emittedParts.has(pid)) {
               flushPendingText();
@@ -798,7 +852,7 @@ function pollSession(threadId, sessionId, agentName, modelName, recovered) {
         return (childPolls.length > 0 ? Promise.all(childPolls) : Promise.resolve()).then(function() { return ocFetch("GET", "/session/status", null, 10000); });
       })
       .then((statuses) => {
-        if (!statuses) return;
+        if (!statuses) { setTimeout(poll, 3000); return; }
         const st = statuses[sessionId];
         if (st && st.type === "busy") { seenBusy = true; seenBusyFromStatus = true; idleCount = 0; }
         if (!st || st.type === "idle") {
@@ -850,8 +904,18 @@ async function ensureOpenCodeHealthy() {
   }
 }
 
+function emitStartAck(threadId, status, sessionId, error) {
+  if (state.ws && state.ws.readyState === 1) {
+    var payload = { type: "start_agent_ack", threadId: threadId, status: status };
+    if (sessionId) payload.sessionId = sessionId;
+    if (error) payload.error = error;
+    state.ws.send(JSON.stringify(payload));
+  }
+}
+
 async function handleStartAgent(msg) {
   const threadId = msg.threadId || "default";
+  emitStartAck(threadId, "processing");
   const existingSession = threadToSession.get(threadId);
   if (existingSession && activeThreads.has(threadId)) {
     log("\\u{1F916}", "Aborting running session for thread " + threadId);
@@ -868,6 +932,7 @@ async function handleStartAgent(msg) {
   try {
     await ensureOpenCodeHealthy();
     await sendPrompt(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId, msg.images, msg.agentSettings);
+    emitStartAck(threadId, "started", threadToSession.get(threadId));
   } catch (e) {
     log("\\u{26A0}", "First attempt failed: " + (e.message || String(e)) + ", retrying after restart...");
     try {
@@ -879,7 +944,9 @@ async function handleStartAgent(msg) {
       }
       threadToSession.delete(threadId);
       await sendPrompt(threadId, msg.prompt, msg.agent || msg.agentType, msg.model, msg.sessionId, msg.images, msg.agentSettings);
+      emitStartAck(threadId, "started", threadToSession.get(threadId));
     } catch (retryErr) {
+      emitStartAck(threadId, "failed", null, retryErr.message || String(retryErr));
       emitAgentError(threadId, retryErr.message || String(retryErr));
     }
   }
@@ -901,16 +968,44 @@ function handleUserAnswer(msg) {
 }
 
 async function handleStopAgent(msg) {
+  var sidsToSnapshot = [];
   if (msg.threadId) {
     const sid = threadToSession.get(msg.threadId);
-    if (sid) { try { await ocFetch("POST", "/session/" + sid + "/abort", {}); } catch {} }
+    if (sid) {
+      try { await ocFetch("POST", "/session/" + sid + "/abort", {}); } catch {}
+      sidsToSnapshot.push(sid);
+    }
     activeThreads.delete(msg.threadId);
   } else {
     for (const tid of activeThreads) {
       const sid = threadToSession.get(tid);
-      if (sid) { try { await ocFetch("POST", "/session/" + sid + "/abort", {}); } catch {} }
+      if (sid) {
+        try { await ocFetch("POST", "/session/" + sid + "/abort", {}); } catch {}
+        sidsToSnapshot.push(sid);
+      }
     }
     activeThreads.clear();
+  }
+  // Mark all existing parts as emitted so they won't replay when the session
+  // is resumed with a new prompt
+  for (var si = 0; si < sidsToSnapshot.length; si++) {
+    try {
+      var snapMsgs = await ocFetch("GET", "/session/" + sidsToSnapshot[si] + "/message?limit=50", null, 10000);
+      if (!Array.isArray(snapMsgs)) continue;
+      var parts = sessionEmittedParts.get(sidsToSnapshot[si]);
+      if (!parts) { parts = new Set(); sessionEmittedParts.set(sidsToSnapshot[si], parts); }
+      for (var smi = 0; smi < snapMsgs.length; smi++) {
+        var sm = snapMsgs[smi];
+        if (!sm.parts) continue;
+        for (var spi = 0; spi < sm.parts.length; spi++) {
+          var sp = sm.parts[spi];
+          if (sp.id) { parts.add(sp.id); parts.add(sp.id + ":running"); parts.add(sp.id + ":r"); }
+        }
+      }
+      log("\u{1F6D1}", "Snapshotted " + parts.size + " part IDs for stopped session " + sidsToSnapshot[si]);
+    } catch (snapErr) {
+      log("\u{26A0}", "Failed to snapshot parts for session " + sidsToSnapshot[si] + ": " + (snapErr.message || snapErr));
+    }
   }
 }
 
@@ -1512,15 +1607,31 @@ wss.on("connection", (ws) => {
   ws.on("message", (data) => {
     try {
       const msg = JSON.parse(data.toString());
-      if (msg.type === "start_claude") { handleStartAgent(msg).catch(e => log("\\u{274C}", "start_claude error: " + e)); }
-      else if (msg.type === "claude_user_answer") { handleUserAnswer(msg); }
-      else if (msg.type === "stop_claude") { handleStopAgent(msg).catch(e => log("\\u{274C}", "stop_claude error: " + e)); }
+      if (msg.type === "start_agent") { handleStartAgent(msg).catch(e => { log("\\u{274C}", "start_agent error: " + e); emitAgentError(msg.threadId || "default", "Bridge failed to start agent: " + (e.message || String(e))); }); }
+      else if (msg.type === "agent_user_answer") { handleUserAnswer(msg); }
+      else if (msg.type === "stop_agent") { handleStopAgent(msg).catch(e => log("\\u{274C}", "stop_agent error: " + e)); }
       else if (msg.type === "terminal_create") {
         try {
           const result = createTerminalPty(msg.terminalId, msg.name, msg.cols, msg.rows, msg.cwd, msg.command);
           if (result.error) ws.send(JSON.stringify({ type: "terminal_error", terminalId: msg.terminalId, error: result.error }));
           else ws.send(JSON.stringify({ type: "terminal_created", terminalId: msg.terminalId, name: result.name }));
         } catch (ptyErr) { ws.send(JSON.stringify({ type: "terminal_error", terminalId: msg.terminalId, error: String(ptyErr) })); }
+      }
+      else if (msg.type === "update_proxy_url") {
+        var oldTunnelUrl = TUNNEL_ENDPOINT_URL;
+        if (msg.proxyBaseUrl) {
+          APEX_PROXY_BASE_URL = msg.proxyBaseUrl.replace(/\\/$/, "");
+          TUNNEL_ENDPOINT_URL = APEX_PROXY_BASE_URL + "/tunnel";
+          process.env.ANTHROPIC_BASE_URL = APEX_PROXY_BASE_URL + "/llm-proxy/anthropic/v1";
+          process.env.OPENAI_BASE_URL = APEX_PROXY_BASE_URL + "/llm-proxy/openai/v1";
+          process.env.TUNNEL_ENDPOINT_URL = TUNNEL_ENDPOINT_URL;
+          process.env.APEX_PROXY_BASE_URL = APEX_PROXY_BASE_URL;
+          log("\\u{1F504}", "Proxy URL updated: " + APEX_PROXY_BASE_URL + (oldTunnelUrl !== TUNNEL_ENDPOINT_URL ? " (tunnel endpoint changed)" : ""));
+        }
+        if (msg.authToken) {
+          process.env.ANTHROPIC_API_KEY = msg.authToken;
+          process.env.OPENAI_API_KEY = msg.authToken;
+        }
       }
       else if (msg.type === "terminal_input") { const e = terminals.get(msg.terminalId); if (e) e.pty.write(msg.data); }
       else if (msg.type === "terminal_resize") { const e = terminals.get(msg.terminalId); if (e) { e.pty.resize(msg.cols, msg.rows); e.cols = msg.cols; e.rows = msg.rows; } }
@@ -1585,7 +1696,7 @@ wss.on("connection", (ws) => {
       else if (msg.type === "ping") { ws.send(JSON.stringify({ type: "pong" })); }
     } catch (e) {
       log("\\u{274C}", "Message handler error: " + e);
-      try { const p = JSON.parse(data.toString()); if (p.terminalId) ws.send(JSON.stringify({ type: "terminal_error", terminalId: p.terminalId, error: String(e) })); else if (p.threadId) ws.send(JSON.stringify({ type: "claude_error", threadId: p.threadId, error: String(e) })); } catch {}
+      try { const p = JSON.parse(data.toString()); if (p.terminalId) ws.send(JSON.stringify({ type: "terminal_error", terminalId: p.terminalId, error: String(e) })); else if (p.threadId) ws.send(JSON.stringify({ type: "agent_error", threadId: p.threadId, error: String(e) })); } catch {}
     }
   });
 

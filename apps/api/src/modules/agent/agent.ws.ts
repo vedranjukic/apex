@@ -42,7 +42,7 @@ let lastAttachedManager: WeakRef<any> | null = null;
 
 const AGENT_INITIAL_TIMEOUT_MS = process.env.APEX_TEST_AGENT_TIMEOUT_MS
   ? parseInt(process.env.APEX_TEST_AGENT_TIMEOUT_MS, 10) : 90_000;
-const AGENT_ACTIVITY_TIMEOUT_MS = 300_000;
+const AGENT_ACTIVITY_TIMEOUT_MS = 120_000;
 const HEALTH_CHECK_INTERVAL_MS = 10_000;
 const SEND_TIMEOUT_MS = 30_000;
 
@@ -336,6 +336,7 @@ async function executeAgainstSandbox(
   images?: { type: 'base64'; media_type: string; data: string }[],
   agentSettings?: Record<string, unknown>,
 ) {
+  console.log(`[agent-ws] executeAgainstSandbox: thread=${threadId.slice(0, 8)} prompt="${prompt?.slice(0, 60)}"`);
   stoppedThreads.delete(threadId);
   const thread = await threadsService.findById(threadId);
   const project = await projectsService.findById(thread.projectId);
@@ -377,6 +378,8 @@ async function executeAgainstSandbox(
   const stderrChunks: string[] = [];
   let receivedFirstMessage = false;
   let retryCount = 0;
+  let ackReceived = false;
+  let ackTimer: ReturnType<typeof setTimeout> | null = null;
 
   const buildRetryPrompt = async (reason: string): Promise<string> => {
     const freshThread = await threadsService.findById(threadId);
@@ -400,6 +403,7 @@ async function executeAgainstSandbox(
     if (t) { clearTimeout(t); activeTimeouts.delete(threadId); }
     const hc = activeHealthChecks.get(threadId);
     if (hc) { clearInterval(hc); activeHealthChecks.delete(threadId); }
+    if (ackTimer) { clearTimeout(ackTimer); ackTimer = null; }
   };
 
   const resetTimeout = (timeoutMs: number) => {
@@ -413,7 +417,7 @@ async function executeAgainstSandbox(
           threadId, message: { type: 'system', subtype: 'retry', text: 'Agent stopped responding. Restarting with fresh session…' },
         });
         try {
-          await threadsService.updateClaudeSessionId(threadId, null);
+          await threadsService.updateAgentSessionId(threadId, null);
           const resumePrompt = await buildRetryPrompt('You had stopped responding after a long pause.');
           await manager.sendPrompt(project.sandboxId!, resumePrompt, threadId,
             null, mode, model, effectiveAgentType, true);
@@ -457,7 +461,7 @@ async function executeAgainstSandbox(
             threadId, message: { type: 'system', subtype: 'retry', text: 'Lost connection to sandbox. Reconnecting with fresh session…' },
           });
           try {
-            await threadsService.updateClaudeSessionId(threadId, null);
+            await threadsService.updateAgentSessionId(threadId, null);
             const resumePrompt = await buildRetryPrompt('The sandbox connection was lost and restored.');
             await manager.sendPrompt(project.sandboxId!, resumePrompt, threadId,
               null, mode, model, effectiveAgentType, true);
@@ -486,19 +490,32 @@ async function executeAgainstSandbox(
     if (msgThreadId && msgThreadId !== threadId) return;
     if (stoppedThreads.has(threadId)) return;
 
-    if (msg.type === 'claude_stderr') {
+    if (msg.type === 'agent_stderr') {
       stderrChunks.push((msg as any).data || '');
       resetTimeout(AGENT_ACTIVITY_TIMEOUT_MS);
       return;
     }
 
-    if (msg.type === 'claude_message') {
+    if (msg.type === 'start_agent_ack') {
+      const ackData = msg as any;
+      ackReceived = true;
+      if (ackTimer) { clearTimeout(ackTimer); ackTimer = null; }
+      if (ackData.status === 'failed') {
+        const errMsg = ackData.error || 'Bridge failed to start agent';
+        console.log(`[agent-ws] start_agent_ack FAILED for thread ${threadId.slice(0, 8)}: ${errMsg}`);
+      } else {
+        console.log(`[agent-ws] start_agent_ack ${ackData.status} for thread ${threadId.slice(0, 8)}`);
+      }
+      return;
+    }
+
+    if (msg.type === 'agent_message') {
       receivedFirstMessage = true;
       resetTimeout(AGENT_ACTIVITY_TIMEOUT_MS);
       const data = msg.data as any;
 
-      if (data.type === 'system' && data.subtype === 'init' && data.session_id && !thread.claudeSessionId) {
-        await threadsService.updateClaudeSessionId(threadId, data.session_id);
+      if (data.type === 'system' && data.subtype === 'init' && data.session_id && !thread.agentSessionId) {
+        await threadsService.updateAgentSessionId(threadId, data.session_id);
       }
 
       if (data.type === 'assistant' && data.message?.content) {
@@ -521,8 +538,8 @@ async function executeAgainstSandbox(
       }
 
       if (data.type === 'result') {
-        if (data.session_id && !thread.claudeSessionId) {
-          await threadsService.updateClaudeSessionId(threadId, data.session_id);
+        if (data.session_id && !thread.agentSessionId) {
+          await threadsService.updateAgentSessionId(threadId, data.session_id);
         }
         await threadsService.addMessage(threadId, {
           role: 'system', content: [],
@@ -540,7 +557,7 @@ async function executeAgainstSandbox(
         }
       }
       emitToSubscribers(project.sandboxId!, 'agent_message', { threadId, message: msg.data });
-    } else if (msg.type === 'claude_exit') {
+    } else if (msg.type === 'agent_exit') {
       const status = msg.code === 0 ? 'completed' : 'error';
       const stderrText = stderrChunks.join('');
       const isProxyError = project.provider === 'daytona' && /not found/i.test(stderrText);
@@ -556,7 +573,7 @@ async function executeAgainstSandbox(
           try {
             await projectsService.ensureDaytonaProxy();
             manager.forceDisconnect(project.sandboxId!);
-            await threadsService.updateClaudeSessionId(threadId, null);
+            await threadsService.updateAgentSessionId(threadId, null);
             const resumePrompt = await buildRetryPrompt('The LLM proxy was unavailable and has been restored.');
             await manager.sendPrompt(project.sandboxId!, resumePrompt, threadId,
               null, mode, model, effectiveAgentType, true);
@@ -574,7 +591,7 @@ async function executeAgainstSandbox(
             threadId, message: { type: 'system', subtype: 'retry', text: 'Agent crashed. Restarting with fresh session…' },
           });
           try {
-            await threadsService.updateClaudeSessionId(threadId, null);
+            await threadsService.updateAgentSessionId(threadId, null);
             const resumePrompt = await buildRetryPrompt('You had crashed and were restarted.');
             await manager.sendPrompt(project.sandboxId!, resumePrompt, threadId,
               null, mode, model, effectiveAgentType, true);
@@ -601,7 +618,7 @@ async function executeAgainstSandbox(
     } else if (msg.type === 'ask_user_resolved') {
       await updateThreadStatusAndNotify(threadId, 'running');
       emitToSubscribers(project.sandboxId!, 'agent_status', { threadId, status: 'running' });
-    } else if (msg.type === 'claude_catchup') {
+    } else if (msg.type === 'agent_catchup') {
       const blocks = (msg as any).blocks;
       if (Array.isArray(blocks) && blocks.length > 0) {
         try {
@@ -619,7 +636,7 @@ async function executeAgainstSandbox(
           console.warn(`[agent-ws] Catch-up failed for ${threadId.slice(0, 8)}:`, err);
         }
       }
-    } else if (msg.type === 'claude_error') {
+    } else if (msg.type === 'agent_error') {
       const isProxyErr = project.provider === 'daytona' && /not found/i.test(msg.error || '');
       if (isProxyErr && retryCount < 1) {
         retryCount++;
@@ -632,7 +649,7 @@ async function executeAgainstSandbox(
         try {
           await projectsService.ensureDaytonaProxy();
           manager.forceDisconnect(project.sandboxId!);
-          await threadsService.updateClaudeSessionId(threadId, null);
+          await threadsService.updateAgentSessionId(threadId, null);
           const resumePrompt = await buildRetryPrompt('The LLM proxy was unavailable and has been restored.');
           await manager.sendPrompt(project.sandboxId!, resumePrompt, threadId,
             null, mode, model, effectiveAgentType, true);
@@ -668,19 +685,33 @@ async function executeAgainstSandbox(
   }
 
   const doSend = () => Promise.race([
-    manager.sendPrompt(project.sandboxId!, effectivePrompt, threadId, thread.claudeSessionId, mode, model, effectiveAgentType as string, undefined, images, agentSettings),
+    manager.sendPrompt(project.sandboxId!, effectivePrompt, threadId, thread.agentSessionId, mode, model, effectiveAgentType as string, undefined, images, agentSettings),
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timed out connecting to sandbox')), SEND_TIMEOUT_MS)),
   ]);
 
   try {
-    if (!manager.isBridgeConnected(project.sandboxId)) {
+    const bridgeConnected = manager.isBridgeConnected(project.sandboxId);
+    console.log(`[agent-ws] doSend: thread=${threadId.slice(0, 8)} bridgeConnected=${bridgeConnected} sandboxId=${project.sandboxId?.slice(0, 8)}`);
+    if (!bridgeConnected) {
       emitToSubscribers(project.sandboxId, 'agent_message', {
         threadId, message: { type: 'system', subtype: 'info', text: 'Reconnecting to sandbox…' },
       });
     }
     await doSend();
+    console.log(`[agent-ws] doSend success: thread=${threadId.slice(0, 8)}`);
     emitTo(client, 'prompt_accepted', { threadId });
     resetTimeout(AGENT_INITIAL_TIMEOUT_MS);
+    const ACK_TIMEOUT_MS = 15_000;
+    ackTimer = setTimeout(async () => {
+      if (ackReceived || receivedFirstMessage) return;
+      console.log(`[agent-ws] No start_agent_ack within ${ACK_TIMEOUT_MS / 1000}s for thread ${threadId.slice(0, 8)}`);
+      cleanupHandler();
+      await updateThreadStatusAndNotify(threadId, 'error');
+      emitToSubscribers(project.sandboxId!, 'agent_error', {
+        threadId,
+        error: 'Bridge did not acknowledge the prompt — the agent may have failed to start. Try sending the prompt again.',
+      });
+    }, ACK_TIMEOUT_MS);
   } catch (err) {
     if (SandboxManager.isSandboxNotFoundError(err) && project.provider === 'daytona') {
       try {
@@ -754,6 +785,7 @@ async function handleMessage(client: WsClient, message: unknown) {
       }
       case 'send_prompt': {
         const { threadId, prompt } = payload;
+        console.log(`[agent-ws] send_prompt: thread=${threadId?.slice(0, 8)} prompt="${prompt?.slice(0, 60)}"`);
         const thread = await threadsService.findById(threadId);
         await ensurePortRelayInit(thread.projectId);
         await executeAgainstSandbox(client, threadId, prompt);
@@ -797,6 +829,7 @@ async function handleMessage(client: WsClient, message: unknown) {
       }
       case 'stop_agent': {
         const { threadId } = payload;
+        console.log(`[agent-ws] stop_agent: thread=${threadId?.slice(0, 8)}`);
         stoppedThreads.add(threadId);
         const thread = await threadsService.findById(threadId);
         const project = await projectsService.findById(thread.projectId);
@@ -809,7 +842,8 @@ async function handleMessage(client: WsClient, message: unknown) {
         if (timeout) { clearTimeout(timeout); activeTimeouts.delete(threadId); }
         const hc = activeHealthChecks.get(threadId);
         if (hc) { clearInterval(hc); activeHealthChecks.delete(threadId); }
-        try { await manager.stopClaude(project.sandboxId, threadId); } catch { /* best-effort */ }
+        try { await manager.stopAgent(project.sandboxId, threadId); } catch (e) { console.warn(`[agent-ws] stopAgent failed: ${e}`); }
+        console.log(`[agent-ws] stop_agent: setting thread ${threadId?.slice(0, 8)} to completed`);
         await updateThreadStatusAndNotify(threadId, 'completed');
         emitToSubscribers(project.sandboxId, 'agent_status', { threadId, status: 'completed' });
         stoppedThreads.delete(threadId);
@@ -830,7 +864,7 @@ async function handleMessage(client: WsClient, message: unknown) {
         if (!project.sandboxId) break;
         const manager = projectsService.getSandboxManager(project.provider);
         if (!manager) break;
-        await manager.stopClaude(project.sandboxId, threadId);
+        await manager.stopAgent(project.sandboxId, threadId);
         break;
       }
       case 'terminal_create': {
@@ -1288,11 +1322,11 @@ function reattachToRunningThread(
     const msgThreadId = (msg as any).threadId;
     if (msgThreadId && msgThreadId !== threadId) return;
 
-    if (msg.type === 'claude_message') {
+    if (msg.type === 'agent_message') {
       const data = msg.data as any;
 
       if (data.type === 'system' && data.subtype === 'init' && data.session_id) {
-        await threadsService.updateClaudeSessionId(threadId, data.session_id);
+        await threadsService.updateAgentSessionId(threadId, data.session_id);
       }
 
       if (data.type === 'assistant' && data.message?.content) {
@@ -1312,7 +1346,7 @@ function reattachToRunningThread(
         }
       }
       if (data.type === 'result') {
-        if (data.session_id) await threadsService.updateClaudeSessionId(threadId, data.session_id);
+        if (data.session_id) await threadsService.updateAgentSessionId(threadId, data.session_id);
         await threadsService.addMessage(threadId, {
           role: 'system', content: [],
           metadata: {
@@ -1326,7 +1360,7 @@ function reattachToRunningThread(
         cleanupHandler();
       }
       emitToSubscribers(sandboxId, 'agent_message', { threadId, message: msg.data });
-    } else if (msg.type === 'claude_exit') {
+    } else if (msg.type === 'agent_exit') {
       const status = msg.code === 0 ? 'completed' : 'error';
       await updateThreadStatusAndNotify(threadId, status);
       emitToSubscribers(sandboxId, 'agent_status', { threadId, status });
@@ -1337,14 +1371,14 @@ function reattachToRunningThread(
     } else if (msg.type === 'ask_user_resolved') {
       await updateThreadStatusAndNotify(threadId, 'running');
       emitToSubscribers(sandboxId, 'agent_status', { threadId, status: 'running' });
-    } else if (msg.type === 'claude_catchup') {
+    } else if (msg.type === 'agent_catchup') {
       const blocks = (msg as any).blocks;
       if (Array.isArray(blocks) && blocks.length > 0) {
         emitToSubscribers(sandboxId, 'agent_message', {
           threadId, message: { type: 'assistant', message: { role: 'assistant', model: '', content: blocks, stop_reason: 'end_turn' }, _catchup: true },
         });
       }
-    } else if (msg.type === 'claude_error') {
+    } else if (msg.type === 'agent_error') {
       await updateThreadStatusAndNotify(threadId, 'error');
       emitToSubscribers(sandboxId, 'agent_error', { threadId, error: msg.error });
       cleanupHandler();
@@ -1388,7 +1422,7 @@ async function reconcileAndReconnect(
             try {
               const thread = await threadsService.findById(s.threadId);
               if (!thread || thread.projectId !== projectId) continue;
-              await threadsService.updateClaudeSessionId(s.threadId, s.sessionId);
+              await threadsService.updateAgentSessionId(s.threadId, s.sessionId);
               await threadsService.updateStatus(s.threadId, 'running');
               reattachToRunningThread(sandboxId, s.threadId, manager);
               emitToSubscribers(sandboxId, 'agent_status', { threadId: s.threadId, status: 'running' });

@@ -31,8 +31,8 @@ import {
   FileEntry,
   SearchResult,
   SearchMatch,
-  ClaudeAssistantMessage,
-  ClaudeResultMessage,
+  AgentAssistantMessage,
+  AgentResultMessage,
   OrchestratorConfig,
   SandboxSession,
 } from "./types.js";
@@ -276,8 +276,24 @@ export class SandboxManager extends EventEmitter {
    * subsequent bridge starts and sandbox creations use the new URL.
    */
   updateProxyConfig(proxyBaseUrl: string, authToken: string): void {
+    const changed = this.config.proxyBaseUrl !== proxyBaseUrl;
     this.config.proxyBaseUrl = proxyBaseUrl;
     this.config.proxyAuthToken = authToken;
+    if (changed) {
+      for (const [sid, session] of this.sessions) {
+        this.forceFullRestart.add(sid);
+        if (session.ws?.readyState === WebSocket.OPEN) {
+          try {
+            session.ws.send(JSON.stringify({
+              type: "update_proxy_url",
+              proxyBaseUrl,
+              authToken,
+            }));
+            console.log(`[sandbox-mgr] Sent proxy URL update to bridge ${sid.slice(0, 8)}`);
+          } catch { /* best-effort */ }
+        }
+      }
+    }
   }
 
   /**
@@ -672,7 +688,7 @@ export class SandboxManager extends EventEmitter {
     const effectiveAgent = agent || (mode === 'plan' ? 'plan' : 'build');
     session.ws!.send(
       JSON.stringify({
-        type: "start_claude",
+        type: "start_agent",
         prompt,
         threadId,
         sessionId: sessionId || undefined,
@@ -687,18 +703,18 @@ export class SandboxManager extends EventEmitter {
     this.emit("status", sandboxId, "running");
   }
 
-  /** Stop (kill) the Claude process for a thread. Used for testing or manual cancellation. */
-  async stopClaude(sandboxId: string, threadId?: string): Promise<void> {
+  /** Stop (kill) the agent process for a thread. Used for testing or manual cancellation. */
+  async stopAgent(sandboxId: string, threadId?: string): Promise<void> {
     const session = await this.ensureConnected(sandboxId);
     session.ws!.send(
       JSON.stringify({
-        type: "stop_claude",
+        type: "stop_agent",
         threadId: threadId || undefined,
       }),
     );
   }
 
-  /** Send a user's answer to an AskUserQuestion back to the running Claude process. */
+  /** Send a user's answer to an AskUserQuestion back to the running agent process. */
   async sendUserAnswer(
     sandboxId: string,
     threadId: string,
@@ -708,7 +724,7 @@ export class SandboxManager extends EventEmitter {
     const session = await this.ensureConnected(sandboxId);
     session.ws!.send(
       JSON.stringify({
-        type: "claude_user_answer",
+        type: "agent_user_answer",
         threadId,
         toolUseId,
         answer,
@@ -1913,10 +1929,12 @@ export class SandboxManager extends EventEmitter {
     );
 
     if (isFirstConnect) {
-      const needsFullRestart = this.forceFullRestart.delete(session.sandboxId);
+      const flaggedForRestart = this.forceFullRestart.delete(session.sandboxId);
+      const isDaytona = this.config.provider === "daytona";
+      const needsFullRestart = flaggedForRestart || isDaytona;
       const preserveOpenCode = !needsFullRestart;
       const restartMode = needsFullRestart
-        ? 'full restart (proxy recovery)'
+        ? isDaytona && !flaggedForRestart ? 'full restart (daytona — fresh env vars)' : 'full restart (proxy recovery)'
         : bridgeAlive ? 'soft restart' : 'restart (bridge dead, preserving opencode)';
       console.log(
         `[bridge:${sid}] ${restartMode} — first connect${preserveOpenCode ? ', preserving opencode serve' : ''}`,
@@ -2729,9 +2747,9 @@ export class SandboxManager extends EventEmitter {
             session.status = "running";
             this.emit("status", session.sandboxId, "running");
             resolve();
-          } else if (msg.type === "claude_message") {
-            this.handleClaudeMessage(session, msg.data);
-          } else if (msg.type === "claude_exit") {
+          } else if (msg.type === "agent_message") {
+            this.handleAgentMessage(session, msg.data);
+          } else if (msg.type === "agent_exit") {
             session.status = msg.code === 0 ? "completed" : "error";
             session.endTime = Date.now();
             if (msg.code !== 0) {
@@ -2766,7 +2784,7 @@ export class SandboxManager extends EventEmitter {
             session.status = "waiting_for_input";
           } else if (msg.type === "ask_user_resolved") {
             session.status = "running";
-          } else if (msg.type === "claude_error") {
+          } else if (msg.type === "agent_error") {
             session.status = "error";
             session.error = msg.error;
             session.endTime = Date.now();
@@ -2806,12 +2824,12 @@ export class SandboxManager extends EventEmitter {
     });
   }
 
-  private handleClaudeMessage(session: SandboxSession, msg: any) {
+  private handleAgentMessage(session: SandboxSession, msg: any) {
     if (msg.type === "assistant") {
-      const aMsg = msg as ClaudeAssistantMessage;
+      const aMsg = msg as AgentAssistantMessage;
       void aMsg;
     } else if (msg.type === "result") {
-      const rMsg = msg as ClaudeResultMessage;
+      const rMsg = msg as AgentResultMessage;
       session.result = rMsg.result;
       session.costUsd = rMsg.total_cost_usd;
     }

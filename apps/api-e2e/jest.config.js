@@ -13,6 +13,10 @@ module.exports = {
   globalTeardown: '<rootDir>/src/support/global-teardown.ts',
   setupFiles: ['<rootDir>/src/support/test-setup.ts'],
   testEnvironment: 'node',
+  testMatch: [
+    '**/?(*.)+(spec|test).?([mc])[jt]s?(x)',
+    '**/*.e2e-spec.[jt]s?(x)',
+  ],
   transform: {
     '^.+\\.[tj]s$': ['@swc/jest', swcJestConfig],
   },
