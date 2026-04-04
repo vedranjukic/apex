@@ -1633,6 +1633,10 @@ wss.on("connection", (ws) => {
           process.env.OPENAI_API_KEY = msg.authToken;
         }
       }
+      else if (msg.type === "update_secret_domains") {
+        secretDomains = new Set((msg.domains || []).filter(Boolean));
+        log("\\u{1F510}", "Secret domains updated: " + secretDomains.size + " domains");
+      }
       else if (msg.type === "terminal_input") { const e = terminals.get(msg.terminalId); if (e) e.pty.write(msg.data); }
       else if (msg.type === "terminal_resize") { const e = terminals.get(msg.terminalId); if (e) { e.pty.resize(msg.cols, msg.rows); e.cols = msg.cols; e.rows = msg.rows; } }
       else if (msg.type === "terminal_close") { const e = terminals.get(msg.terminalId); if (e) { e.pty.kill(); terminals.delete(msg.terminalId); } }
@@ -1801,132 +1805,255 @@ setInterval(() => {
   } catch (e) {}
 }, 1000);
 
-// ── TCP-to-WebSocket Tunnel Client ──────────────────────
-const TUNNEL_PORT = 9339;
+// ── Selective Secrets Proxy ──────────────────────────────
+// An HTTP CONNECT proxy that only routes secret-domain traffic to the
+// upstream MITM proxy (via WS tunnel on Daytona or TCP on Docker/Apple).
+// Non-secret domains connect directly, bypassing the proxy entirely.
+const SELECTIVE_PROXY_PORT = 9339;
+const SECRETS_PROXY_UPSTREAM = process.env.SECRETS_PROXY_UPSTREAM || "";
+var secretDomains = new Set((process.env.SECRET_DOMAINS || "").split(",").filter(Boolean));
 
-function startTunnelClient() {
+function isSecretDomain(host) {
+  return secretDomains.has(host);
+}
+
+function tunnelToUpstream(host, port, clientSocket, head) {
   if (!TUNNEL_ENDPOINT_URL) {
-    log("\\u{26A0}", "No TUNNEL_ENDPOINT_URL configured, tunnel client disabled");
+    clientSocket.write("HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n");
+    clientSocket.end();
     return;
   }
-  
-  const tunnelServer = net.createServer((clientSocket) => {
-    log("\\u{1F4E1}", \`Tunnel client: New connection on port \${TUNNEL_PORT}\`);
-    
-    let wsConnected = false;
-    
-    try {
-      const ws = new WebSocket(TUNNEL_ENDPOINT_URL, {
-        handshakeTimeout: 10000, // 10 second handshake timeout
-        perMessageDeflate: false // Disable compression for raw TCP tunneling
-      });
-      
-      ws.on('open', () => {
-        log("\\u{1F517}", "Tunnel WebSocket connected");
-        wsConnected = true;
-        
-        // Handle client to WebSocket data flow with backpressure
-        clientSocket.on('data', (data) => {
-          if (!wsConnected || ws.readyState !== WebSocket.OPEN) {
-            log("\\u{26A0}", "Dropping client data, WebSocket not ready");
-            return;
-          }
-          
-          try {
-            ws.send(data);
-            // Handle backpressure for large transfers
-            if (ws.bufferedAmount > 64 * 1024) { // 64KB threshold
-              log("\\u{26A0}", "WebSocket buffer high, pausing client");
-              clientSocket.pause();
-              // Resume when buffer clears
-              const checkBuffer = () => {
-                if (ws.bufferedAmount < 16 * 1024 && wsConnected) {
-                  clientSocket.resume();
-                } else if (wsConnected) {
-                  setTimeout(checkBuffer, 50);
-                }
-              };
-              checkBuffer();
-            }
-          } catch (sendErr) {
-            log("\\u{274C}", "Error sending to WebSocket: " + sendErr.message);
-            clientSocket.destroy();
-          }
-        });
-        
-        // Handle WebSocket to client data flow with backpressure
-        ws.on('message', (data) => {
-          if (!clientSocket.writable) {
-            log("\\u{26A0}", "Dropping WebSocket data, client not writable");
-            return;
-          }
-          
-          const buffer = Buffer.from(data);
-          const success = clientSocket.write(buffer);
-          if (!success) {
-            // Backpressure: pause WebSocket until client drains
+  var wsConnected = false;
+  try {
+    var ws = new WebSocket(TUNNEL_ENDPOINT_URL, {
+      handshakeTimeout: 10000,
+      perMessageDeflate: false,
+    });
+
+    var connectReq = "CONNECT " + host + ":" + port + " HTTP/1.1\\r\\nHost: " + host + ":" + port + "\\r\\n\\r\\n";
+    var gotResponse = false;
+    var responseBuf = Buffer.alloc(0);
+
+    ws.on("open", function () {
+      wsConnected = true;
+      ws.send(Buffer.from(connectReq));
+    });
+
+    ws.on("message", function (data) {
+      if (!gotResponse) {
+        responseBuf = Buffer.concat([responseBuf, Buffer.from(data)]);
+        var idx = responseBuf.indexOf("\\r\\n\\r\\n");
+        if (idx === -1) return;
+        gotResponse = true;
+        var statusLine = responseBuf.subarray(0, idx).toString();
+        if (!statusLine.includes("200")) {
+          log("\\u{274C}", "Tunnel upstream rejected CONNECT for " + host + ": " + statusLine);
+          clientSocket.write("HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n");
+          clientSocket.end();
+          ws.close();
+          return;
+        }
+        clientSocket.write("HTTP/1.1 200 Connection Established\\r\\n\\r\\n");
+        var leftover = responseBuf.subarray(idx + 4);
+        if (leftover.length > 0) {
+          if (!clientSocket.write(leftover)) {
             ws.pause?.();
-            clientSocket.once('drain', () => {
-              log("\\u{1F517}", "Client drain, resuming WebSocket");
-              ws.resume?.();
-            });
+            clientSocket.once("drain", function () { ws.resume?.(); });
           }
+        }
+        if (head && head.length > 0) ws.send(head);
+        clientSocket.on("data", function (chunk) {
+          if (!wsConnected || ws.readyState !== WebSocket.OPEN) return;
+          try {
+            ws.send(chunk);
+            if (ws.bufferedAmount > 64 * 1024) {
+              clientSocket.pause();
+              var check = function () {
+                if (ws.bufferedAmount < 16 * 1024 && wsConnected) clientSocket.resume();
+                else if (wsConnected) setTimeout(check, 50);
+              };
+              check();
+            }
+          } catch (e) { clientSocket.destroy(); }
         });
-      });
-      
-      ws.on('close', (code, reason) => {
-        log("\\u{1F517}", \`Tunnel WebSocket closed: \${code} \${reason || 'no reason'}\`);
-        wsConnected = false;
-        clientSocket.destroy();
-      });
-      
-      ws.on('error', (err) => {
-        log("\\u{274C}", "Tunnel WebSocket error: " + err.message);
-        wsConnected = false;
-        clientSocket.destroy();
-      });
-      
-      clientSocket.on('close', () => {
-        log("\\u{1F4E1}", "Tunnel client connection closed");
-        wsConnected = false;
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.close(1000, 'Client disconnected');
-        }
-      });
-      
-      clientSocket.on('error', (err) => {
-        log("\\u{274C}", "Tunnel client socket error: " + err.message);
-        wsConnected = false;
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.close(1011, 'Socket error');
-        }
-      });
-      
-      // Set timeout for the client socket
-      clientSocket.setTimeout(300000); // 5 minutes timeout
-      clientSocket.on('timeout', () => {
-        log("\\u{26A0}", "Tunnel client socket timeout");
-        clientSocket.destroy();
-      });
-      
-    } catch (err) {
-      log("\\u{274C}", "Failed to create tunnel WebSocket: " + err.message);
+        return;
+      }
+      if (!clientSocket.writable) return;
+      var buf = Buffer.from(data);
+      if (!clientSocket.write(buf)) {
+        ws.pause?.();
+        clientSocket.once("drain", function () { ws.resume?.(); });
+      }
+    });
+
+    ws.on("close", function () { wsConnected = false; clientSocket.destroy(); });
+    ws.on("error", function (err) {
+      log("\\u{274C}", "Tunnel WS error for " + host + ": " + err.message);
+      wsConnected = false;
       clientSocket.destroy();
+    });
+    clientSocket.on("close", function () {
+      wsConnected = false;
+      if (ws.readyState === WebSocket.OPEN) ws.close(1000, "Client disconnected");
+    });
+    clientSocket.on("error", function () {
+      wsConnected = false;
+      if (ws.readyState === WebSocket.OPEN) ws.close(1011, "Socket error");
+    });
+    clientSocket.setTimeout(300000);
+    clientSocket.on("timeout", function () { clientSocket.destroy(); });
+  } catch (err) {
+    log("\\u{274C}", "tunnelToUpstream failed for " + host + ": " + err.message);
+    clientSocket.write("HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n");
+    clientSocket.end();
+  }
+}
+
+function chainToUpstream(host, port, clientSocket, head) {
+  var parsed = urlMod.parse(SECRETS_PROXY_UPSTREAM);
+  var upstreamHost = parsed.hostname;
+  var upstreamPort = parseInt(parsed.port || "3001", 10);
+
+  var upstream = net.connect(upstreamPort, upstreamHost, function () {
+    var connectReq = "CONNECT " + host + ":" + port + " HTTP/1.1\\r\\nHost: " + host + ":" + port + "\\r\\n\\r\\n";
+    upstream.write(connectReq);
+  });
+
+  var gotResponse = false;
+  var responseBuf = Buffer.alloc(0);
+
+  upstream.on("data", function onUpstreamData(chunk) {
+    if (!gotResponse) {
+      responseBuf = Buffer.concat([responseBuf, chunk]);
+      var idx = responseBuf.indexOf("\\r\\n\\r\\n");
+      if (idx === -1) return;
+      gotResponse = true;
+      var statusLine = responseBuf.subarray(0, idx).toString();
+      if (!statusLine.includes("200")) {
+        log("\\u{274C}", "Upstream proxy rejected CONNECT for " + host + ": " + statusLine);
+        clientSocket.write("HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n");
+        clientSocket.end();
+        upstream.destroy();
+        return;
+      }
+      clientSocket.write("HTTP/1.1 200 Connection Established\\r\\n\\r\\n");
+      var leftover = responseBuf.subarray(idx + 4);
+      if (leftover.length > 0) clientSocket.write(leftover);
+      if (head && head.length > 0) upstream.write(head);
+      upstream.removeListener("data", onUpstreamData);
+      upstream.pipe(clientSocket);
+      clientSocket.pipe(upstream);
+      return;
     }
   });
-  
-  tunnelServer.on('error', (err) => {
-    log("\\u{274C}", "Tunnel server error: " + err.message);
+
+  upstream.on("error", function (err) {
+    log("\\u{274C}", "chainToUpstream error for " + host + ": " + err.message);
+    try { clientSocket.write("HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n"); clientSocket.end(); } catch (e) {}
   });
-  
-  tunnelServer.listen(TUNNEL_PORT, '127.0.0.1', () => {
-    log("\\u{1F4E1}", \`Tunnel client listening on port \${TUNNEL_PORT}\`);
+  clientSocket.on("error", function () { upstream.destroy(); });
+  clientSocket.setTimeout(300000);
+  clientSocket.on("timeout", function () { clientSocket.destroy(); upstream.destroy(); });
+}
+
+function directConnect(host, port, clientSocket, head) {
+  var upstream = net.connect(port, host, function () {
+    clientSocket.write("HTTP/1.1 200 Connection Established\\r\\n\\r\\n");
+    if (head && head.length > 0) upstream.write(head);
+    upstream.pipe(clientSocket);
+    clientSocket.pipe(upstream);
+  });
+  upstream.on("error", function (err) {
+    log("\\u{274C}", "Direct connect error " + host + ":" + port + ": " + err.message);
+    try { clientSocket.end(); } catch (e) {}
+  });
+  clientSocket.on("error", function () { try { upstream.end(); } catch (e) {} });
+}
+
+function startSelectiveProxy() {
+  if (!TUNNEL_ENDPOINT_URL && !SECRETS_PROXY_UPSTREAM) {
+    log("\\u{26A0}", "No TUNNEL_ENDPOINT_URL or SECRETS_PROXY_UPSTREAM configured, selective proxy disabled");
+    return;
+  }
+  var proxyServer = http.createServer(function (req, res) {
+    var targetUrl = req.url || "";
+    if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+      res.writeHead(400); res.end("Bad Request"); return;
+    }
+    var parsed;
+    try { parsed = new URL(targetUrl); } catch (e) {
+      res.writeHead(400); res.end("Bad Request"); return;
+    }
+    if (isSecretDomain(parsed.hostname)) {
+      if (TUNNEL_ENDPOINT_URL || SECRETS_PROXY_UPSTREAM) {
+        var upstreamUrl = SECRETS_PROXY_UPSTREAM || "http://localhost:9340";
+        var upParsed = urlMod.parse(upstreamUrl);
+        var proxyReq = http.request({
+          hostname: upParsed.hostname,
+          port: parseInt(upParsed.port || "3001", 10),
+          method: req.method,
+          path: targetUrl,
+          headers: req.headers,
+        }, function (proxyRes) {
+          res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+          proxyRes.pipe(res);
+        });
+        proxyReq.on("error", function () { res.writeHead(502); res.end("Bad Gateway"); });
+        req.pipe(proxyReq);
+      }
+    } else {
+      var p = urlMod.parse(targetUrl);
+      var mod = p.protocol === "https:" ? https : http;
+      var outReq = mod.request({
+        hostname: p.hostname,
+        port: p.port || (p.protocol === "https:" ? 443 : 80),
+        method: req.method,
+        path: p.path,
+        headers: Object.assign({}, req.headers, { host: p.host }),
+      }, function (outRes) {
+        res.writeHead(outRes.statusCode || 502, outRes.headers);
+        outRes.pipe(res);
+      });
+      outReq.on("error", function () { res.writeHead(502); res.end("Bad Gateway"); });
+      req.pipe(outReq);
+    }
+  });
+
+  proxyServer.on("connect", function (req, clientSocket, head) {
+    var parts = (req.url || "").split(":");
+    var host = parts[0];
+    var port = parseInt(parts[1] || "443", 10);
+    if (!host) {
+      clientSocket.write("HTTP/1.1 400 Bad Request\\r\\n\\r\\n");
+      clientSocket.end();
+      return;
+    }
+    if (isSecretDomain(host)) {
+      log("\\u{1F510}", "MITM proxy: " + host + ":" + port);
+      if (TUNNEL_ENDPOINT_URL) {
+        tunnelToUpstream(host, port, clientSocket, head);
+      } else if (SECRETS_PROXY_UPSTREAM) {
+        chainToUpstream(host, port, clientSocket, head);
+      } else {
+        clientSocket.write("HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n");
+        clientSocket.end();
+      }
+    } else {
+      directConnect(host, port, clientSocket, head);
+    }
+  });
+
+  proxyServer.on("error", function (err) {
+    log("\\u{274C}", "Selective proxy error: " + err.message);
+  });
+
+  proxyServer.listen(SELECTIVE_PROXY_PORT, "127.0.0.1", function () {
+    log("\\u{1F510}", \`Selective proxy listening on \${SELECTIVE_PROXY_PORT} (secret domains: \${secretDomains.size})\`);
   });
 }
 
-// Start tunnel client if configured
-if (TUNNEL_ENDPOINT_URL) {
-  startTunnelClient();
+if (TUNNEL_ENDPOINT_URL || SECRETS_PROXY_UPSTREAM) {
+  startSelectiveProxy();
 }
 
 // ── Port Relay Tunnel Manager ────────────────────────
