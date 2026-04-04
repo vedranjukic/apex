@@ -72,7 +72,7 @@ export const tasks = sqliteTable('tasks', {
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
   status: text('status').notNull().default('completed'),
-  claudeSessionId: text('claude_session_id'),
+  agentSessionId: text('claude_session_id'),
   mode: text('mode'),
   agentType: text('agent_type'),
   model: text('model'),

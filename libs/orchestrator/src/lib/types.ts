@@ -1,9 +1,9 @@
 /**
  * Internal types for the orchestrator bridge layer.
- * These mirror the Claude Agent SDK WebSocket protocol.
+ * These mirror the OpenCode agent WebSocket protocol.
  */
 
-// ── Claude SDK message types ─────────────────────────
+// ── Agent message types ─────────────────────────────
 export interface ContentBlock {
   type: 'text' | 'tool_use' | 'tool_result' | 'image';
   text?: string;
@@ -14,7 +14,7 @@ export interface ContentBlock {
   content?: string;
 }
 
-export interface ClaudeSystemMessage {
+export interface AgentSystemMessage {
   type: 'system';
   subtype: 'init';
   cwd: string;
@@ -23,11 +23,10 @@ export interface ClaudeSystemMessage {
   mcp_servers: Array<{ name: string; status: string }>;
   model: string;
   permissionMode: string;
-  claude_code_version: string;
   uuid: string;
 }
 
-export interface ClaudeAssistantMessage {
+export interface AgentAssistantMessage {
   type: 'assistant';
   message: {
     model: string;
@@ -48,7 +47,7 @@ export interface ClaudeAssistantMessage {
   uuid: string;
 }
 
-export interface ClaudeResultMessage {
+export interface AgentResultMessage {
   type: 'result';
   subtype: 'success' | 'error';
   is_error: boolean;
@@ -69,10 +68,10 @@ export interface ClaudeResultMessage {
   uuid: string;
 }
 
-export type ClaudeMessage =
-  | ClaudeSystemMessage
-  | ClaudeAssistantMessage
-  | ClaudeResultMessage;
+export type AgentMessage =
+  | AgentSystemMessage
+  | AgentAssistantMessage
+  | AgentResultMessage;
 
 // ── Bridge protocol (sandbox <-> orchestrator) ───────
 export interface BridgeReadyMessage {
@@ -81,50 +80,50 @@ export interface BridgeReadyMessage {
   sessionId?: string;
 }
 
-export interface BridgeClaudeMessage {
-  type: 'claude_message';
+export interface BridgeAgentMessage {
+  type: 'agent_message';
   threadId?: string;
-  data: ClaudeMessage;
+  data: AgentMessage;
 }
 
-export interface BridgeClaudeStdout {
-  type: 'claude_stdout';
-  threadId?: string;
-  data: string;
-}
-
-export interface BridgeClaudeStderr {
-  type: 'claude_stderr';
+export interface BridgeAgentStdout {
+  type: 'agent_stdout';
   threadId?: string;
   data: string;
 }
 
-export interface BridgeClaudeExit {
-  type: 'claude_exit';
+export interface BridgeAgentStderr {
+  type: 'agent_stderr';
+  threadId?: string;
+  data: string;
+}
+
+export interface BridgeAgentExit {
+  type: 'agent_exit';
   threadId?: string;
   code: number;
 }
 
-export interface BridgeClaudeInput {
-  type: 'claude_input';
+export interface BridgeAgentInput {
+  type: 'agent_input';
   threadId?: string;
   data: string;
 }
 
-export interface BridgeClaudeError {
-  type: 'claude_error';
+export interface BridgeAgentError {
+  type: 'agent_error';
   threadId?: string;
   error: string;
 }
 
 export interface BridgeCatchup {
-  type: 'claude_catchup';
+  type: 'agent_catchup';
   threadId: string;
   blocks: Array<{ type: string; [key: string]: unknown }>;
 }
 
-export interface BridgeClaudeUserAnswer {
-  type: 'claude_user_answer';
+export interface BridgeAgentUserAnswer {
+  type: 'agent_user_answer';
   threadId: string;
   toolUseId: string;
   answer: string;
@@ -319,18 +318,26 @@ export interface BridgeRunningSessions {
   sessions: Array<{ threadId: string; sessionId: string }>;
 }
 
+export interface BridgeStartAgentAck {
+  type: 'start_agent_ack';
+  threadId: string;
+  status: 'processing' | 'started' | 'failed';
+  sessionId?: string;
+  error?: string;
+}
+
 // ── Union of all bridge messages ─────────────────────
 
 export type BridgeMessage =
   | BridgeReadyMessage
-  | BridgeClaudeMessage
-  | BridgeClaudeInput
-  | BridgeClaudeStdout
-  | BridgeClaudeStderr
-  | BridgeClaudeExit
-  | BridgeClaudeError
+  | BridgeAgentMessage
+  | BridgeAgentInput
+  | BridgeAgentStdout
+  | BridgeAgentStderr
+  | BridgeAgentExit
+  | BridgeAgentError
   | BridgeCatchup
-  | BridgeClaudeUserAnswer
+  | BridgeAgentUserAnswer
   | BridgeAskUserPending
   | BridgeAskUserResolved
   | BridgeTerminalCreated
@@ -348,7 +355,8 @@ export type BridgeMessage =
   | BridgeLspData
   | BridgeLspResponse
   | BridgeLspStatus
-  | BridgeRunningSessions;
+  | BridgeRunningSessions
+  | BridgeStartAgentAck;
 
 // ── Sandbox session tracking ─────────────────────────
 export type SandboxSessionStatus =

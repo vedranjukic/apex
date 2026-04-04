@@ -40,7 +40,7 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
 
   const [showStats, setShowStats] = useState(false);
   const [promptQueue, setPromptQueue] = useState<{ id: string; text: string; files?: string[]; mode?: string; model?: string; snippets?: CodeSelection[]; agentType?: string; images?: ImageAttachment[] }[]>([]);
-  const pendingSendRef = useRef<{ id: string; text: string; files?: string[]; mode?: string; model?: string; snippets?: CodeSelection[]; agentType?: string; images?: ImageAttachment[] } | null>(null);
+  const pendingSendRef = useRef<typeof promptQueue[number] | null>(null);
 
   const fillPrompt = useCallback((text: string) => {
     promptRef.current?.fill(text);

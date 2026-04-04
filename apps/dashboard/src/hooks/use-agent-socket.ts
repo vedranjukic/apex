@@ -50,7 +50,7 @@ export function useAgentSocket(projectId: string | undefined) {
           tools: msg.tools,
           mcpServers: msg.mcp_servers,
           permissionMode: msg.permissionMode,
-          agentVersion: msg.claude_code_version,
+          agentVersion: msg.agentVersion,
         });
         return;
       }

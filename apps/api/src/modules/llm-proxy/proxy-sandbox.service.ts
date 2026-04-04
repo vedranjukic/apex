@@ -20,7 +20,7 @@ const PORT_RELAY_PORT = 9341;
 const PROXY_DIR = '/home/daytona/proxy';
 const HEALTH_MAX_ATTEMPTS = 30;
 const HEALTH_INTERVAL_MS = 1000;
-const SIGNED_URL_TTL_SECS = 8 * 60 * 60; // 8 hours
+const SIGNED_URL_TTL_SECS = 86_400; // 24 hours (Daytona max)
 
 const SETTINGS_KEYS = {
   sandboxId: 'LLM_PROXY_SANDBOX_ID',
@@ -51,14 +51,27 @@ function generateAuthToken(): string {
 
 class ProxySandboxService {
   private cachedInfo: ProxySandboxInfo | null = null;
+  private ensureInFlight: Promise<ProxySandboxInfo> | null = null;
 
   /**
    * Ensure the proxy sandbox exists and is healthy.  Creates or recreates
    * the sandbox when keys change or the sandbox is stopped/destroyed.
    *
    * Returns the proxy base URL and auth token for regular sandboxes to use.
+   * Serialized: concurrent callers wait for the same in-flight operation.
    */
   async ensureProxySandbox(
+    daytonaProvider: SandboxProvider,
+    anthropicKey: string,
+    openaiKey: string,
+  ): Promise<ProxySandboxInfo> {
+    if (this.ensureInFlight) return this.ensureInFlight;
+    this.ensureInFlight = this.doEnsureProxySandbox(daytonaProvider, anthropicKey, openaiKey)
+      .finally(() => { this.ensureInFlight = null; });
+    return this.ensureInFlight;
+  }
+
+  private async doEnsureProxySandbox(
     daytonaProvider: SandboxProvider,
     anthropicKey: string,
     openaiKey: string,
@@ -72,8 +85,11 @@ class ProxySandboxService {
       settingsService.get(SETTINGS_KEYS.authToken),
     ]);
 
+    let needsRecreate = false;
+    let recreateReason = '';
+
     if (storedId && storedHash === currentHash && storedUrl && storedToken) {
-      const freshUrl = await this.checkHealthAndRefreshUrl(daytonaProvider, storedId);
+      const freshUrl = await this.checkHealthAndRefreshUrl(daytonaProvider, storedId, storedUrl);
       if (freshUrl) {
         if (freshUrl !== storedUrl) {
           await settingsService.setAll({ [SETTINGS_KEYS.url]: freshUrl });
@@ -81,18 +97,29 @@ class ProxySandboxService {
         this.cachedInfo = { proxyBaseUrl: freshUrl, authToken: storedToken };
         return this.cachedInfo;
       }
-      console.log('[proxy-sandbox] Existing proxy sandbox unhealthy — recreating');
+      needsRecreate = true;
+      recreateReason = 'Existing proxy sandbox unhealthy';
     } else if (storedId && storedHash !== currentHash) {
-      console.log('[proxy-sandbox] API keys changed — recreating proxy sandbox');
+      needsRecreate = true;
+      recreateReason = 'API keys changed';
+    } else if (!storedId) {
+      needsRecreate = true;
+      recreateReason = 'No proxy sandbox configured';
     }
 
-    if (storedId) {
-      await this.destroyQuietly(daytonaProvider, storedId);
+    if (needsRecreate) {
+      console.log(`[proxy-sandbox] ${recreateReason} — creating new proxy sandbox`);
     }
 
     const info = await this.createProxySandbox(
       daytonaProvider, anthropicKey, openaiKey, currentHash,
     );
+
+    if (storedId) {
+      console.log(`[proxy-sandbox] New proxy ready, destroying old proxy ${storedId.slice(0, 8)}`);
+      await this.destroyQuietly(daytonaProvider, storedId);
+    }
+
     this.cachedInfo = info;
     return info;
   }
@@ -125,6 +152,8 @@ class ProxySandboxService {
     params: {
       snapshot: string;
       autoStopInterval: number;
+      autoDeleteInterval?: number;
+      autoArchiveInterval?: number;
       envVars: Record<string, string>;
       labels: Record<string, string>;
     },
@@ -262,6 +291,8 @@ class ProxySandboxService {
     const sandbox = await this.createProxySandboxWithConflictResolution(daytonaProvider, {
       snapshot,
       autoStopInterval: 0,
+      autoDeleteInterval: -1,
+      autoArchiveInterval: 0,
       envVars: {
         REAL_ANTHROPIC_API_KEY: anthropicKey,
         REAL_OPENAI_API_KEY: openaiKey,
@@ -329,16 +360,20 @@ class ProxySandboxService {
     throw new Error('Proxy sandbox health check timed out');
   }
 
+  private urlRefreshedAt = 0;
+
   private async checkHealthAndRefreshUrl(
     daytonaProvider: SandboxProvider,
     sandboxId: string,
+    storedUrl?: string,
   ): Promise<string | null> {
     try {
       const sandbox = await daytonaProvider.get(sandboxId);
       if (sandbox.state !== 'started' && sandbox.state !== 'unknown') {
         try {
           await sandbox.start(60);
-        } catch {
+        } catch (startErr) {
+          console.warn(`[proxy-sandbox] Failed to start proxy sandbox ${sandboxId.slice(0, 8)}:`, startErr);
           return null;
         }
       }
@@ -347,12 +382,32 @@ class ProxySandboxService {
       );
       if (!(result.result ?? '').includes('"ok"')) return null;
 
-      const previewInfo = sandbox.getSignedPreviewUrl
-        ? await sandbox.getSignedPreviewUrl(PROXY_PORT, SIGNED_URL_TTL_SECS)
-        : await sandbox.getPreviewLink(PROXY_PORT);
-      return previewInfo.url.replace(/\/$/, '');
-    } catch {
-      return null;
+      // Only generate a new signed URL if we don't have one or it's older than
+      // half the TTL. Generating new signed URLs on every health check causes
+      // URL rotation that breaks tunnel connections in running sandboxes.
+      const urlAge = Date.now() - this.urlRefreshedAt;
+      const needsRefresh = !storedUrl || urlAge > (SIGNED_URL_TTL_SECS * 1000 / 2);
+      if (needsRefresh) {
+        const previewInfo = sandbox.getSignedPreviewUrl
+          ? await sandbox.getSignedPreviewUrl(PROXY_PORT, SIGNED_URL_TTL_SECS)
+          : await sandbox.getPreviewLink(PROXY_PORT);
+        this.urlRefreshedAt = Date.now();
+        return previewInfo.url.replace(/\/$/, '');
+      }
+      return storedUrl;
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isGone = /not found|does not exist/i.test(msg)
+        || err?.statusCode === 404
+        || err?.name === 'DaytonaNotFoundError';
+      if (isGone) {
+        console.log(`[proxy-sandbox] Proxy sandbox ${sandboxId.slice(0, 8)} no longer exists`);
+        return null;
+      }
+      // Transient error (network, rate limit, etc.) — keep the existing proxy
+      // rather than destroying it and risking a recreation failure
+      console.warn(`[proxy-sandbox] Transient health check error for ${sandboxId.slice(0, 8)}, keeping existing proxy:`, msg);
+      return storedUrl || null;
     }
   }
 
