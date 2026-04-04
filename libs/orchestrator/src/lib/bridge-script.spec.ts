@@ -23,23 +23,23 @@ describe('getBridgeScript', () => {
     expect(script).not.toContain('AGENT_TYPE');
   });
 
-  it('should not include Claude or Codex adapters', () => {
+  it('should not include legacy adapters', () => {
     const script = getBridgeScript(8080, '/tmp/test');
     expect(script).not.toContain('claudeAdapter');
     expect(script).not.toContain('codexAdapter');
     expect(script).not.toContain('app-server');
   });
 
-  it('should use normalized message types (claude_message, claude_exit, claude_error)', () => {
+  it('should use normalized message types (agent_message, agent_exit, agent_error)', () => {
     const script = getBridgeScript(8080, '/tmp/test');
-    expect(script).toContain('"claude_message"');
-    expect(script).toContain('"claude_exit"');
-    expect(script).toContain('"claude_error"');
+    expect(script).toContain('"agent_message"');
+    expect(script).toContain('"agent_exit"');
+    expect(script).toContain('"agent_error"');
   });
 
-  it('should handle start_claude messages', () => {
+  it('should handle start_agent messages', () => {
     const script = getBridgeScript(8080, '/tmp/test');
-    expect(script).toContain('"start_claude"');
+    expect(script).toContain('"start_agent"');
     expect(script).toContain('handleStartAgent');
   });
 
@@ -186,22 +186,22 @@ describe('Session management', () => {
 });
 
 describe('Bridge core routing', () => {
-  it('should route start_claude to handleStartAgent (async)', () => {
+  it('should route start_agent to handleStartAgent (async)', () => {
     const script = getBridgeScript(8080, '/tmp/test');
-    expect(script).toContain('"start_claude"');
+    expect(script).toContain('"start_agent"');
     expect(script).toContain('handleStartAgent(msg)');
     expect(script).toContain('.catch');
   });
 
-  it('should route claude_user_answer to handleUserAnswer', () => {
+  it('should route agent_user_answer to handleUserAnswer', () => {
     const script = getBridgeScript(8080, '/tmp/test');
-    expect(script).toContain('msg.type === "claude_user_answer"');
+    expect(script).toContain('msg.type === "agent_user_answer"');
     expect(script).toContain('handleUserAnswer(msg)');
   });
 
-  it('should route stop_claude to handleStopAgent using abort API', () => {
+  it('should route stop_agent to handleStopAgent using abort API', () => {
     const script = getBridgeScript(8080, '/tmp/test');
-    expect(script).toContain('msg.type === "stop_claude"');
+    expect(script).toContain('msg.type === "stop_agent"');
     expect(script).toContain('handleStopAgent(msg)');
     expect(script).toContain('/abort');
   });
@@ -223,9 +223,9 @@ describe('Bridge core routing', () => {
     expect(script).not.toContain('killEntry');
   });
 
-  it('should not include claude_input handler (no PTY)', () => {
+  it('should not include agent_input handler (no PTY)', () => {
     const script = getBridgeScript(8080, '/tmp/test');
-    expect(script).not.toContain('"claude_input"');
+    expect(script).not.toContain('"agent_input"');
   });
 });
 
@@ -313,7 +313,7 @@ describe('Shared infrastructure', () => {
     const script = getBridgeScript(8080, '/tmp/test');
     expect(script).toContain('"permission.updated"');
     expect(script).toContain('Auto-approving permission');
-    expect(script).toContain('/permissions/');
-    expect(script).toContain('response: true');
+    expect(script).toContain('/permission/');
+    expect(script).toContain('reply: "always"');
   });
 });

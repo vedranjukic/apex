@@ -135,7 +135,7 @@ export class CliSandboxManager {
 
   private parseBridgeMessage(message: BridgeMessage): AgentOutput | null {
     switch (message.type) {
-      case 'claude_message':
+      case 'agent_message':
         if (message.data.type === 'content_block_delta') {
           return {
             type: 'content',
@@ -156,7 +156,7 @@ export class CliSandboxManager {
         }
         break;
       
-      case 'claude_error':
+      case 'agent_error':
         return {
           type: 'error',
           content: message.data.error || 'Unknown error',

@@ -85,6 +85,9 @@ class ProxySandboxService {
       settingsService.get(SETTINGS_KEYS.authToken),
     ]);
 
+    let needsRecreate = false;
+    let recreateReason = '';
+
     if (storedId && storedHash === currentHash && storedUrl && storedToken) {
       const freshUrl = await this.checkHealthAndRefreshUrl(daytonaProvider, storedId, storedUrl);
       if (freshUrl) {
@@ -94,18 +97,29 @@ class ProxySandboxService {
         this.cachedInfo = { proxyBaseUrl: freshUrl, authToken: storedToken };
         return this.cachedInfo;
       }
-      console.log('[proxy-sandbox] Existing proxy sandbox unhealthy — recreating');
+      needsRecreate = true;
+      recreateReason = 'Existing proxy sandbox unhealthy';
     } else if (storedId && storedHash !== currentHash) {
-      console.log('[proxy-sandbox] API keys changed — recreating proxy sandbox');
+      needsRecreate = true;
+      recreateReason = 'API keys changed';
+    } else if (!storedId) {
+      needsRecreate = true;
+      recreateReason = 'No proxy sandbox configured';
     }
 
-    if (storedId) {
-      await this.destroyQuietly(daytonaProvider, storedId);
+    if (needsRecreate) {
+      console.log(`[proxy-sandbox] ${recreateReason} — creating new proxy sandbox`);
     }
 
     const info = await this.createProxySandbox(
       daytonaProvider, anthropicKey, openaiKey, currentHash,
     );
+
+    if (storedId) {
+      console.log(`[proxy-sandbox] New proxy ready, destroying old proxy ${storedId.slice(0, 8)}`);
+      await this.destroyQuietly(daytonaProvider, storedId);
+    }
+
     this.cachedInfo = info;
     return info;
   }
@@ -358,7 +372,8 @@ class ProxySandboxService {
       if (sandbox.state !== 'started' && sandbox.state !== 'unknown') {
         try {
           await sandbox.start(60);
-        } catch {
+        } catch (startErr) {
+          console.warn(`[proxy-sandbox] Failed to start proxy sandbox ${sandboxId.slice(0, 8)}:`, startErr);
           return null;
         }
       }
@@ -380,8 +395,19 @@ class ProxySandboxService {
         return previewInfo.url.replace(/\/$/, '');
       }
       return storedUrl;
-    } catch {
-      return null;
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isGone = /not found|does not exist/i.test(msg)
+        || err?.statusCode === 404
+        || err?.name === 'DaytonaNotFoundError';
+      if (isGone) {
+        console.log(`[proxy-sandbox] Proxy sandbox ${sandboxId.slice(0, 8)} no longer exists`);
+        return null;
+      }
+      // Transient error (network, rate limit, etc.) — keep the existing proxy
+      // rather than destroying it and risking a recreation failure
+      console.warn(`[proxy-sandbox] Transient health check error for ${sandboxId.slice(0, 8)}, keeping existing proxy:`, msg);
+      return storedUrl || null;
     }
   }
 

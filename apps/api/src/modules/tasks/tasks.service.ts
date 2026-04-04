@@ -11,7 +11,7 @@ class ThreadsService {
   async init() {
     await db
       .update(tasks)
-      .set({ status: 'completed', claudeSessionId: null, updatedAt: new Date().toISOString() })
+      .set({ status: 'completed', agentSessionId: null, updatedAt: new Date().toISOString() })
       .where(inArray(tasks.status, STALE_ACTIVE_STATUSES));
   }
 
@@ -27,7 +27,7 @@ class ThreadsService {
     for (const t of stale) {
       await db
         .update(tasks)
-        .set({ status: 'completed', claudeSessionId: null, updatedAt: new Date().toISOString() })
+        .set({ status: 'completed', agentSessionId: null, updatedAt: new Date().toISOString() })
         .where(eq(tasks.id, t.id));
     }
     return stale.map((t) => t.id);
@@ -68,8 +68,8 @@ class ThreadsService {
     return this.findById(id);
   }
 
-  async updateClaudeSessionId(threadId: string, sessionId: string | null): Promise<void> {
-    await db.update(tasks).set({ claudeSessionId: sessionId, updatedAt: new Date().toISOString() }).where(eq(tasks.id, threadId));
+  async updateAgentSessionId(threadId: string, sessionId: string | null): Promise<void> {
+    await db.update(tasks).set({ agentSessionId: sessionId, updatedAt: new Date().toISOString() }).where(eq(tasks.id, threadId));
   }
 
   async updateMode(threadId: string, mode: string): Promise<void> {
