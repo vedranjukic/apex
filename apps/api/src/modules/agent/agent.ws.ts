@@ -42,7 +42,7 @@ let lastAttachedManager: WeakRef<any> | null = null;
 
 const AGENT_INITIAL_TIMEOUT_MS = process.env.APEX_TEST_AGENT_TIMEOUT_MS
   ? parseInt(process.env.APEX_TEST_AGENT_TIMEOUT_MS, 10) : 90_000;
-const AGENT_ACTIVITY_TIMEOUT_MS = 300_000;
+const AGENT_ACTIVITY_TIMEOUT_MS = 120_000;
 const HEALTH_CHECK_INTERVAL_MS = 10_000;
 const SEND_TIMEOUT_MS = 30_000;
 

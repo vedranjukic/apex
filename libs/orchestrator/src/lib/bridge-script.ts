@@ -625,12 +625,12 @@ function pollSession(threadId, sessionId, agentName, modelName, recovered) {
   let idleCount = 0;
   const runningToolPids = new Set();
   const toolRunningStartedAt = new Map();
-  const TOOL_RUNNING_TIMEOUT_MS = 300000;
+  const TOOL_RUNNING_TIMEOUT_MS = 120000;
   const pollStartedAt = Date.now();
   const MIN_POLL_BEFORE_IDLE_EXIT_MS = 5000;
   let lastProgressAt = Date.now();
   const STUCK_NO_OUTPUT_MS = 60000;
-  const STUCK_NO_PROGRESS_MS = 300000;
+  const STUCK_NO_PROGRESS_MS = 120000;
   let pollErrorCount = 0;
   const MAX_CONSECUTIVE_ERRORS = 20;
 
