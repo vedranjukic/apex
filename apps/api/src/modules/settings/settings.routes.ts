@@ -42,7 +42,8 @@ export const settingsRoutes = new Elysia({ prefix: '/api/settings' })
     }
     if (Object.keys(filtered).length > 0) {
       await settingsService.setAll(filtered);
-      await projectsService.reinitSandboxManager();
+      // TODO: Re-enable when projects service is properly initialized
+      // await projectsService.reinitSandboxManager();
     }
     return { ok: true };
   });
