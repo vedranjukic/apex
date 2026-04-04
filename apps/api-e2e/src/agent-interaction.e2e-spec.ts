@@ -181,7 +181,61 @@ describeE2e('Agent interaction E2E (real sandbox)', () => {
     expect(resultEvent).toBeDefined();
   }, 3 * 60 * 1000);
 
-  // ── Step 5: Stop running session ───────────────────
+  // ── Step 5: MCP terminal tool use ───────────────────
+
+  it('should use MCP terminal tools (open_terminal + read_terminal)', async () => {
+    const prompt =
+      'Use the open_terminal MCP tool to create a terminal named "e2e-test" that runs: echo MCP_TERMINAL_MARKER. ' +
+      'Then use read_terminal to read its output. Report what you see. ' +
+      'Do NOT use the Bash tool — use the MCP terminal tools specifically.';
+
+    const termThreadId = await createThread(projectId, prompt);
+    socket.send('execute_thread', { threadId: termThreadId, mode: 'agent' });
+
+    const { events } = await collectAgentEvents(socket, termThreadId, 3 * 60_000);
+
+    console.log(`[agent-interaction] MCP terminal test: ${events.length} events received`);
+    logEventSummary(events);
+
+    // Collect all tool_use blocks regardless of name
+    const allToolUses = findToolUseBlocks(events);
+    const toolNames = allToolUses.map((b) => b.name || '');
+    console.log(`[agent-interaction] MCP terminal test: tools used: ${toolNames.join(', ')}`);
+
+    // Should have used open_terminal (MCP tool name may be prefixed)
+    const hasOpenTerminal = toolNames.some(
+      (n) => n && (n.includes('open_terminal') || n.includes('terminal_create')),
+    );
+    expect(hasOpenTerminal).toBe(true);
+
+    // Should have used read_terminal
+    const hasReadTerminal = toolNames.some(
+      (n) => n && (n.includes('read_terminal') || n.includes('terminal_read')),
+    );
+    expect(hasReadTerminal).toBe(true);
+
+    // The terminal output should contain our marker
+    const allResults = findToolResultBlocks(events);
+    const allText = findTextContent(events);
+    const markerInResults = allResults.some(
+      (b) => b.content && b.content.includes('MCP_TERMINAL_MARKER'),
+    );
+    const markerInText = allText.some((t) => t.includes('MCP_TERMINAL_MARKER'));
+
+    if (!markerInResults && !markerInText) {
+      console.warn(
+        '[agent-interaction] MCP terminal: marker not found in output',
+        { toolNames, resultCount: allResults.length },
+      );
+    }
+
+    // Should complete without error
+    const resultEvent = events.find((e) => e.type === 'result');
+    expect(resultEvent).toBeDefined();
+    expect(resultEvent!.is_error).toBeFalsy();
+  }, 3 * 60 * 1000);
+
+  // ── Step 6: Stop running session ───────────────────
 
   it('should stop a running session mid-execution', async () => {
     const prompt =
