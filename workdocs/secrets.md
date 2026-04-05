@@ -80,7 +80,7 @@ The MITM proxy architecture varies by sandbox provider:
 ```
 Container app → CONNECT api.stripe.com:443 via HTTPS_PROXY
                             ↓
-               MITM Proxy (secrets-proxy.ts, port 3001)
+               MITM Proxy (secrets-proxy.ts, port 9350)
                             ↓
               Looks up domain in secrets DB → match found
                             ↓
@@ -129,7 +129,7 @@ For domains **without** secrets, the proxy acts as a transparent TCP tunnel (no 
 
 #### Local/Container Implementation (`apps/api/src/modules/secrets-proxy/secrets-proxy.ts`)
 
-- **Port**: 3001 (default, override with `SECRETS_PROXY_PORT`)
+- **Port**: 9350 (default, override with `SECRETS_PROXY_PORT`)
 - **CONNECT handling (HTTPS)**: Parses host from CONNECT request. If `findByDomain(host)` returns no rows → transparent TCP tunnel. If rows exist → MITM path with dynamic TLS cert.
 - **Plain HTTP proxy**: Same domain lookup for `http://` / `https://` absolute URLs.
 
@@ -173,7 +173,7 @@ Client `authorization` / `x-api-key` headers are stripped before injection.
 Container environment varies by provider:
 
 ### Local/Container Providers
-- `HTTPS_PROXY` / `HTTP_PROXY` → proxy URL (e.g. `http://<host-lan-ip>:3001`)
+- `HTTPS_PROXY` / `HTTP_PROXY` → proxy URL (e.g. `http://<host-lan-ip>:9350`)
 - `NO_PROXY=localhost,127.0.0.1,0.0.0.0` so local traffic skips the proxy
 - Custom CA certificate installed in the system trust store
 - `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` for per-runtime CA trust

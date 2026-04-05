@@ -92,7 +92,7 @@ Regular Sandbox (Daytona)                    Proxy Sandbox (Daytona)
 
 #### Other Providers (Docker, Apple Container, Local)
 - Uses direct proxy URLs unchanged (backward compatible)
-- `HTTPS_PROXY=http://<host-lan-ip>:3001` points to local MITM proxy
+- `HTTPS_PROXY=http://<host-lan-ip>:9350` points to local MITM proxy
 
 ### 4. Proxy Sandbox Service (`apps/api/src/modules/llm-proxy/proxy-sandbox.service.ts`)
 
