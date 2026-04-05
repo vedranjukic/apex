@@ -766,24 +766,6 @@ export class SandboxManager extends EventEmitter {
   }
 
   /** Get the project working directory for a sandbox */
-  private loadTunnelClientBinary(): Buffer | null {
-    const path = require("path");
-    const fs = require("fs");
-    const candidates = [
-      path.resolve(process.cwd(), "apps/proxy/target/x86_64-unknown-linux-musl/release/apex-proxy"),
-      path.resolve(__dirname, "..", "..", "..", "..", "apps/proxy/target/x86_64-unknown-linux-musl/release/apex-proxy"),
-      "/usr/local/share/apex/apex-proxy-linux",
-    ];
-    for (const p of candidates) {
-      try {
-        return fs.readFileSync(p);
-      } catch {
-        // try next
-      }
-    }
-    return null;
-  }
-
   getProjectDir(sandboxId: string, projectName?: string): string {
     const session = this.sessions.get(sandboxId);
     if (session?.projectDir) return session.projectDir;
@@ -2071,20 +2053,6 @@ export class SandboxManager extends EventEmitter {
       Buffer.from(bridgeCode),
       `${bridgeDir}/bridge.cjs`,
     );
-
-    // Upload the Rust tunnel client binary for Daytona sandboxes
-    if (this.config.provider === "daytona") {
-      try {
-        const tunnelBinary = this.loadTunnelClientBinary();
-        if (tunnelBinary) {
-          await sandbox.fs.uploadFile(tunnelBinary, `${bridgeDir}/apex-proxy`);
-          await sandbox.process.executeCommand(`chmod +x '${bridgeDir}/apex-proxy'`);
-          console.log(`[bridge:${sid}] uploaded apex-proxy tunnel client (${tunnelBinary.length} bytes)`);
-        }
-      } catch (err) {
-        console.warn(`[bridge:${sid}] tunnel client binary not available, using Node.js fallback: ${err}`);
-      }
-    }
 
     const proxyBase = resolveProxyBaseUrl(this.config.proxyBaseUrl, this.config.provider);
     const useProxy = !!proxyBase;

@@ -1786,43 +1786,7 @@ function startTunnelClient() {
     log("\\u{26A0}", "No TUNNEL_ENDPOINT_URL configured, tunnel client disabled");
     return;
   }
-
-  // Try the Rust binary first (faster, lower memory)
-  const tunnelBinPath = __dirname + "/apex-proxy";
-  try {
-    const fs = require("fs");
-    if (fs.existsSync(tunnelBinPath)) {
-      log("\\u{1F680}", "Starting Rust tunnel client: " + tunnelBinPath);
-      const child = require("child_process").spawn(tunnelBinPath, [], {
-        env: {
-          ...process.env,
-          TUNNEL_ENDPOINT_URL: TUNNEL_ENDPOINT_URL,
-          TUNNEL_CLIENT_PORT: String(TUNNEL_PORT),
-          RUST_LOG: "apex_proxy=info",
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      child.stdout.on("data", (d) => log("\\u{1F680}", "[tunnel-rust] " + d.toString().trim()));
-      child.stderr.on("data", (d) => log("\\u{1F680}", "[tunnel-rust] " + d.toString().trim()));
-      child.on("exit", (code) => {
-        if (code !== 0) log("\\u{274C}", "Rust tunnel client exited with code " + code + ", falling back to Node");
-        if (code !== 0) startNodeTunnelClient();
-      });
-      child.on("error", (err) => {
-        log("\\u{274C}", "Rust tunnel client failed: " + err.message + ", falling back to Node");
-        startNodeTunnelClient();
-      });
-      return;
-    }
-  } catch (e) {
-    log("\\u{26A0}", "Rust tunnel binary check failed: " + e.message);
-  }
-
-  startNodeTunnelClient();
-}
-
-function startNodeTunnelClient() {
-  log("\\u{1F4E1}", "Starting Node.js tunnel client on port " + TUNNEL_PORT);
+  
   const tunnelServer = net.createServer((clientSocket) => {
     log("\\u{1F4E1}", \`Tunnel client: New connection on port \${TUNNEL_PORT}\`);
     

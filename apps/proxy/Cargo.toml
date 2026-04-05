@@ -15,7 +15,7 @@ rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
 rustls-pemfile = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio-tungstenite = "0.26"
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 dashmap = "6"
 base64 = "0.22"
 tracing = "0.1"
