@@ -766,6 +766,21 @@ export class SandboxManager extends EventEmitter {
   }
 
   /** Get the project working directory for a sandbox */
+  private loadTunnelClientBinary(): Buffer | null {
+    const path = require("path");
+    const fs = require("fs");
+    const fromCwd = path.resolve(process.cwd(), "apps/proxy/target/x86_64-unknown-linux-musl/release/apex-proxy");
+    const fromCwdUp = path.resolve(process.cwd(), "..", "..", "apps/proxy/target/x86_64-unknown-linux-musl/release/apex-proxy");
+    const fromDirname = path.resolve(__dirname, "..", "..", "..", "..", "apps/proxy/target/x86_64-unknown-linux-musl/release/apex-proxy");
+    const candidates = [fromCwd, fromCwdUp, fromDirname, "/usr/local/share/apex/apex-proxy-linux"];
+    for (const p of candidates) {
+      try {
+        return fs.readFileSync(p);
+      } catch { /* try next */ }
+    }
+    return null;
+  }
+
   getProjectDir(sandboxId: string, projectName?: string): string {
     const session = this.sessions.get(sandboxId);
     if (session?.projectDir) return session.projectDir;
@@ -2486,6 +2501,20 @@ export class SandboxManager extends EventEmitter {
     const writeBridgeFiles = async () => {
       if (bridgeDirInsideProject) {
         await sandbox.process.executeCommand(`mkdir -p '${bridgeDir}'`);
+      }
+      // Upload Rust tunnel client binary BEFORE bridge script so the binary
+      // is present when the bridge starts and checks for it.
+      if (isDaytonaI) {
+        try {
+          const tunnelBinary = this.loadTunnelClientBinary();
+          if (tunnelBinary) {
+            await sandbox.fs.uploadFile(tunnelBinary, `${bridgeDir}/apex-proxy`);
+            await sandbox.process.executeCommand(`chmod +x '${bridgeDir}/apex-proxy'`);
+            log(`uploaded apex-proxy tunnel client (${tunnelBinary.length} bytes)`);
+          }
+        } catch (err) {
+          log(`tunnel client binary not available: ${err}`);
+        }
       }
       await Promise.all([
         this.batchWriteFiles(sandbox, bridgeFiles),

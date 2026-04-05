@@ -13,11 +13,15 @@ pub async fn start_tunnel_client(
     ws_endpoint_url: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(listen_addr).await?;
-    info!(addr = %listen_addr, endpoint = %ws_endpoint_url, "tunnel client listening");
+    // Convert https:// to wss:// and http:// to ws:// for WebSocket
+    let ws_url = ws_endpoint_url
+        .replacen("https://", "wss://", 1)
+        .replacen("http://", "ws://", 1);
+    info!(addr = %listen_addr, endpoint = %ws_url, "tunnel client listening");
 
     loop {
         let (tcp_stream, peer) = listener.accept().await?;
-        let url = ws_endpoint_url.to_string();
+        let url = ws_url.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_tunnel_connection(tcp_stream, &url).await {
                 debug!(peer = %peer, error = %e, "tunnel client connection error");
@@ -30,8 +34,14 @@ async fn handle_tunnel_connection(
     mut tcp_stream: TcpStream,
     ws_url: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (ws_stream, _response) = tokio_tungstenite::connect_async(ws_url).await?;
-    info!("tunnel WebSocket connected");
+    let (ws_stream, response) = match tokio_tungstenite::connect_async(ws_url).await {
+        Ok(r) => r,
+        Err(e) => {
+            error!(url = %ws_url, error = %e, "WebSocket connect failed");
+            return Err(e.into());
+        }
+    };
+    debug!(status = %response.status(), "tunnel WebSocket connected");
 
     let (mut ws_sink, mut ws_rx) = ws_stream.split();
     let (mut tcp_read, mut tcp_write) = tcp_stream.split();
