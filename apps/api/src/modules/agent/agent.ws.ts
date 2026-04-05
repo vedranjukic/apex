@@ -673,24 +673,20 @@ async function executeAgainstSandbox(
   let effectivePrompt = prompt;
   const priorMessages = (thread.messages || []).slice(0, -1);
   let contextFilePath: string | undefined;
-  if (priorMessages.length > 0) {
-    // Always include inline context summary for follow-up prompts. Even when
-    // the OC session is alive, the session might have been lost behind the
-    // scenes (bridge restart, OC restart) while agentSessionId is still set.
-    // Inline context is lightweight and the LLM handles duplicate info fine.
+  // Inject conversation history only when recovering a lost session
+  // (agentSessionId is null). On startup, init() clears all session IDs
+  // so any follow-up on a completed thread correctly triggers recovery.
+  // When the OC session is alive (agentSessionId set), the agent already
+  // has full context — no injection needed.
+  if (!thread.agentSessionId && priorMessages.length > 0) {
     const context = buildConversationContext(priorMessages as any);
     if (context) {
       effectivePrompt = `<conversation_history>\n${context}\n</conversation_history>\n\n${prompt}`;
     }
-    // Only write the context file + "read this file" hint for explicit
-    // session recovery (no agentSessionId). This avoids the agent wasting
-    // time reading a file it already has context for.
-    if (!thread.agentSessionId) {
-      try {
-        contextFilePath = await writeThreadContext(manager, project.sandboxId, threadId, priorMessages);
-        effectivePrompt += contextFileHint(contextFilePath);
-      } catch { /* best-effort */ }
-    }
+    try {
+      contextFilePath = await writeThreadContext(manager, project.sandboxId, threadId, priorMessages);
+      effectivePrompt += contextFileHint(contextFilePath);
+    } catch { /* best-effort */ }
   }
 
   const doSend = () => Promise.race([
