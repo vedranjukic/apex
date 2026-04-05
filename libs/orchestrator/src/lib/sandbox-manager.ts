@@ -360,9 +360,11 @@ export class SandboxManager extends EventEmitter {
     const secretsProxyUrl = resolveSecretsProxyUrl(
       this.config.secretsProxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
-    // For Daytona the MITM proxy runs in the proxy sandbox (reachable via tunnel),
-    // not on the host — so availability depends on proxyBase, not secretsProxyUrl.
-    const secretsProxyAvailable = isDaytona ? useProxy : !!secretsProxyUrl;
+    // Only enable the secrets proxy when there are secrets or a GitHub token
+    // to intercept. Without any secrets, HTTPS_PROXY adds overhead for no benefit.
+    const hasSecretsToProxy = Object.keys(this.config.secretPlaceholders).length > 0 || !!this.config.githubToken;
+    const secretsProxyReachable = isDaytona ? useProxy : !!secretsProxyUrl;
+    const secretsProxyAvailable = hasSecretsToProxy && secretsProxyReachable;
 
     // Compute effective secret domains (user secrets + GitHub if token set).
     const secretDomainsList = [...(this.config.secretDomains || [])];
@@ -2225,7 +2227,8 @@ export class SandboxManager extends EventEmitter {
       this.config.secretsProxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
     const isDaytonaR = this.config.provider === "daytona";
-    const secretsProxyAvailableR = isDaytonaR ? useProxy : !!secretsProxyUrlR;
+    const hasSecretsR = Object.keys(this.config.secretPlaceholders).length > 0 || !!this.config.githubToken;
+    const secretsProxyAvailableR = hasSecretsR && (isDaytonaR ? useProxy : !!secretsProxyUrlR);
     if (this.config.secretsProxyCaCert && secretsProxyAvailableR && this.config.provider !== "local") {
       try {
         const b64Cert = Buffer.from(this.config.secretsProxyCaCert).toString("base64");
@@ -2483,7 +2486,8 @@ export class SandboxManager extends EventEmitter {
       this.config.secretsProxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
     const isDaytonaI = this.config.provider === "daytona";
-    const secretsProxyAvailableI = isDaytonaI ? useProxyI : !!secretsProxyUrl;
+    const hasSecretsI = Object.keys(this.config.secretPlaceholders).length > 0 || !!this.config.githubToken;
+    const secretsProxyAvailableI = hasSecretsI && (isDaytonaI ? useProxyI : !!secretsProxyUrl);
 
     // ── Exec 1: Write infra files (bridge, config, agents) ──
     // Config goes under HOME. Bridge files go under bridgeDir which for the
