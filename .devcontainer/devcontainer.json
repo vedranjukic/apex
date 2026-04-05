@@ -12,6 +12,10 @@
     }
   },
 
+  "containerEnv": {
+    "PATH": "/root/.cargo/bin:${containerEnv:PATH}"
+  },
+
   "customizations": {
     "vscode": {
       "extensions": [
@@ -19,7 +23,8 @@
         "esbenp.prettier-vscode",
         "ms-azuretools.vscode-docker",
         "mtxr.sqltools",
-        "mtxr.sqltools-driver-pg"
+        "mtxr.sqltools-driver-pg",
+        "rust-lang.rust-analyzer"
       ],
       "settings": {
         "editor.defaultFormatter": "esbenp.prettier-vscode",

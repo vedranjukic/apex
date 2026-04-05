@@ -197,6 +197,27 @@ async function connectAndRequest(
 
 // ── Tests ────────────────────────────────────────────
 
+// Clean up stale test secrets and verify the proxy is alive.
+beforeAll(async () => {
+  await deleteSecretsForDomain('httpbin.org');
+  await deleteSecretsForDomain('nonexistent.invalid');
+  await new Promise((r) => setTimeout(r, 1000));
+
+  // Verify the MITM proxy is accepting TCP connections
+  const net = require('net') as typeof import('net');
+  await new Promise<void>((resolve, reject) => {
+    const sock = net.connect(Number(proxyPort), host, () => {
+      sock.destroy();
+      resolve();
+    });
+    sock.on('error', (err: Error) => reject(new Error(
+      `MITM proxy not reachable on ${proxyHost}: ${err.message}. ` +
+        'Ensure the API server started the Rust proxy successfully.',
+    )));
+    sock.setTimeout(5000, () => { sock.destroy(); reject(new Error('Proxy connect timeout')); });
+  });
+}, 15_000);
+
 describe('Secrets CRUD API', () => {
   let createdId: string;
 
@@ -273,7 +294,7 @@ describe('Secrets MITM Proxy', () => {
       description: 'E2E proxy test',
     });
     secretId = created.id;
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 1000));
   });
 
   afterAll(async () => {
@@ -339,7 +360,7 @@ describe('Secrets Proxy — Auth Types', () => {
       authType: 'x-api-key',
     });
     secretIds.push(created.id);
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 1000));
 
     const response = await connectAndRequest('httpbin.org', 'GET', '/headers', {
       Accept: 'application/json',
@@ -362,7 +383,7 @@ describe('Secrets Proxy — Auth Types', () => {
       authType: 'basic',
     });
     secretIds.push(created.id);
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 1000));
 
     const response = await connectAndRequest('httpbin.org', 'GET', '/headers', {
       Accept: 'application/json',
@@ -386,7 +407,7 @@ describe('Secrets Proxy — Auth Types', () => {
       authType: 'header:X-Custom-Auth',
     });
     secretIds.push(created.id);
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 1000));
 
     const response = await connectAndRequest('httpbin.org', 'GET', '/headers', {
       Accept: 'application/json',
@@ -412,7 +433,7 @@ describe('Secrets Proxy — Request Body', () => {
       authType: 'bearer',
     });
     secretId = created.id;
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 1000));
   });
 
   afterAll(async () => {
@@ -469,7 +490,7 @@ describe('Secrets Proxy — Concurrency', () => {
       authType: 'bearer',
     });
     secretId = created.id;
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 1000));
   });
 
   afterAll(async () => {
@@ -513,7 +534,7 @@ describe('Secrets Proxy — Edge Cases', () => {
       authType: 'bearer',
     });
     secretIds.push(created.id);
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 1000));
 
     const certs: tls.PeerCertificate[] = [];
 
@@ -547,7 +568,7 @@ describe('Secrets Proxy — Edge Cases', () => {
       authType: 'bearer',
     });
     secretIds.push(created.id);
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 1000));
 
     const responseA = await connectAndRequest('httpbin.org', 'GET', '/headers', {
       Accept: 'application/json',
@@ -558,7 +579,7 @@ describe('Secrets Proxy — Edge Cases', () => {
 
     // Update to value B
     await axios.put(`/api/secrets/${created.id}`, { value: 'value-B' });
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 1000));
 
     const responseB = await connectAndRequest('httpbin.org', 'GET', '/headers', {
       Accept: 'application/json',
@@ -579,7 +600,7 @@ describe('Secrets Proxy — Edge Cases', () => {
       authType: 'bearer',
     });
     secretIds.push(created.id);
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 1000));
 
     const socket = await proxyConnect('nonexistent.invalid', 443);
     const tlsSocket = await tlsHandshake(socket, 'nonexistent.invalid', false);
@@ -605,7 +626,7 @@ describe('Secrets Proxy — Edge Cases', () => {
       authType: 'bearer',
     });
     secretIds.push(created.id);
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 1000));
 
     // Send a plain HTTP proxy request (not CONNECT)
     const response = await new Promise<{ statusCode: number; body: string }>((resolve, reject) => {

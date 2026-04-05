@@ -7,7 +7,6 @@ export { getBridgeScript } from './lib/bridge-script.js';
 export { getMcpTerminalScript } from './lib/mcp-terminal-script.js';
 export { getMcpLspScript } from './lib/mcp-lsp-script.js';
 export { getLlmProxyServiceScript } from './lib/llm-proxy-service-script.js';
-export { getCombinedProxyServiceScript } from './lib/combined-proxy-service-script.js';
 
 // Sandbox provider abstraction
 export { createSandboxProvider } from './lib/providers/index.js';

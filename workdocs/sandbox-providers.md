@@ -80,9 +80,9 @@ Wraps the `@daytonaio/sdk`. Creates sandboxes from **snapshots** (pre-built imag
 
 ### LLM Proxy Sandbox
 
-Daytona cloud sandboxes cannot reach a locally-running API server, so a dedicated **proxy sandbox** runs the LLM API key proxy on Daytona itself. See the "LLM API Key Proxy" section in `workdocs/architecture-overview.md` for the full design.
+Daytona cloud sandboxes cannot reach a locally-running API server, so a dedicated **proxy sandbox** runs the LLM API key proxy and MITM secrets proxy on Daytona itself. See the "LLM API Key Proxy" and "Secrets Proxy" sections in `workdocs/architecture-overview.md` for the full design.
 
-The proxy sandbox uses a minimal Docker image (`images/proxy/Dockerfile`) containing only Node.js, curl, and the Daytona daemon. The snapshot name defaults to the regular sandbox snapshot but can be overridden via the `PROXY_SANDBOX_SNAPSHOT` setting.
+The proxy sandbox runs the Rust `apex-proxy` binary (cross-compiled for `x86_64-unknown-linux-musl`), which is uploaded to the sandbox at creation time. The Docker image (`images/proxy/Dockerfile`) uses a multi-stage build with a minimal Debian runtime. The snapshot name defaults to the regular sandbox snapshot but can be overridden via the `PROXY_SANDBOX_SNAPSHOT` setting.
 
 Key settings persisted in the DB: `LLM_PROXY_SANDBOX_ID`, `LLM_PROXY_AUTH_TOKEN`, `LLM_PROXY_URL`, `LLM_PROXY_KEYS_HASH`.
 

@@ -18,12 +18,12 @@
     "desktop:package": "npx nx build @apex/api && npx nx build @apex/dashboard && node scripts/build-desktop.js --env stable",
     "test:agent-retry": "cd apps/api && APEX_TEST_AGENT_TIMEOUT_MS=100 npx vitest run",
     "test:bridge-adapters": "cd libs/orchestrator && npx vitest run",
-    "test:agent-retry-e2e": "APEX_E2E_TEST=1 npx nx e2e @apex/api-e2e --testPathPattern=agent-retry",
-    "test:multi-agent-e2e": "npx nx e2e @apex/api-e2e --testPathPattern=multi-agent.spec",
-    "test:ask-user-e2e": "npx nx e2e @apex/api-e2e --testPathPattern=ask-user",
-    "test:secrets-proxy-e2e": "npx nx e2e @apex/api-e2e --testPathPattern=secrets-proxy.spec",
-    "test:secrets-proxy-daytona-e2e": "DAYTONA_API_KEY=${DAYTONA_API_KEY_E2E:-$DAYTONA_API_KEY} npx nx e2e @apex/api-e2e --testPathPattern=secrets-proxy-daytona",
-    "test:agent-interaction-e2e": "DAYTONA_API_KEY=${DAYTONA_API_KEY_E2E:-$DAYTONA_API_KEY} npx nx e2e @apex/api-e2e --testPathPattern=agent-interaction --testPathIgnorePatterns='multi-agent|ask-user|agent-retry|secrets-proxy'"
+    "test:agent-retry-e2e": "APEX_E2E_TEST=1 npx nx e2e @apex/api-e2e -- --testPathPatterns=agent-retry",
+    "test:multi-agent-e2e": "npx nx e2e @apex/api-e2e -- --testPathPatterns=multi-agent.spec",
+    "test:ask-user-e2e": "npx nx e2e @apex/api-e2e -- --testPathPatterns=ask-user",
+    "test:secrets-proxy-e2e": "npx nx e2e @apex/api-e2e -- --testPathPatterns='secrets-proxy\\.spec'",
+    "test:secrets-proxy-daytona-e2e": "DAYTONA_API_KEY=${DAYTONA_API_KEY_E2E:-$DAYTONA_API_KEY} npx nx e2e @apex/api-e2e -- --testPathPatterns=secrets-proxy-daytona",
+    "test:agent-interaction-e2e": "DAYTONA_API_KEY=${DAYTONA_API_KEY_E2E:-$DAYTONA_API_KEY} npx nx e2e @apex/api-e2e -- --testPathPatterns=agent-interaction --testPathIgnorePatterns='multi-agent|ask-user|agent-retry|secrets-proxy'"
   },
   "private": true,
   "dependencies": {

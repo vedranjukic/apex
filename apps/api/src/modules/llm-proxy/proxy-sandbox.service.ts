@@ -9,15 +9,16 @@
 
 import crypto from 'crypto';
 import { settingsService } from '../settings/settings.service';
+import * as fs from 'fs';
+import * as path from 'path';
 import { secretsService } from '../secrets/secrets.service';
 import { getCACertPem, getCAKeyPem } from '../secrets-proxy/ca-manager';
-import { getCombinedProxyServiceScript } from '@apex/orchestrator';
 import type { SandboxProvider, SandboxInstance } from '@apex/orchestrator';
 
 const PROXY_PORT = 3000;
 const MITM_PORT = 9340;
 const PORT_RELAY_PORT = 9341;
-const PROXY_DIR = '/home/daytona/proxy';
+const PROXY_BIN_PATH = '/home/daytona/apex-proxy';
 const HEALTH_MAX_ATTEMPTS = 30;
 const HEALTH_INTERVAL_MS = 1000;
 const SIGNED_URL_TTL_SECS = 86_400; // 24 hours (Daytona max)
@@ -36,7 +37,7 @@ export interface ProxySandboxInfo {
 }
 
 // Bump this when the combined proxy service script changes to force recreation
-const PROXY_SCRIPT_VERSION = '5';
+const PROXY_SCRIPT_VERSION = '7';
 
 function hashKeys(anthropicKey: string, openaiKey: string): string {
   return crypto
@@ -327,23 +328,41 @@ class ProxySandboxService {
   }
 
   private async installAndStart(sandbox: SandboxInstance, _authToken: string): Promise<void> {
-    await sandbox.fs.createFolder(PROXY_DIR, '755');
-
-    await sandbox.process.executeCommand(
-      `cd ${PROXY_DIR} && npm init -y && npm install ws node-forge`
-    );
-
-    const script = getCombinedProxyServiceScript(PROXY_PORT, MITM_PORT, PORT_RELAY_PORT);
-    await sandbox.fs.uploadFile(Buffer.from(script), `${PROXY_DIR}/proxy.cjs`);
+    const binaryBuf = this.loadLinuxBinary();
+    await sandbox.fs.uploadFile(binaryBuf, PROXY_BIN_PATH);
+    await sandbox.process.executeCommand(`chmod +x ${PROXY_BIN_PATH}`);
 
     const sessionId = `proxy-${Date.now()}`;
     await sandbox.process.createSession(sessionId);
     await sandbox.process.executeSessionCommand(sessionId, {
-      command: `cd ${PROXY_DIR} && node proxy.cjs > ${PROXY_DIR}/proxy.log 2>&1`,
+      command: `${PROXY_BIN_PATH} > /tmp/proxy.log 2>&1`,
       async: true,
     });
 
     await this.waitForHealth(sandbox);
+  }
+
+  private loadLinuxBinary(): Buffer {
+    const workspaceRoot = path.resolve(__dirname, '..', '..', '..', '..', '..');
+    const candidates = [
+      path.join(workspaceRoot, 'apps/proxy/target/x86_64-unknown-linux-musl/release/apex-proxy'),
+      path.join(workspaceRoot, 'apps/proxy/target/x86_64-unknown-linux-gnu/release/apex-proxy'),
+      '/usr/local/share/apex/apex-proxy-linux',
+    ];
+
+    for (const p of candidates) {
+      try {
+        return fs.readFileSync(p);
+      } catch {
+        // try next
+      }
+    }
+
+    throw new Error(
+      `Linux apex-proxy binary not found. Build with: ` +
+        `cd apps/proxy && CC_x86_64_unknown_linux_musl=x86_64-linux-musl-gcc ` +
+        `cargo build --release --target x86_64-unknown-linux-musl`,
+    );
   }
 
   private async waitForHealth(sandbox: SandboxInstance): Promise<void> {
