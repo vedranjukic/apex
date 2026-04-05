@@ -280,10 +280,10 @@ describeE2e('Agent interaction E2E (real sandbox)', () => {
 
   // ── Step 6: Resume stopped session ─────────────────
 
-  it('should resume the stopped thread with a new prompt (fork+continue)', async () => {
+  it('should resume the stopped thread with a new prompt', async () => {
     // After stop_agent, sending a new prompt on the same thread reuses the
-    // OC session. The bridge forks the session so the agent starts from a
-    // clean branch point instead of replaying the old counting task.
+    // same OC session. The agent sees the full history (including the aborted
+    // task) plus the new prompt and should follow the new instruction.
     const prompt = 'What is 7 + 3? Reply with just the number.';
 
     socket.send('send_prompt', {
@@ -308,7 +308,6 @@ describeE2e('Agent interaction E2E (real sandbox)', () => {
     const resultEvent = events.find((e) => e.type === 'result');
 
     // Accept either a proper result or at least some assistant output
-    // (the fork may take time and the result format varies)
     expect(assistantEvents.length + (resultEvent ? 1 : 0)).toBeGreaterThanOrEqual(1);
 
     if (resultEvent) {
