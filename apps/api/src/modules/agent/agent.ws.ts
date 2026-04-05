@@ -673,20 +673,24 @@ async function executeAgainstSandbox(
   let effectivePrompt = prompt;
   const priorMessages = (thread.messages || []).slice(0, -1);
   let contextFilePath: string | undefined;
-  // Inject conversation history only when recovering a lost session
-  // (agentSessionId is null). On startup, init() clears all session IDs
-  // so any follow-up on a completed thread correctly triggers recovery.
-  // When the OC session is alive (agentSessionId set), the agent already
-  // has full context — no injection needed.
-  if (!thread.agentSessionId && priorMessages.length > 0) {
-    const context = buildConversationContext(priorMessages as any);
-    if (context) {
-      effectivePrompt = `<conversation_history>\n${context}\n</conversation_history>\n\n${prompt}`;
+  const isSessionRecovery = !thread.agentSessionId;
+  if (priorMessages.length > 0) {
+    if (isSessionRecovery) {
+      const context = buildConversationContext(priorMessages as any);
+      if (context) {
+        effectivePrompt = `<conversation_history>\n${context}\n</conversation_history>\n\n${prompt}`;
+      }
+      try {
+        contextFilePath = await writeThreadContext(manager, project.sandboxId, threadId, priorMessages);
+        effectivePrompt += contextFileHint(contextFilePath);
+      } catch { /* best-effort */ }
+    } else {
+      // Session alive: silently update the context file so it stays current
+      // if the agent reads it (e.g., after OC compaction). No hint added.
+      try {
+        await writeThreadContext(manager, project.sandboxId, threadId, priorMessages);
+      } catch { /* best-effort */ }
     }
-    try {
-      contextFilePath = await writeThreadContext(manager, project.sandboxId, threadId, priorMessages);
-      effectivePrompt += contextFileHint(contextFilePath);
-    } catch { /* best-effort */ }
   }
 
   const doSend = () => Promise.race([
