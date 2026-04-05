@@ -21,7 +21,7 @@ import { secretsService, type SecretRecord } from '../secrets/secrets.service';
 import { settingsService } from '../settings/settings.service';
 import { generateDomainCert } from './ca-manager';
 
-const DEFAULT_PORT = 3001;
+const DEFAULT_PORT = 9350;
 
 let server: http.Server | null = null;
 

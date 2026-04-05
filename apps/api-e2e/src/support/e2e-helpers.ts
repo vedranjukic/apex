@@ -6,6 +6,7 @@
  */
 import axios from 'axios';
 import WebSocket from 'ws';
+import { execSync } from 'child_process';
 
 const host = process.env.HOST ?? 'localhost';
 const port = process.env.PORT ?? '6000';
@@ -340,6 +341,123 @@ export function waitForStatus(
 
     socket.on('agent_status', onStatus);
   });
+}
+
+// ── SSH sandbox exec ─────────────────────────────────
+
+export interface SshAccess {
+  sshUser: string;
+  sshHost: string;
+  sshPort: number;
+  sandboxId: string;
+  remotePath: string;
+  expiresAt: string;
+}
+
+/**
+ * Create an SSH access token for a project's sandbox via the Apex API.
+ * Returns connection details (user, host, port) for use with `execInSandbox`.
+ */
+export async function getSshAccess(projectId: string): Promise<SshAccess> {
+  const res = await axios.post(`/api/projects/${projectId}/ssh-access`);
+  expect([200, 201]).toContain(res.status);
+  return res.data;
+}
+
+/**
+ * Execute a command inside a Daytona sandbox via SSH and return clean stdout.
+ * No PTY noise, no escape codes — just the command's output.
+ * Throws with both stdout and stderr if the command fails.
+ */
+export function execInSandbox(
+  ssh: SshAccess,
+  command: string,
+  timeoutMs = 30_000,
+): string {
+  const sshCmd =
+    `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ` +
+    `-o LogLevel=ERROR -o ConnectTimeout=10 ` +
+    `-p ${ssh.sshPort} ${ssh.sshUser}@${ssh.sshHost} ${escapeShellArg(command)}`;
+  try {
+    return execSync(sshCmd, { encoding: 'utf-8', timeout: timeoutMs }).trim();
+  } catch (err: any) {
+    const stdout = (err.stdout ?? '').toString().trim();
+    const stderr = (err.stderr ?? '').toString().trim();
+    // Daytona SSH may close the channel with exit 255 even when the remote
+    // command succeeded and produced output. Treat it as success if we have stdout.
+    if (stdout && err.status === 255) {
+      return stdout;
+    }
+    throw new Error(
+      `SSH exec failed (exit ${err.status}): ${command}\n` +
+        (stdout ? `stdout: ${stdout}\n` : '') +
+        (stderr ? `stderr: ${stderr}` : ''),
+    );
+  }
+}
+
+/**
+ * Execute multiple commands in parallel inside a sandbox via async SSH.
+ * Uses child_process.exec (async) so commands actually run concurrently.
+ */
+export function execInSandboxParallel(
+  ssh: SshAccess,
+  commands: string[],
+  timeoutMs = 30_000,
+): Promise<string[]> {
+  const { exec } = require('child_process');
+  return Promise.all(
+    commands.map(
+      (command) =>
+        new Promise<string>((resolve, reject) => {
+          const sshCmd =
+            `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ` +
+            `-o LogLevel=ERROR -o ConnectTimeout=10 ` +
+            `-p ${ssh.sshPort} ${ssh.sshUser}@${ssh.sshHost} ${escapeShellArg(command)}`;
+          exec(sshCmd, { encoding: 'utf-8', timeout: timeoutMs }, (err: any, stdout: string, stderr: string) => {
+            if (err) {
+              // Daytona SSH may close with exit 255 even after successful output
+              if (stdout?.trim() && err.code === 255) {
+                resolve(stdout.trim());
+              } else {
+                reject(new Error(
+                  `SSH exec failed (exit ${err.code}): ${command}\n` +
+                    (stdout ? `stdout: ${stdout.trim()}\n` : '') +
+                    (stderr ? `stderr: ${stderr.trim()}` : ''),
+                ));
+              }
+            } else {
+              resolve(stdout.trim());
+            }
+          });
+        }),
+    ),
+  );
+}
+
+/**
+ * Wait until a command succeeds in the sandbox (retries with delay).
+ * Useful for waiting until the bridge tunnel / CA cert are ready.
+ */
+export async function waitForSandboxReady(
+  ssh: SshAccess,
+  maxWaitMs = 60_000,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const result = execInSandbox(ssh, 'curl -sf -o /dev/null -w "%{http_code}" --max-time 5 https://example.com', 15_000);
+      if (result === '200') return;
+    } catch {
+      // not ready yet
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  throw new Error('Sandbox proxy/tunnel not ready after ' + maxWaitMs + 'ms');
+}
+
+function escapeShellArg(arg: string): string {
+  return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
 // ── Content block utilities ──────────────────────────

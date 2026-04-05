@@ -411,7 +411,7 @@ export interface OrchestratorConfig {
   proxyAuthToken?: string;
   /** PEM-encoded CA certificate for the MITM secrets proxy. */
   secretsProxyCaCert?: string;
-  /** Port the MITM secrets proxy listens on (default 3001). */
+  /** Port the MITM secrets proxy listens on (default 9350). */
   secretsProxyPort?: number;
   /** Base URL of the Apex API server for secrets proxy resolution.
    *  Separate from `proxyBaseUrl` because the LLM proxy may live on a
