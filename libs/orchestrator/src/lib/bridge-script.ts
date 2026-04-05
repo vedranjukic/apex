@@ -1787,8 +1787,6 @@ setInterval(() => {
 // upstream MITM proxy (via WS tunnel on Daytona or TCP on Docker/Apple).
 // Non-secret domains connect directly, bypassing the proxy entirely.
 const SELECTIVE_PROXY_PORT = 9339;
-const TUNNEL_CLIENT_PORT = 9351;
-var tunnelServiceRunning = false;
 const SECRETS_PROXY_UPSTREAM = process.env.SECRETS_PROXY_UPSTREAM || "";
 var secretDomains = new Set((process.env.SECRET_DOMAINS || "").split(",").filter(Boolean));
 
@@ -1796,50 +1794,10 @@ function isSecretDomain(host) {
   return secretDomains.has(host);
 }
 
-function startTunnelService() {
-  if (!TUNNEL_ENDPOINT_URL) return;
-
-  var tunnelBinPath = __dirname + "/apex-proxy";
-  try {
-    var fs = require("fs");
-    if (fs.existsSync(tunnelBinPath)) {
-      log("\\u{1F680}", "Starting Rust tunnel client: " + tunnelBinPath);
-      var child = require("child_process").spawn(tunnelBinPath, [], {
-        env: {
-          ...process.env,
-          TUNNEL_ENDPOINT_URL: TUNNEL_ENDPOINT_URL,
-          TUNNEL_CLIENT_PORT: String(TUNNEL_CLIENT_PORT),
-          RUST_LOG: "apex_proxy=info",
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      child.stdout.on("data", function (d) { log("\\u{1F680}", "[tunnel-rust] " + d.toString().trim()); });
-      child.stderr.on("data", function (d) { log("\\u{1F680}", "[tunnel-rust] " + d.toString().trim()); });
-      tunnelServiceRunning = true;
-      child.on("exit", function (code) {
-        tunnelServiceRunning = false;
-        if (code !== 0) log("\\u{274C}", "Rust tunnel client exited with code " + code);
-      });
-      child.on("error", function (err) {
-        tunnelServiceRunning = false;
-        log("\\u{274C}", "Rust tunnel client failed: " + err.message);
-      });
-      return;
-    }
-  } catch (e) {
-    log("\\u{26A0}", "Rust tunnel binary check failed: " + e.message);
-  }
-}
-
 function tunnelToUpstream(host, port, clientSocket, head) {
   if (!TUNNEL_ENDPOINT_URL) {
     clientSocket.write("HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n");
     clientSocket.end();
-    return;
-  }
-
-  if (tunnelServiceRunning) {
-    tunnelViaLocalService(host, port, clientSocket, head);
     return;
   }
 
@@ -1927,49 +1885,6 @@ function tunnelToUpstream(host, port, clientSocket, head) {
     clientSocket.write("HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n");
     clientSocket.end();
   }
-}
-
-function tunnelViaLocalService(host, port, clientSocket, head) {
-  var upstream = net.connect(TUNNEL_CLIENT_PORT, "127.0.0.1", function () {
-    var connectReq = "CONNECT " + host + ":" + port + " HTTP/1.1\\r\\nHost: " + host + ":" + port + "\\r\\n\\r\\n";
-    upstream.write(connectReq);
-  });
-
-  var gotResponse = false;
-  var responseBuf = Buffer.alloc(0);
-
-  upstream.on("data", function onData(chunk) {
-    if (!gotResponse) {
-      responseBuf = Buffer.concat([responseBuf, chunk]);
-      var idx = responseBuf.indexOf("\\r\\n\\r\\n");
-      if (idx === -1) return;
-      gotResponse = true;
-      var statusLine = responseBuf.subarray(0, idx).toString();
-      if (!statusLine.includes("200")) {
-        log("\\u{274C}", "Tunnel service rejected CONNECT for " + host + ": " + statusLine);
-        clientSocket.write("HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n");
-        clientSocket.end();
-        upstream.destroy();
-        return;
-      }
-      clientSocket.write("HTTP/1.1 200 Connection Established\\r\\n\\r\\n");
-      var leftover = responseBuf.subarray(idx + 4);
-      if (leftover.length > 0) clientSocket.write(leftover);
-      if (head && head.length > 0) upstream.write(head);
-      upstream.removeListener("data", onData);
-      upstream.pipe(clientSocket);
-      clientSocket.pipe(upstream);
-      return;
-    }
-  });
-
-  upstream.on("error", function (err) {
-    log("\\u{274C}", "tunnelViaLocalService error for " + host + ": " + err.message);
-    try { clientSocket.write("HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n"); clientSocket.end(); } catch (e) {}
-  });
-  clientSocket.on("error", function () { upstream.destroy(); });
-  clientSocket.setTimeout(300000);
-  clientSocket.on("timeout", function () { clientSocket.destroy(); upstream.destroy(); });
 }
 
 function chainToUpstream(host, port, clientSocket, head) {
@@ -2116,7 +2031,6 @@ function startSelectiveProxy() {
 }
 
 if (TUNNEL_ENDPOINT_URL || SECRETS_PROXY_UPSTREAM) {
-  startTunnelService();
   startSelectiveProxy();
 }
 
