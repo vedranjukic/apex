@@ -2,6 +2,7 @@ import { Elysia } from 'elysia';
 import { secretsService } from './secrets.service';
 import { usersService } from '../users/users.service';
 import { projectsService } from '../projects/projects.service';
+import { restartSecretsProxy } from '../secrets-proxy/secrets-proxy';
 
 function maskValue(value: string): string {
   if (!value) return '';
@@ -27,8 +28,9 @@ export const secretsRoutes = new Elysia({ prefix: '/api/secrets' })
       projectId?: string | null;
     };
     const record = await secretsService.create(userId, input);
-    await projectsService.reinitSandboxManager();
+    projectsService.reinitSandboxManager().catch(() => {});
     projectsService.updateSecretDomainsOnManagers().catch(() => {});
+    restartSecretsProxy().catch(() => {});
     return { ...record, value: maskValue(record.value) };
   })
   .put('/:id', async ({ params, body }) => {
@@ -54,6 +56,7 @@ export const secretsRoutes = new Elysia({ prefix: '/api/secrets' })
     if (updates.domain !== undefined) {
       projectsService.updateSecretDomainsOnManagers().catch(() => {});
     }
+    restartSecretsProxy().catch(() => {});
     return { ...record, value: maskValue(record.value) };
   })
   .delete('/:id', async ({ params }) => {
@@ -65,7 +68,8 @@ export const secretsRoutes = new Elysia({ prefix: '/api/secrets' })
         headers: { 'Content-Type': 'application/json' },
       });
     }
-    await projectsService.reinitSandboxManager();
+    projectsService.reinitSandboxManager().catch(() => {});
     projectsService.updateSecretDomainsOnManagers().catch(() => {});
+    restartSecretsProxy().catch(() => {});
     return { ok: true };
   });

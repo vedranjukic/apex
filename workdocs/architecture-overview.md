@@ -190,19 +190,20 @@ Container (OpenCode) → http://<host-ip>:6000/llm-proxy/anthropic/v1/messages
 Regular Sandbox (OpenCode) → https://<proxy-sandbox-preview-url>/llm-proxy/anthropic/v1/messages
                                          (x-api-key: <auth-token>)
                                     ↓
-                        Proxy Sandbox (combined-proxy.cjs on port 3000)
+                        Proxy Sandbox (apex-proxy binary on port 3000)
                                     ↓
                         Verifies auth token, reads real key from env
                                     ↓
                         https://api.anthropic.com/v1/messages (with real x-api-key header)
 ```
 
-A **proxy sandbox** is a lightweight Daytona sandbox that runs the **combined proxy service** — both LLM proxy and MITM secrets proxy functionality. One proxy sandbox is shared across all regular Daytona sandboxes in the same application instance. It is created automatically at startup and lazily re-created if it becomes unhealthy.
+A **proxy sandbox** is a lightweight Daytona sandbox that runs the **`apex-proxy` Rust binary** — a single statically-linked binary providing LLM proxy, MITM secrets proxy, and WebSocket tunnel functionality. One proxy sandbox is shared across all regular Daytona sandboxes in the same application instance. It is created automatically at startup and lazily re-created if it becomes unhealthy. The binary is cross-compiled for `x86_64-unknown-linux-musl` and uploaded to the sandbox at creation time.
 
-**Combined Services in Proxy Sandbox:**
-- **LLM Proxy** (port 3000) — existing API key proxying functionality
-- **MITM Secrets Proxy** (port 9340, internal) — TLS termination with secrets injection
+**Services in Proxy Sandbox (single `apex-proxy` binary):**
+- **LLM Proxy** (port 3000) — API key proxying functionality + `/health` endpoint
+- **MITM Secrets Proxy** (port 9340, internal) — TLS termination with secrets injection, ECDSA P256 domain certs signed by RSA CA
 - **WebSocket Tunnel Bridge** (`/tunnel` endpoint) — enables TCP-over-WebSocket tunneling for HTTPS proxy connections from regular sandboxes
+- **Port Relay Bridge** (`/port-relay/:port` endpoint) — arbitrary TCP port forwarding via WebSocket
 
 **Security:** The proxy sandbox's Daytona preview URL contains the sandbox UUID (hard to guess). Each application instance generates a unique auth token (e.g. `sk-proxy-<random-hex>`) that regular sandboxes send as their "API key". The proxy verifies this token before forwarding requests. Real API keys never leave the proxy sandbox.
 
@@ -231,11 +232,11 @@ The proxy URL resolution in `sandbox-manager.ts` adapts to the sandbox provider:
 |---|---|
 | `apps/api/src/modules/llm-proxy/llm-proxy.routes.ts` | Elysia streaming reverse proxy for local providers — matches `/llm-proxy/(anthropic\|openai)/*`, injects real API keys from `settingsService` |
 | `apps/api/src/modules/llm-proxy/proxy-sandbox.service.ts` | Manages the Daytona proxy sandbox lifecycle — create, health check, destroy, settings persistence |
-| `libs/orchestrator/src/lib/llm-proxy-service-script.ts` | Generates the self-contained proxy service script uploaded into the proxy sandbox |
+| `apps/proxy/` | Rust `apex-proxy` binary — MITM proxy, LLM proxy, WebSocket tunnel, port relay (cross-compiled for Linux musl, uploaded to Daytona proxy sandbox) |
 | `libs/orchestrator/src/lib/sandbox-manager.ts` | `resolveProxyBaseUrl()` — adapts proxy URL per provider; `updateProxyConfig()` — hot-updates proxy URL; `restartBridge()` / `installBridge()` — writes `.env` with proxy URLs + auth tokens |
 | `apps/api/src/modules/projects/projects.service.ts` | `ensureDaytonaProxy()` — lazy health check before Daytona operations; integrates proxy sandbox into `initSandboxManagers()` |
 | `apps/api/src/modules/settings/settings.service.ts` | Stores API keys and proxy sandbox metadata (`LLM_PROXY_SANDBOX_ID`, `LLM_PROXY_AUTH_TOKEN`, etc.) |
-| `images/proxy/Dockerfile` | Minimal Docker image for the proxy sandbox (Node.js + daytona-daemon) |
+| `images/proxy/Dockerfile` | Multi-stage Docker image for the proxy sandbox (Rust build + minimal runtime + daytona-daemon) |
 
 ## Secrets Proxy (MITM)
 
@@ -316,7 +317,8 @@ Each secret specifies how the proxy injects the credential:
 1. On first API server startup, `ca-manager.ts` generates an RSA 2048-bit CA keypair + self-signed certificate using `node-forge`
 2. CA cert + key are persisted in the `settings` table (`PROXY_CA_CERT`, `PROXY_CA_KEY`)
 3. During `installBridge()` and `restartBridge()`, the CA cert is uploaded to the container and `update-ca-certificates` is run
-4. Per-domain certificates are generated on-the-fly by the proxy and cached in memory
+4. The CA PEM is passed to the Rust `apex-proxy` binary via `CA_CERT_PEM` / `CA_KEY_PEM` env vars. The binary converts PKCS#1 RSA keys to PKCS#8 format for ring/rcgen compatibility.
+5. Per-domain certificates use ECDSA P256 keys (fast generation) signed by the RSA CA, and are cached in a lock-free `DashMap`
 
 ### Key Files
 
@@ -326,23 +328,26 @@ Each secret specifies how the proxy injects the credential:
 | `apps/api/src/modules/secrets/secrets.service.ts` | CRUD + domain lookup for secrets (SQLite) |
 | `apps/api/src/modules/secrets/secrets.routes.ts` | Elysia REST API under `/api/secrets` |
 
-#### MITM Proxy - Local/Container Providers  
+#### MITM Proxy — Rust Binary (`apps/proxy/`)
 | File | Role |
 |---|---|
-| `apps/api/src/modules/secrets-proxy/secrets-proxy.ts` | MITM proxy server — CONNECT handler, selective TLS interception, auth injection, transparent tunnel fallback |
+| `apps/proxy/src/main.rs` | Entry point — loads config, starts enabled services (MITM, LLM proxy, tunnel, port relay) |
+| `apps/proxy/src/config.rs` | Environment config with `ArcSwap<Vec<Secret>>` for lock-free hot-reload |
+| `apps/proxy/src/mitm/mod.rs` | TCP listener, CONNECT handler (MITM vs transparent tunnel), plain HTTP proxy, `/internal/reload-secrets` endpoint |
+| `apps/proxy/src/mitm/cert.rs` | CA loading (PKCS#1→PKCS#8), ECDSA P256 domain cert generation, `DashMap` cache |
+| `apps/proxy/src/mitm/auth.rs` | `buildAuthHeader()` — bearer, x-api-key, basic, header:* |
+| `apps/proxy/src/llm.rs` | LLM reverse proxy, `/health` endpoint, WebSocket upgrade routing |
+| `apps/proxy/src/tunnel.rs` | `/tunnel` WebSocket-to-TCP bridge (Daytona tunnel) |
+| `apps/proxy/src/port_relay.rs` | `/port-relay/:port` WebSocket-to-TCP bridge |
 
-#### MITM Proxy - Daytona Provider (TCP-over-WebSocket)
+#### TypeScript Integration
 | File | Role |
 |---|---|
-| `libs/orchestrator/src/lib/combined-proxy-service-script.ts` | Combined LLM proxy + MITM proxy + WebSocket tunnel bridge for Daytona proxy sandbox |
-| `libs/orchestrator/src/lib/bridge-script.ts` | Enhanced with TCP-to-WebSocket tunnel client on port 9339 |
-| `libs/orchestrator/src/lib/sandbox-manager.ts` | Daytona-specific proxy configuration (localhost:9339, tunnel URL) |
-| `apps/api/src/modules/llm-proxy/proxy-sandbox.service.ts` | Updated to deploy combined proxy service |
-| `apps/api/src/modules/secrets-proxy/ca-manager.ts` | CA keypair generation, persistence, per-domain certificate generation + caching |
-| `apps/api/src/database/schema.ts` | `secrets` table definition |
-| `libs/orchestrator/src/lib/sandbox-manager.ts` | CA cert upload, `HTTPS_PROXY` env injection, secret placeholder env vars |
-| `libs/orchestrator/src/lib/mcp-terminal-script.ts` | `list_secrets` MCP tool |
-| `libs/orchestrator/src/lib/bridge-script.ts` | `/internal/list-secrets` bridge endpoint |
+| `apps/api/src/modules/secrets-proxy/secrets-proxy.ts` | Spawns the Rust binary as a child process; hot-reloads secrets via `/internal/reload-secrets` |
+| `apps/api/src/modules/secrets-proxy/ca-manager.ts` | CA keypair generation + persistence (Node.js side, passes PEM to Rust binary) |
+| `apps/api/src/modules/llm-proxy/proxy-sandbox.service.ts` | Uploads cross-compiled Linux binary to Daytona proxy sandbox |
+| `libs/orchestrator/src/lib/bridge-script.ts` | TCP-to-WebSocket tunnel client on port 9339 |
+| `libs/orchestrator/src/lib/sandbox-manager.ts` | Daytona proxy config (localhost:9339, tunnel URL), CA cert upload |
 | `apps/dashboard/src/pages/secrets-page.tsx` | Secrets management UI at `/secrets` |
 
 ## Preview Proxy (Local Providers)

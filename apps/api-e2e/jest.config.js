@@ -13,6 +13,9 @@ module.exports = {
   globalTeardown: '<rootDir>/src/support/global-teardown.ts',
   setupFiles: ['<rootDir>/src/support/test-setup.ts'],
   testEnvironment: 'node',
+  // Run test files sequentially — proxy tests modify shared state (secrets DB)
+  // and parallel execution causes cross-contamination between suites.
+  maxWorkers: 1,
   testMatch: [
     '**/?(*.)+(spec|test).?([mc])[jt]s?(x)',
     '**/*.e2e-spec.[jt]s?(x)',

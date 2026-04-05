@@ -127,18 +127,17 @@ For domains **without** secrets, the proxy acts as a transparent TCP tunnel (no 
 
 ### Proxy Server
 
-#### Local/Container Implementation (`apps/api/src/modules/secrets-proxy/secrets-proxy.ts`)
+#### Implementation — Rust `apex-proxy` binary (`apps/proxy/`)
 
-- **Port**: 9350 (default, override with `SECRETS_PROXY_PORT`)
-- **CONNECT handling (HTTPS)**: Parses host from CONNECT request. If `findByDomain(host)` returns no rows → transparent TCP tunnel. If rows exist → MITM path with dynamic TLS cert.
+Both host-side and Daytona deployments use the same Rust binary (`apex-proxy`), cross-compiled for macOS (host) and Linux musl (Daytona sandbox).
+
+- **Port**: 9350 (host, override with `SECRETS_PROXY_PORT`) / 9340 (Daytona, internal)
+- **CONNECT handling (HTTPS)**: Parses host from CONNECT request. No secret → transparent TCP tunnel via `tokio::io::copy_bidirectional`. Secret found → MITM: TLS termination with ECDSA P256 domain cert (signed by RSA CA), auth injection, upstream forwarding via `reqwest`.
 - **Plain HTTP proxy**: Same domain lookup for `http://` / `https://` absolute URLs.
-
-#### Daytona Implementation
-
-**Combined Proxy Service** (`libs/orchestrator/src/lib/combined-proxy-service-script.ts`):
-- **LLM Proxy** (port 3000) - existing API key proxying functionality
-- **MITM Proxy** (port 9340, internal) - secrets injection with TLS termination
-- **WebSocket Tunnel Bridge** (`/tunnel` endpoint) - converts WebSocket frames to TCP
+- **Hot-reload**: `POST /internal/reload-secrets` accepts updated SECRETS_JSON without process restart (uses `arc-swap` for lock-free config updates).
+- **LLM Proxy** (port 3000, Daytona only) — API key proxying + `/health` endpoint
+- **WebSocket Tunnel Bridge** (`/tunnel` endpoint, Daytona only) — converts WebSocket frames to TCP
+- **Port Relay Bridge** (`/port-relay/:port`, Daytona only) — arbitrary TCP port forwarding
 
 **Bridge Script Enhancement** (`libs/orchestrator/src/lib/bridge-script.ts`):
 - **TCP-to-WebSocket client** on port 9339 accepting proxy connections
@@ -206,20 +205,15 @@ Flow: Agent calls `list_secrets` → MCP server calls bridge `/internal/list-sec
 | `apps/dashboard/src/api/client.ts` | `secretsApi` client |
 | `apps/api/src/modules/projects/projects.service.ts` | `reinitSandboxManager()` on secret create/delete; placeholder env var generation |
 
-### MITM Proxy - Local/Container Providers
+### MITM Proxy — Rust Binary
 | File | Role |
 |---|---|
-| `apps/api/src/modules/secrets-proxy/secrets-proxy.ts` | MITM proxy server — CONNECT handler, selective TLS interception, auth injection, transparent tunnel fallback |
-| `apps/api/src/modules/secrets-proxy/ca-manager.ts` | CA keypair generation, persistence, per-domain certificate generation + caching |
-
-### MITM Proxy - Daytona Provider (TCP-over-WebSocket Tunnel)
-| File | Role |
-|---|---|
-| `libs/orchestrator/src/lib/combined-proxy-service-script.ts` | **NEW** - Combined LLM proxy + MITM proxy + WebSocket tunnel bridge for Daytona |
-| `apps/api/src/modules/llm-proxy/proxy-sandbox.service.ts` | Updated to deploy combined proxy service with secrets and CA certificates |
-| `libs/orchestrator/src/lib/bridge-script.ts` | Enhanced with TCP-to-WebSocket tunnel client on port 9339 |
-| `libs/orchestrator/src/lib/sandbox-manager.ts` | Updated for Daytona: HTTPS_PROXY=localhost:9339, tunnel URL passing |
-| `libs/orchestrator/src/index.ts` | Exports combined proxy service script |
+| `apps/proxy/` | Rust crate — `apex-proxy` binary with MITM, LLM proxy, tunnel, port relay (cross-compiled for macOS + Linux musl) |
+| `apps/api/src/modules/secrets-proxy/secrets-proxy.ts` | Spawns Rust binary on host, hot-reloads secrets via `/internal/reload-secrets` |
+| `apps/api/src/modules/secrets-proxy/ca-manager.ts` | CA keypair generation + persistence (passes PEM to Rust binary) |
+| `apps/api/src/modules/llm-proxy/proxy-sandbox.service.ts` | Uploads cross-compiled Linux binary to Daytona proxy sandbox |
+| `libs/orchestrator/src/lib/bridge-script.ts` | TCP-to-WebSocket tunnel client on port 9339 |
+| `libs/orchestrator/src/lib/sandbox-manager.ts` | Daytona: HTTPS_PROXY=localhost:9339, tunnel URL, CA cert upload |
 
 ### Agent Integration
 | File | Role |

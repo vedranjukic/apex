@@ -49,26 +49,28 @@ Regular Sandbox (Daytona)                    Proxy Sandbox (Daytona)
 
 ## Implementation Components
 
-### 1. Combined Proxy Service (`libs/orchestrator/src/lib/combined-proxy-service-script.ts`)
+### 1. Rust Proxy Binary (`apps/proxy/`)
 
-**NEW** - Runs inside Daytona proxy sandbox, combines three services:
+Runs inside the Daytona proxy sandbox as a single statically-linked binary (`apex-proxy`), cross-compiled for `x86_64-unknown-linux-musl`. Uploaded to the sandbox at creation time by `proxy-sandbox.service.ts`. Combines four services:
 
 #### LLM Proxy (port 3000)
-- Existing API key proxying functionality for Anthropic/OpenAI
-- Validates auth tokens from regular sandboxes
-- Routes: `/llm-proxy/anthropic/*`, `/llm-proxy/openai/*`
+- API key proxying for Anthropic/OpenAI with auth token verification
+- Routes: `/llm-proxy/anthropic/*`, `/llm-proxy/openai/*`, `/health`
 
 #### MITM Secrets Proxy (port 9340, internal only)
-- TLS termination with dynamic certificates (signed by Apex CA)
-- Secrets injection based on domain lookup
-- Transparent tunneling for non-secret domains
+- TLS termination with ECDSA P256 domain certificates (signed by RSA CA, cached in `DashMap`)
+- Secrets injection based on domain lookup (loaded from `SECRETS_JSON` env var)
+- Transparent tunneling for non-secret domains (`tokio::io::copy_bidirectional`)
 - Auth types: bearer, x-api-key, basic, header:custom
+- Hot-reload via `POST /internal/reload-secrets`
 
-#### WebSocket-to-TCP Bridge (/tunnel endpoint)
-- Accepts WebSocket connections at `/tunnel`
+#### WebSocket-to-TCP Tunnel Bridge (`/tunnel` endpoint)
+- Accepts WebSocket upgrade connections at `/tunnel`
 - Creates TCP connection to MITM proxy (localhost:9340)
-- Binary frame handling for raw TCP data
-- Backpressure management and connection cleanup
+- Binary frame handling via `tokio-tungstenite`
+
+#### Port Relay Bridge (`/port-relay/:port` endpoint)
+- WebSocket-to-TCP bridge for arbitrary localhost ports
 
 ### 2. Bridge Script Enhancement (`libs/orchestrator/src/lib/bridge-script.ts`)
 
@@ -96,16 +98,11 @@ Regular Sandbox (Daytona)                    Proxy Sandbox (Daytona)
 
 ### 4. Proxy Sandbox Service (`apps/api/src/modules/llm-proxy/proxy-sandbox.service.ts`)
 
-**UPDATED** - Deploy combined proxy service instead of LLM-only:
+**UPDATED** - Uploads the cross-compiled Rust binary to the proxy sandbox:
 
-- **Combined Script** - Uses `getCombinedProxyServiceScript()` 
-- **Environment Variables** - Includes secrets JSON, CA cert/key, GitHub token
-- **Dependencies** - Installs WebSocket library (`ws` package)
-- **Health Check** - Updated endpoint returns status of all three services
-
-### 5. Library Exports (`libs/orchestrator/src/index.ts`)
-
-**UPDATED** - Export combined proxy service script function
+- **Binary Upload** - Reads `apps/proxy/target/x86_64-unknown-linux-musl/release/apex-proxy` and uploads via `sandbox.fs.uploadFile()`
+- **Environment Variables** - Includes secrets JSON, CA cert/key, GitHub token, port config
+- **Health Check** - `curl localhost:3000/health` verifies all services running
 
 ## Technical Features
 
@@ -243,16 +240,13 @@ netstat -ln | grep 9339
 - **Agent Integration** - `list_secrets` MCP tool works unchanged
 - **Environment Variables** - Same placeholder mechanism for SDK initialization
 
-## Files Modified/Created
+## Key Files
 
-### New Files
-- `libs/orchestrator/src/lib/combined-proxy-service-script.ts` - Combined proxy service
-- `workdocs/tcp-over-websocket-tunnel.md` - This documentation
-
-### Modified Files  
-- `libs/orchestrator/src/lib/bridge-script.ts` - Added TCP-to-WebSocket tunnel client
-- `libs/orchestrator/src/lib/sandbox-manager.ts` - Daytona proxy configuration  
-- `apps/api/src/modules/llm-proxy/proxy-sandbox.service.ts` - Deploy combined service
-- `libs/orchestrator/src/index.ts` - Export combined proxy script
-- `workdocs/secrets.md` - Updated with tunnel architecture
-- `workdocs/architecture-overview.md` - Updated LLM proxy and secrets proxy sections
+| File | Role |
+|------|------|
+| `apps/proxy/` | Rust crate — `apex-proxy` binary (MITM + LLM proxy + tunnel + port relay) |
+| `apps/api/src/modules/secrets-proxy/secrets-proxy.ts` | Spawns Rust binary on host; hot-reloads secrets |
+| `apps/api/src/modules/llm-proxy/proxy-sandbox.service.ts` | Uploads Linux binary to Daytona proxy sandbox |
+| `libs/orchestrator/src/lib/bridge-script.ts` | TCP-to-WebSocket tunnel client on port 9339 |
+| `libs/orchestrator/src/lib/sandbox-manager.ts` | Daytona proxy configuration (env vars, CA cert) |
+| `images/proxy/Dockerfile` | Multi-stage Docker image (Rust build + minimal runtime) |

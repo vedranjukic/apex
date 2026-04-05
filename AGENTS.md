@@ -82,4 +82,4 @@ User-defined API key secrets (Stripe, Twilio, etc.) are managed via a transparen
 
 Containers get `HTTPS_PROXY`/`HTTP_PROXY` env vars pointing at the proxy (or tunnel client for Daytona), the CA cert in the system trust store, and placeholder env vars (e.g. `STRIPE_KEY=sk-proxy-placeholder`) so SDKs can initialize. The agent can discover secret names (never values) via the `list_secrets` MCP tool.
 
-Key files: `apps/api/src/modules/secrets/`, `apps/api/src/modules/secrets-proxy/`, `libs/orchestrator/src/lib/combined-proxy-service-script.ts`, dashboard UI at `/secrets`. See the "Secrets Proxy (MITM)" section in `workdocs/architecture-overview.md` and `workdocs/tcp-over-websocket-tunnel.md` for the full design.
+Key files: `apps/api/src/modules/secrets/`, `apps/api/src/modules/secrets-proxy/`, `apps/proxy/` (Rust MITM binary), dashboard UI at `/secrets`. See the "Secrets Proxy (MITM)" section in `workdocs/architecture-overview.md` and `workdocs/tcp-over-websocket-tunnel.md` for the full design.

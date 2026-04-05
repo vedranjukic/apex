@@ -153,6 +153,7 @@ For local sandboxes: Docker installed, or macOS 26+ for Apple Container.
 
 - **Node.js** >= 18
 - **Bun** >= 1.0 (for the CLI)
+- **Rust** >= 1.82 (for the secrets proxy — `rustup` installs it)
 - **npm** >= 9
 - An API key for your model provider (Anthropic, OpenAI, or use free OpenCode Zen models)
 - For cloud sandboxes: a [Daytona](https://www.daytona.io/) account with API access
@@ -211,7 +212,8 @@ apex/
 │   ├── api/              # IDE backend — NestJS (REST + WebSocket)
 │   ├── dashboard/        # IDE frontend — React (Vite + Tailwind CSS 4 + Zustand)
 │   ├── desktop/          # Desktop app — Electrobun (Bun + system WebKit)
-│   └── cli/              # Apex CLI — Go (Cobra + Gorilla WebSocket)
+│   ├── cli/              # Apex CLI — Go (Cobra + Gorilla WebSocket)
+│   └── proxy/            # MITM secrets proxy — Rust (tokio + hyper + rustls)
 ├── libs/
 │   ├── orchestrator/     # Shared sandbox management, bridge scripts, provider interface
 │   └── shared/           # Shared TypeScript types and enums
@@ -226,6 +228,7 @@ apex/
 | `apps/dashboard` | IDE frontend — thread UI, terminal panel, file explorer, source control, Monaco editor with LSP, command palette, secrets page |
 | `apps/desktop` | Desktop app — Electrobun packaging, native window management, RPC bridge, settings UI |
 | `apps/cli` | Apex CLI — wraps remote agents for a local terminal experience, direct sandbox connection ([README](apps/cli/README.md)) |
+| `apps/proxy` | Rust MITM secrets proxy — HTTPS interception, auth injection, LLM key proxy, WebSocket tunnel (cross-compiled for macOS + Linux) |
 | `libs/orchestrator` | Sandbox lifecycle (Daytona/Docker/Apple Container/Local providers), bridge script generation, WebSocket protocol types |
 | `libs/shared` | TypeScript types and enums shared between API and dashboard |
 
@@ -234,11 +237,12 @@ apex/
 | Layer | Technology |
 |---|---|
 | **IDE Frontend** | React 19, Vite 7, Tailwind CSS 4, Zustand, xterm.js, Monaco Editor (monaco-languageclient + LSP), Lucide Icons |
-| **IDE Backend** | NestJS 11, TypeORM, SQLite (better-sqlite3), WebSocket, Elysia (LLM + secrets proxies) |
+| **IDE Backend** | NestJS 11, TypeORM, SQLite (better-sqlite3), WebSocket, Elysia (LLM proxy routes) |
 | **Desktop App** | Electrobun (Bun + system WebKit) |
 | **CLI** | Go, Cobra, Gorilla WebSocket, Daytona Go SDK |
+| **Secrets Proxy** | Rust (tokio, hyper, rustls, rcgen), cross-compiled for macOS + Linux musl |
 | **Sandbox** | Daytona / Docker / Apple Container / Local, Node.js bridge, OpenCode, node-pty, MCP Terminal Server |
-| **Build** | Nx monorepo, Webpack (API), Vite (Dashboard), Go toolchain (CLI) |
+| **Build** | Nx monorepo, Webpack (API), Vite (Dashboard), Go toolchain (CLI), Cargo (Proxy) |
 
 ## License
 

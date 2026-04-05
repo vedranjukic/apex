@@ -444,16 +444,40 @@ export async function waitForSandboxReady(
   maxWaitMs = 60_000,
 ): Promise<void> {
   const start = Date.now();
+  let lastError = '';
   while (Date.now() - start < maxWaitMs) {
     try {
-      const result = execInSandbox(ssh, 'curl -sf -o /dev/null -w "%{http_code}" --max-time 5 https://example.com', 15_000);
+      // First try a simple SSH echo to verify connectivity
+      const echo = execInSandbox(ssh, 'echo OK', 10_000);
+      if (echo !== 'OK') {
+        lastError = `SSH echo returned: ${echo}`;
+        await new Promise((r) => setTimeout(r, 3000));
+        continue;
+      }
+
+      // Check env and try curl
+      const envCheck = execInSandbox(
+        ssh,
+        'echo "PROXY=$HTTPS_PROXY CA=$(test -f /usr/local/share/ca-certificates/apex-proxy.crt && echo YES || echo NO) TUNNEL=$(ss -tln 2>/dev/null | grep 9339 | head -1 || echo none)"',
+        10_000,
+      );
+      console.log(`[waitForSandboxReady] env: ${envCheck}`);
+
+      const result = execInSandbox(
+        ssh,
+        'curl -s -o /dev/null -w "%{http_code}" --max-time 10 https://example.com 2>&1 || echo CURL_FAIL',
+        20_000,
+      );
       if (result === '200') return;
-    } catch {
-      // not ready yet
+      lastError = `curl=${result} ${envCheck}`;
+    } catch (err: any) {
+      lastError = err.message?.slice(0, 200) || String(err);
     }
     await new Promise((r) => setTimeout(r, 3000));
   }
-  throw new Error('Sandbox proxy/tunnel not ready after ' + maxWaitMs + 'ms');
+  throw new Error(
+    `Sandbox proxy/tunnel not ready after ${maxWaitMs}ms. Last: ${lastError}`,
+  );
 }
 
 function escapeShellArg(arg: string): string {
