@@ -79,26 +79,18 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
 
   useEffect(() => {
     if (prevRunningRef.current && !isRunning) {
-      if (pendingSendRef.current) {
-        const item = pendingSendRef.current;
-        pendingSendRef.current = null;
-        setPromptQueue((q) => q.filter((p) => p.id !== item.id));
-        if (activeThreadId) onSendPrompt(activeThreadId, item.text, item.files, item.mode, item.model, item.snippets, item.agentType, item.images);
-      } else {
-        setPromptQueue((prev) => {
-          if (prev.length === 0) return prev;
-          const [first, ...rest] = prev;
-          if (activeThreadId) onSendPrompt(activeThreadId, first.text, first.files, first.mode, first.model, first.snippets, first.agentType, first.images);
-          return rest;
-        });
-      }
+      setPromptQueue((prev) => {
+        if (prev.length === 0) return prev;
+        const [first, ...rest] = prev;
+        if (activeThreadId) onSendPrompt(activeThreadId, first.text, first.files, first.mode, first.model, first.snippets, first.agentType, first.images);
+        return rest;
+      });
     }
     prevRunningRef.current = !!isRunning;
   }, [isRunning, activeThreadId, onSendPrompt]);
 
   useEffect(() => {
     setPromptQueue([]);
-    pendingSendRef.current = null;
   }, [activeThreadId]);
 
   const handlePromptSubmit = useCallback(
@@ -116,20 +108,14 @@ export function AgentThread({ projectId, projectAgentType, onSendPrompt, onSendS
   const handleSendFromQueue = useCallback(
     (item: typeof promptQueue[number]) => {
       if (!activeThreadId) return;
-      if (isRunning && onStopAgent) {
-        pendingSendRef.current = item;
-        onStopAgent(activeThreadId);
-      } else {
-        setPromptQueue((q) => q.filter((p) => p.id !== item.id));
-        onSendPrompt(activeThreadId, item.text, item.files, item.mode, item.model, item.snippets, item.agentType, item.images);
-      }
+      setPromptQueue((q) => q.filter((p) => p.id !== item.id));
+      onSendPrompt(activeThreadId, item.text, item.files, item.mode, item.model, item.snippets, item.agentType, item.images);
     },
-    [activeThreadId, isRunning, onStopAgent, onSendPrompt],
+    [activeThreadId, onSendPrompt],
   );
 
   const handleRemoveFromQueue = useCallback((id: string) => {
     setPromptQueue((q) => q.filter((p) => p.id !== id));
-    if (pendingSendRef.current?.id === id) pendingSendRef.current = null;
   }, []);
 
   const handleStop = useCallback(() => {

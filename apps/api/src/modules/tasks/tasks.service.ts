@@ -1,4 +1,4 @@
-import { eq, desc, asc, inArray } from 'drizzle-orm';
+import { eq, desc, asc, inArray, sql } from 'drizzle-orm';
 import { db } from '../../database/db';
 import { tasks, messages } from '../../database/schema';
 
@@ -9,10 +9,18 @@ const STALE_ACTIVE_STATUSES = ['idle', 'running', 'waiting_for_input'];
 
 class ThreadsService {
   async init() {
+    // Mark active threads as completed (they can't survive a restart)
     await db
       .update(tasks)
       .set({ status: 'completed', agentSessionId: null, updatedAt: new Date().toISOString() })
       .where(inArray(tasks.status, STALE_ACTIVE_STATUSES));
+    // Clear all stale agentSessionId values — after a restart, no OC sessions
+    // survive so any stored ID is invalid. This ensures follow-up prompts on
+    // completed threads correctly trigger session recovery with context injection.
+    await db
+      .update(tasks)
+      .set({ agentSessionId: null })
+      .where(sql`${tasks.agentSessionId} IS NOT NULL`);
   }
 
   async findByProject(projectId: string): Promise<Task[]> {

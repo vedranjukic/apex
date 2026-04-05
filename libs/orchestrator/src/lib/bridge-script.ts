@@ -474,29 +474,6 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images, age
   log("\\u{1F916}", "Sending prompt thread=" + threadId + " agent=" + ocAgent + " model=" + (ocModel || "default") + " storedSession=" + (sessionId || "none"));
 
   let ocSessionId = threadToSession.get(threadId);
-
-  // If the thread already has a session and the session is idle (was aborted
-  // or completed), fork it so the agent gets a clean branch point instead of
-  // replaying the old conversation.  This uses POST /session/:id/fork.
-  if (ocSessionId) {
-    try {
-      var curStatuses = await ocFetch("GET", "/session/status", null, 5000);
-      var curSt = curStatuses && curStatuses[ocSessionId];
-      if (!curSt || curSt.type === "idle") {
-        log("\\u{1F500}", "Forking idle session " + ocSessionId + " for thread " + threadId);
-        var forked = await ocFetch("POST", "/session/" + ocSessionId + "/fork", {}, 30000);
-        if (forked && forked.id) {
-          sessionToThread.delete(ocSessionId);
-          sessionEmittedParts.delete(ocSessionId);
-          ocSessionId = forked.id;
-          log("\\u{1F500}", "Forked to new session " + ocSessionId);
-        }
-      }
-    } catch (forkErr) {
-      log("\\u{26A0}", "Fork failed (" + (forkErr.message || forkErr) + "), reusing session as-is");
-    }
-  }
-
   if (!ocSessionId && sessionId) {
     try {
       var allStatuses = await ocFetch("GET", "/session/status", null, 5000);
