@@ -673,7 +673,12 @@ async function executeAgainstSandbox(
   let effectivePrompt = prompt;
   const priorMessages = (thread.messages || []).slice(0, -1);
   let contextFilePath: string | undefined;
-  if (priorMessages.length > 0) {
+  // Only inject conversation history when the OC session is lost (no agentSessionId)
+  // and we're starting a fresh session. When continuing an existing session, the agent
+  // already has the full context — injecting it again wastes tokens and causes the
+  // agent to redundantly re-read its own history.
+  const isSessionRecovery = !thread.agentSessionId;
+  if (isSessionRecovery && priorMessages.length > 0) {
     const context = buildConversationContext(priorMessages as any);
     if (context) {
       effectivePrompt = `<conversation_history>\n${context}\n</conversation_history>\n\n${prompt}`;
