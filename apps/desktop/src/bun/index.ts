@@ -308,6 +308,20 @@ async function startApi(port: number): Promise<void> {
       HOST: '0.0.0.0',
       DB_PATH: dbPath,
       DASHBOARD_DIR: dashboardDir,
+      APEX_PROXY_BIN: (() => {
+        const bundled = resolveAppPath('bin', 'apex-proxy');
+        if (fs.existsSync(bundled)) return bundled;
+        const devBuild = resolveAppPath('apps', 'proxy', 'target', 'release', 'apex-proxy');
+        if (fs.existsSync(devBuild)) return devBuild;
+        return bundled;
+      })(),
+      APEX_PROXY_LINUX_BIN: (() => {
+        const musl = resolveAppPath('apps', 'proxy', 'target', 'x86_64-unknown-linux-musl', 'release', 'apex-proxy');
+        if (fs.existsSync(musl)) return musl;
+        const gnu = resolveAppPath('apps', 'proxy', 'target', 'x86_64-unknown-linux-gnu', 'release', 'apex-proxy');
+        if (fs.existsSync(gnu)) return gnu;
+        return musl;
+      })(),
       SETTINGS_VISIBLE: 'true',
     },
     stdin: 'pipe',

@@ -25,7 +25,7 @@ pub struct Config {
     pub proxy_port: u16,
     pub port_relay_port: u16,
     pub secrets: ArcSwap<Vec<Secret>>,
-    pub github_token: String,
+    pub github_token: ArcSwap<String>,
     pub ca_cert_pem: String,
     pub ca_key_pem: String,
     pub proxy_auth_token: String,
@@ -57,7 +57,7 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(9341),
-            github_token: env::var("GITHUB_TOKEN").unwrap_or_default(),
+            github_token: ArcSwap::from_pointee(env::var("GITHUB_TOKEN").unwrap_or_default()),
             ca_cert_pem: env::var("CA_CERT_PEM").unwrap_or_default(),
             ca_key_pem: env::var("CA_KEY_PEM").unwrap_or_default(),
             proxy_auth_token: env::var("PROXY_AUTH_TOKEN").unwrap_or_default(),
@@ -68,9 +68,12 @@ impl Config {
         }
     }
 
-    /// Hot-reload secrets without restarting.
-    pub fn reload_secrets(&self, new_secrets: Vec<Secret>) {
+    /// Hot-reload secrets (and optionally the GitHub token) without restarting.
+    pub fn reload_secrets(&self, new_secrets: Vec<Secret>, new_github_token: Option<String>) {
         self.secrets.store(Arc::new(new_secrets));
+        if let Some(token) = new_github_token {
+            self.github_token.store(Arc::new(token));
+        }
     }
 
     /// Look up a secret for the domain: user-defined first, then GitHub fallback.
@@ -81,11 +84,12 @@ impl Config {
                 return Some(s.clone());
             }
         }
-        if self.github_domains.contains(host) && !self.github_token.is_empty() {
+        let token = self.github_token.load();
+        if self.github_domains.contains(host) && !token.is_empty() {
             Some(Secret {
                 id: "_github_token".to_string(),
                 name: "GITHUB_TOKEN".to_string(),
-                value: format!("x-access-token:{}", self.github_token),
+                value: format!("x-access-token:{}", token),
                 domain: host.to_string(),
                 auth_type: "basic".to_string(),
             })

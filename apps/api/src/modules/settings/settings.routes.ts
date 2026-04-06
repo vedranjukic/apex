@@ -1,6 +1,7 @@
 import { Elysia } from 'elysia';
 import { settingsService, type SettingSource } from './settings.service';
 import { projectsService } from '../projects/projects.service';
+import { restartSecretsProxy } from '../secrets-proxy/secrets-proxy';
 
 const SECRET_KEYS = new Set(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'DAYTONA_API_KEY', 'GITHUB_TOKEN']);
 
@@ -50,6 +51,9 @@ export const settingsRoutes = new Elysia({ prefix: '/api/settings' })
         await settingsService.setAll(filtered);
         // Re-enable with timeout fix
         await projectsService.reinitSandboxManager();
+        if ('GITHUB_TOKEN' in filtered) {
+          restartSecretsProxy().catch(() => {});
+        }
       }
       console.log('[settings] Update successful');
       return { ok: true };

@@ -417,10 +417,25 @@ async fn handle_reload_secrets(
         body.extend_from_slice(&buf[..n]);
     }
 
-    let new_secrets: Vec<crate::config::Secret> = serde_json::from_slice(&body)?;
+    // Support both formats: plain array (legacy) and object with optional github_token
+    #[derive(serde::Deserialize)]
+    struct ReloadPayload {
+        secrets: Vec<crate::config::Secret>,
+        github_token: Option<String>,
+    }
+
+    let (new_secrets, github_token) =
+        if let Ok(payload) = serde_json::from_slice::<ReloadPayload>(&body) {
+            (payload.secrets, payload.github_token)
+        } else {
+            let secrets: Vec<crate::config::Secret> = serde_json::from_slice(&body)?;
+            (secrets, None)
+        };
+
     let count = new_secrets.len();
-    config.reload_secrets(new_secrets);
-    info!(count = count, "secrets reloaded");
+    let token_updated = github_token.is_some();
+    config.reload_secrets(new_secrets, github_token);
+    info!(count = count, token_updated = token_updated, "secrets reloaded");
 
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
