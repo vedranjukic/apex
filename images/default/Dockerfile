@@ -116,9 +116,9 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 RUN bash -c "source /usr/local/share/nvm/nvm.sh && nvm install 25 && nvm use 25 && nvm alias default 25" \
   && chown -R daytona:daytona /usr/local/share/nvm
 
-RUN corepack enable && corepack prepare yarn@stable --activate
-
 RUN npm install -g ts-node@10.9.2 typescript@5.9.3 typescript-language-server@5.1.3 bun@1.3.6 @anthropic-ai/claude-code@2.1.19 openclaw@2026.2.1 opencode-ai@1.3.2 oh-my-openagent
+
+RUN npm uninstall -g yarn; corepack enable && corepack prepare yarn@stable --activate
 
 # Pre-install bridge npm dependencies (ws + node-pty) so sandbox creation
 # skips the expensive npm install + native compilation step at runtime.
