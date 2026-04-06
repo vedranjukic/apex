@@ -38,15 +38,24 @@ export class SettingsController {
 
   @Put()
   async update(@Body() body: Record<string, string>): Promise<{ ok: boolean }> {
-    const filtered: Record<string, string> = {};
-    for (const [key, value] of Object.entries(body)) {
-      if (value.includes('••••')) continue;
-      filtered[key] = value;
+    try {
+      console.log('[settings] Update request received:', JSON.stringify(body));
+      const filtered: Record<string, string> = {};
+      for (const [key, value] of Object.entries(body)) {
+        if (typeof value === 'string' && value.includes('••••')) continue;
+        if (value != null) {
+          filtered[key] = String(value);
+        }
+      }
+      console.log('[settings] Filtered values:', JSON.stringify(filtered));
+      if (Object.keys(filtered).length > 0) {
+        await this.settingsService.setAll(filtered);
+        await this.projectsService.reinitSandboxManager();
+      }
+      return { ok: true };
+    } catch (error) {
+      console.error('[settings] Update failed:', error);
+      throw error;
     }
-    if (Object.keys(filtered).length > 0) {
-      await this.settingsService.setAll(filtered);
-      await this.projectsService.reinitSandboxManager();
-    }
-    return { ok: true };
   }
 }

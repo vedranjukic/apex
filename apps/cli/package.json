@@ -37,7 +37,13 @@
     "bun-types": "latest",
     "typescript": "^5.3.3"
   },
-  "keywords": ["apex", "cli", "ai", "development", "automation"],
+  "keywords": [
+    "apex",
+    "cli",
+    "ai",
+    "development",
+    "automation"
+  ],
   "author": "Apex Team",
   "license": "MIT",
   "bin": {

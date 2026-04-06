@@ -34,16 +34,27 @@ export const settingsRoutes = new Elysia({ prefix: '/api/settings' })
     return result;
   })
   .put('/', async ({ body }) => {
-    const raw = body as Record<string, string>;
-    const filtered: Record<string, string> = {};
-    for (const [key, value] of Object.entries(raw)) {
-      if (value.includes('••••')) continue;
-      filtered[key] = value;
+    try {
+      console.log('[settings] Update request received:', JSON.stringify(body));
+      const raw = body as Record<string, string>;
+      const filtered: Record<string, string> = {};
+      for (const [key, value] of Object.entries(raw)) {
+        // Check if value is string before calling includes
+        if (typeof value === 'string' && value.includes('••••')) continue;
+        if (value != null) {
+          filtered[key] = String(value);
+        }
+      }
+      console.log('[settings] Filtered values:', JSON.stringify(filtered));
+      if (Object.keys(filtered).length > 0) {
+        await settingsService.setAll(filtered);
+        // Re-enable with timeout fix
+        await projectsService.reinitSandboxManager();
+      }
+      console.log('[settings] Update successful');
+      return { ok: true };
+    } catch (error) {
+      console.error('[settings] Update failed:', error);
+      throw error;
     }
-    if (Object.keys(filtered).length > 0) {
-      await settingsService.setAll(filtered);
-      // TODO: Re-enable when projects service is properly initialized
-      // await projectsService.reinitSandboxManager();
-    }
-    return { ok: true };
   });
