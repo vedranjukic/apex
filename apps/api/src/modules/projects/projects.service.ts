@@ -159,20 +159,28 @@ class ProjectsService {
         if (status.type === 'daytona') {
           const anthropicKey = sharedConfig.anthropicApiKey || '';
           const openaiKey = sharedConfig.openaiApiKey || '';
-          if (anthropicKey || openaiKey) {
-            try {
-              const daytonaProvider = new DaytonaSandboxProvider();
-              await daytonaProvider.initialize();
-              const proxyInfo = await proxySandboxService.ensureProxySandbox(
-                daytonaProvider, anthropicKey, openaiKey,
-              );
-              providerConfig.proxyBaseUrl = proxyInfo.proxyBaseUrl;
-              providerConfig.proxyAuthToken = proxyInfo.authToken;
-              console.log(`[projects] Daytona LLM proxy sandbox ready: ${proxyInfo.proxyBaseUrl}`);
-            } catch (proxyErr) {
-              console.warn(`[projects] Daytona LLM proxy sandbox failed (non-fatal):`, proxyErr);
-            }
-          }
+           if (anthropicKey || openaiKey) {
+             try {
+               const daytonaProvider = new DaytonaSandboxProvider();
+               await daytonaProvider.initialize();
+               
+               // Add timeout to prevent hanging during server startup
+               const timeoutPromise = new Promise<never>((_, reject) => {
+                 setTimeout(() => reject(new Error('Proxy sandbox creation timeout (30s)')), 30000);
+               });
+               
+               const proxyInfo = await Promise.race([
+                 proxySandboxService.ensureProxySandbox(daytonaProvider, anthropicKey, openaiKey),
+                 timeoutPromise
+               ]);
+               
+               providerConfig.proxyBaseUrl = proxyInfo.proxyBaseUrl;
+               providerConfig.proxyAuthToken = proxyInfo.authToken;
+               console.log(`[projects] Daytona LLM proxy sandbox ready: ${proxyInfo.proxyBaseUrl}`);
+             } catch (proxyErr) {
+               console.warn(`[projects] Daytona LLM proxy sandbox failed (non-fatal):`, proxyErr);
+             }
+           }
         }
 
         if (status.type === 'daytona') {
@@ -221,13 +229,20 @@ class ProjectsService {
     const openaiKey = process.env.OPENAI_API_KEY || '';
     if (!anthropicKey && !openaiKey) return;
 
-    try {
-      const oldCached = proxySandboxService.getCachedInfo();
-      const daytonaProvider = new DaytonaSandboxProvider();
-      await daytonaProvider.initialize();
-      const info = await proxySandboxService.ensureProxySandbox(
-        daytonaProvider, anthropicKey, openaiKey,
-      );
+     try {
+       const oldCached = proxySandboxService.getCachedInfo();
+       const daytonaProvider = new DaytonaSandboxProvider();
+       await daytonaProvider.initialize();
+       
+       // Add timeout to prevent hanging during proxy sandbox updates
+       const timeoutPromise = new Promise<never>((_, reject) => {
+         setTimeout(() => reject(new Error('Proxy sandbox update timeout (30s)')), 30000);
+       });
+       
+       const info = await Promise.race([
+         proxySandboxService.ensureProxySandbox(daytonaProvider, anthropicKey, openaiKey),
+         timeoutPromise
+       ]);
       if (!oldCached || oldCached.proxyBaseUrl !== info.proxyBaseUrl) {
         manager.updateProxyConfig(info.proxyBaseUrl, info.authToken);
         console.log(`[projects] Daytona proxy config updated: ${info.proxyBaseUrl}`);

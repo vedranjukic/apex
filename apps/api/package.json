@@ -23,7 +23,7 @@
     }
   },
   "dependencies": {
-    "elysia": "*",
-    "drizzle-orm": "*"
+    "drizzle-orm": "*",
+    "elysia": "*"
   }
 }
