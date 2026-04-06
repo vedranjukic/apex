@@ -277,8 +277,8 @@ describe('Shared infrastructure', () => {
   it('should emit ask_user_resolved when answer received or timeout', () => {
     const script = getBridgeScript(8080, '/tmp/test');
     expect(script).toContain('"ask_user_resolved"');
-    const count = (script.match(/"ask_user_resolved"/g) || []).length;
-    expect(count).toBeGreaterThanOrEqual(2);
+    const callCount = (script.match(/emitAskUserResolved\(/g) || []).length;
+    expect(callCount).toBeGreaterThanOrEqual(4);
   });
 
   it('should check pendingAskUser before fallback', () => {
@@ -291,9 +291,10 @@ describe('Shared infrastructure', () => {
     expect(script).toContain('entry.threadId === msg.threadId');
   });
 
-  it('should emit bridge_ready on connection', () => {
+  it('should emit bridge_ready on connection with thread journal summary', () => {
     const script = getBridgeScript(8080, '/tmp/test');
     expect(script).toContain('"bridge_ready"');
+    expect(script).toContain('getThreadJournalSummary()');
   });
 
   it('should auto-restart opencode serve on exit', () => {
@@ -315,5 +316,107 @@ describe('Shared infrastructure', () => {
     expect(script).toContain('Auto-approving permission');
     expect(script).toContain('/permission/');
     expect(script).toContain('reply: "always"');
+  });
+});
+
+describe('Event journal and replay', () => {
+  it('should define EVENTS_DIR for journal file storage', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('EVENTS_DIR');
+    expect(script).toContain('/.apex/events');
+  });
+
+  it('should define journalEvent function that assigns seq and appends JSONL', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('function journalEvent(');
+    expect(script).toContain('threadSeqCounters');
+    expect(script).toContain('appendFileSync');
+    expect(script).toContain('msg._seq = seq');
+  });
+
+  it('should journal events in emitAgentMessage before sending via WS', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    const emitFn = script.slice(
+      script.indexOf('function emitAgentMessage('),
+      script.indexOf('function emitAgentExit('),
+    );
+    expect(emitFn).toContain('journalEvent(threadId, msg)');
+    const journalIdx = emitFn.indexOf('journalEvent');
+    const sendIdx = emitFn.indexOf('state.ws.send');
+    expect(journalIdx).toBeLessThan(sendIdx);
+  });
+
+  it('should set threadJournalStatus on emitAgentExit and emitAgentError', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    const exitFn = script.slice(
+      script.indexOf('function emitAgentExit('),
+      script.indexOf('function emitAgentError('),
+    );
+    expect(exitFn).toContain('threadJournalStatus.set(threadId');
+    expect(exitFn).toContain('"completed"');
+
+    const errorFn = script.slice(
+      script.indexOf('function emitAgentError('),
+      script.indexOf('function emitAskUserPending('),
+    );
+    expect(errorFn).toContain('threadJournalStatus.set(threadId, "error")');
+  });
+
+  it('should journal ask_user_pending and ask_user_resolved via helper functions', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('function emitAskUserPending(');
+    expect(script).toContain('function emitAskUserResolved(');
+    const pendingFn = script.slice(
+      script.indexOf('function emitAskUserPending('),
+      script.indexOf('function emitAskUserResolved('),
+    );
+    expect(pendingFn).toContain('journalEvent(threadId');
+  });
+
+  it('should define getThreadJournalSummary that scans journal files', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('function getThreadJournalSummary()');
+    expect(script).toContain('readdirSync(EVENTS_DIR)');
+    expect(script).toContain('.endsWith(".jsonl")');
+  });
+
+  it('should define replayJournal that reads JSONL and sends entries after afterSeq', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('function replayJournal(threadId, afterSeq)');
+    expect(script).toContain('entry.seq > afterSeq');
+    expect(script).toContain('entry.msg._replay = true');
+    expect(script).toContain('"replay_complete"');
+  });
+
+  it('should handle request_replay messages from orchestrator', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('"request_replay"');
+    expect(script).toContain('replayJournal(msg.threadId');
+  });
+
+  it('should clear thread journal at the start of handleStartAgent', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('function clearThreadJournal(');
+    const startAgent = script.slice(
+      script.indexOf('async function handleStartAgent('),
+      script.indexOf('async function handleStartAgent(') + 300,
+    );
+    expect(startAgent).toContain('clearThreadJournal(threadId)');
+  });
+
+  it('should prune stale journal files older than 24 hours on boot', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    expect(script).toContain('Prune stale journal');
+    expect(script).toContain('86400000');
+  });
+
+  it('should set journal status to active when emitStartAck receives started', () => {
+    const script = getBridgeScript(8080, '/tmp/test');
+    const ackFn = script.slice(
+      script.indexOf('function emitStartAck('),
+      script.indexOf('function emitStartAck(') + 300,
+    );
+    expect(ackFn).toContain('status === "started"');
+    expect(ackFn).toContain('threadJournalStatus.set(threadId, "active")');
   });
 });

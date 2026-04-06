@@ -26,6 +26,7 @@ import {
   BridgePortsUpdate,
   BridgeLspResponse,
   BridgeLspStatus,
+  BridgeThreadJournalEntry,
   PortInfo,
   LayoutData,
   FileEntry,
@@ -157,6 +158,8 @@ export interface SandboxManagerEvents {
     error?: string,
   ) => void;
   running_sessions: (sandboxId: string, sessions: Array<{ threadId: string; sessionId: string }>) => void;
+  bridge_threads: (sandboxId: string, threads: Record<string, BridgeThreadJournalEntry>) => void;
+  replay_complete: (sandboxId: string, threadId: string, lastSeq: number) => void;
   terminal_created: (sandboxId: string, msg: BridgeTerminalCreated) => void;
   terminal_output: (sandboxId: string, msg: BridgeTerminalOutput) => void;
   terminal_exit: (sandboxId: string, msg: BridgeTerminalExit) => void;
@@ -772,6 +775,16 @@ export class SandboxManager extends EventEmitter {
   isBridgeConnected(sandboxId: string): boolean {
     const session = this.sessions.get(sandboxId);
     return !!session?.ws && session.ws.readyState === WebSocket.OPEN;
+  }
+
+  /** Request the bridge to replay journaled events for a thread from a given sequence number */
+  requestReplay(sandboxId: string, threadId: string, afterSeq = 0): void {
+    const session = this.sessions.get(sandboxId);
+    if (session?.ws?.readyState === WebSocket.OPEN) {
+      session.ws.send(
+        JSON.stringify({ type: "request_replay", threadId, afterSeq }),
+      );
+    }
   }
 
   /**
@@ -2800,6 +2813,9 @@ export class SandboxManager extends EventEmitter {
           if (msg.type === "bridge_ready") {
             session.status = "running";
             this.emit("status", session.sandboxId, "running");
+            if ((msg as any).threads && typeof (msg as any).threads === "object") {
+              this.emit("bridge_threads", session.sandboxId, (msg as any).threads);
+            }
             resolve();
           } else if (msg.type === "agent_message") {
             this.handleAgentMessage(session, msg.data);
@@ -2845,6 +2861,8 @@ export class SandboxManager extends EventEmitter {
             this.emit("status", session.sandboxId, "error", msg.error);
           } else if (msg.type === "running_sessions") {
             this.emit("running_sessions", session.sandboxId, msg.sessions);
+          } else if (msg.type === "replay_complete") {
+            this.emit("replay_complete", session.sandboxId, (msg as any).threadId, (msg as any).lastSeq || 0);
           }
 
           this.emit("message", session.sandboxId, msg);

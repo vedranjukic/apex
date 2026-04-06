@@ -18,7 +18,8 @@
         "options": {
           "jestConfig": "apps/api-e2e/jest.config.js",
           "passWithNoTests": true,
-          "runInBand": true
+          "runInBand": true,
+          "forceExit": true
         },
         "dependsOn": [
           "@apex/api:build",

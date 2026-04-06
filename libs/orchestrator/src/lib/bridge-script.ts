@@ -49,6 +49,9 @@ let lastSeenAskTool = "";
 const sessionEmittedParts = new Map();
 const suppressedAborts = new Set();
 const SESSIONS_FILE = (process.env.HOME || "/home/daytona") + "/.apex/active-sessions.json";
+const EVENTS_DIR = (process.env.HOME || "/home/daytona") + "/.apex/events";
+const threadSeqCounters = new Map();
+const threadJournalStatus = new Map();
 
 function saveActiveSessions() {
   try {
@@ -65,6 +68,83 @@ function loadPersistedSessions() {
     var raw = fs.readFileSync(SESSIONS_FILE, "utf8");
     return JSON.parse(raw);
   } catch { return null; }
+}
+
+function journalEvent(threadId, msg) {
+  var seq = (threadSeqCounters.get(threadId) || 0) + 1;
+  threadSeqCounters.set(threadId, seq);
+  msg._seq = seq;
+  var entry = JSON.stringify({ seq: seq, ts: Date.now(), msg: msg });
+  try {
+    fs.mkdirSync(EVENTS_DIR, { recursive: true });
+    fs.appendFileSync(EVENTS_DIR + "/" + threadId + ".jsonl", entry + "\\n");
+  } catch (e) { /* best-effort */ }
+  return seq;
+}
+
+function clearThreadJournal(threadId) {
+  threadSeqCounters.delete(threadId);
+  threadJournalStatus.delete(threadId);
+  try { fs.unlinkSync(EVENTS_DIR + "/" + threadId + ".jsonl"); } catch {}
+}
+
+function getThreadJournalSummary() {
+  var summary = {};
+  try {
+    if (!fs.existsSync(EVENTS_DIR)) return summary;
+    var files = fs.readdirSync(EVENTS_DIR);
+    for (var i = 0; i < files.length; i++) {
+      if (!files[i].endsWith(".jsonl")) continue;
+      var threadId = files[i].slice(0, -6);
+      var lastSeq = threadSeqCounters.get(threadId) || 0;
+      var status = threadJournalStatus.get(threadId) || (activeThreads.has(threadId) ? "active" : "unknown");
+      var sessionId = threadToSession.get(threadId) || null;
+      if (lastSeq === 0) {
+        try {
+          var content = fs.readFileSync(EVENTS_DIR + "/" + files[i], "utf8").trim();
+          var lines = content.split("\\n").filter(Boolean);
+          if (lines.length > 0) {
+            var last = JSON.parse(lines[lines.length - 1]);
+            lastSeq = last.seq || lines.length;
+            if (last.msg && last.msg.type === "agent_exit") status = last.msg.code === 0 ? "completed" : "error";
+            else if (last.msg && last.msg.type === "agent_error") status = "error";
+          }
+        } catch {}
+      }
+      summary[threadId] = { lastSeq: lastSeq, status: status, sessionId: sessionId };
+    }
+  } catch {}
+  return summary;
+}
+
+function replayJournal(threadId, afterSeq) {
+  var filePath = EVENTS_DIR + "/" + threadId + ".jsonl";
+  try {
+    var content = fs.readFileSync(filePath, "utf8").trim();
+    if (!content) return;
+    var lines = content.split("\\n").filter(Boolean);
+    var sent = 0;
+    for (var i = 0; i < lines.length; i++) {
+      var entry = JSON.parse(lines[i]);
+      if (entry.seq > afterSeq && entry.msg) {
+        if (state.ws && state.ws.readyState === 1) {
+          entry.msg._seq = entry.seq;
+          entry.msg._replay = true;
+          state.ws.send(JSON.stringify(entry.msg));
+          sent++;
+        }
+      }
+    }
+    log("\\u{1F504}", "Replayed " + sent + " events for thread " + threadId + " (afterSeq=" + afterSeq + ")");
+    if (state.ws && state.ws.readyState === 1) {
+      state.ws.send(JSON.stringify({ type: "replay_complete", threadId: threadId, lastSeq: threadSeqCounters.get(threadId) || 0 }));
+    }
+  } catch (e) {
+    log("\\u{26A0}", "Replay failed for thread " + threadId + ": " + (e.message || e));
+    if (state.ws && state.ws.readyState === 1) {
+      state.ws.send(JSON.stringify({ type: "replay_complete", threadId: threadId, lastSeq: 0, error: e.message }));
+    }
+  }
 }
 
 // ── Shell detection ──────────────────────────────────
@@ -92,20 +172,42 @@ function log(emoji, msg) {
   console.log(new Date().toISOString() + " " + emoji + " " + msg);
 }
 
-// ── Emit helpers ─────────────────────────────────────
+// ── Emit helpers (journal + send) ────────────────────
 function emitAgentMessage(threadId, data) {
+  var msg = { type: "agent_message", threadId: threadId, data: data };
+  journalEvent(threadId, msg);
   if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify({ type: "agent_message", threadId: threadId, data: data }));
+    state.ws.send(JSON.stringify(msg));
   }
 }
 function emitAgentExit(threadId, code) {
+  threadJournalStatus.set(threadId, code === 0 ? "completed" : "error");
+  var msg = { type: "agent_exit", threadId: threadId, code: code };
+  journalEvent(threadId, msg);
   if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify({ type: "agent_exit", threadId: threadId, code: code }));
+    state.ws.send(JSON.stringify(msg));
   }
 }
 function emitAgentError(threadId, error) {
+  threadJournalStatus.set(threadId, "error");
+  var msg = { type: "agent_error", threadId: threadId, error: error };
+  journalEvent(threadId, msg);
   if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify({ type: "agent_error", threadId: threadId, error: error }));
+    state.ws.send(JSON.stringify(msg));
+  }
+}
+function emitAskUserPending(threadId, questionId) {
+  var msg = { type: "ask_user_pending", threadId: threadId, questionId: questionId };
+  journalEvent(threadId, msg);
+  if (state.ws && state.ws.readyState === 1) {
+    state.ws.send(JSON.stringify(msg));
+  }
+}
+function emitAskUserResolved(threadId, questionId) {
+  var msg = { type: "ask_user_resolved", threadId: threadId, questionId: questionId };
+  journalEvent(threadId, msg);
+  if (state.ws && state.ws.readyState === 1) {
+    state.ws.send(JSON.stringify(msg));
   }
 }
 
@@ -334,24 +436,18 @@ function startControlListener() {
         if (!input.questions && input.question) { input = { questions: [input] }; }
         if (!input.questions && typeof input === "string") { input = { questions: [{ question: input }] }; }
         emitAgentMessage(activeThreadId, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: questionId, name: "AskUserQuestion", input: input }], stop_reason: "tool_use" } });
-        if (state.ws && state.ws.readyState === 1) {
-          state.ws.send(JSON.stringify({ type: "ask_user_pending", threadId: activeThreadId, questionId: questionId }));
-        }
+        emitAskUserPending(activeThreadId, questionId);
         var ASK_TIMEOUT_MS = 300000;
         var entry = { timer: null };
         entry.timer = setTimeout(function() {
           pendingAskUser.delete(questionId);
-          if (state.ws && state.ws.readyState === 1) {
-            state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: activeThreadId, questionId: questionId }));
-          }
+          emitAskUserResolved(activeThreadId, questionId);
           ocFetch("POST", "/tui/control/response", { body: "" }, 10000).catch(function() {});
           setTimeout(pollControl, 100);
         }, ASK_TIMEOUT_MS);
         pendingAskUser.set(questionId, { threadId: activeThreadId, resolve: function(answer) {
           clearTimeout(entry.timer); pendingAskUser.delete(questionId);
-          if (state.ws && state.ws.readyState === 1) {
-            state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: activeThreadId, questionId: questionId }));
-          }
+          emitAskUserResolved(activeThreadId, questionId);
           ocFetch("POST", "/tui/control/response", { body: answer }, 10000)
             .then(function() { log("\\u{2753}", "Control response sent for " + questionId); })
             .catch(function(e) { log("\\u{274C}", "Control response failed: " + e.message); });
@@ -517,8 +613,10 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images, age
         }
         if (catchupBlocks.length > 0) {
           log("\\u{1F504}", "Emitting " + catchupBlocks.length + " catch-up blocks from last assistant turn");
+          var catchupMsg = { type: "agent_catchup", threadId: threadId, blocks: catchupBlocks };
+          journalEvent(threadId, catchupMsg);
           if (state.ws && state.ws.readyState === 1) {
-            state.ws.send(JSON.stringify({ type: "agent_catchup", threadId: threadId, blocks: catchupBlocks }));
+            state.ws.send(JSON.stringify(catchupMsg));
           }
         }
       }
@@ -700,20 +798,14 @@ function pollSession(threadId, sessionId, agentName, modelName, recovered) {
                 var questionId = "q-" + toolId;
                 log("\\u{2753}", "Intercepting built-in question tool: " + toolId + " session=" + sessionId);
                 emitAgentMessage(threadId, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: questionId, name: "AskUserQuestion", input: qInput }], stop_reason: "tool_use" } });
-                if (state.ws && state.ws.readyState === 1) {
-                  state.ws.send(JSON.stringify({ type: "ask_user_pending", threadId: threadId, questionId: questionId }));
-                }
+                emitAskUserPending(threadId, questionId);
                 var qTimeout = setTimeout(function() {
                   pendingAskUser.delete(questionId);
-                  if (state.ws && state.ws.readyState === 1) {
-                    state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: threadId, questionId: questionId }));
-                  }
+                  emitAskUserResolved(threadId, questionId);
                 }, 300000);
                 pendingAskUser.set(questionId, { threadId: threadId, resolve: function(answer) {
                   clearTimeout(qTimeout); pendingAskUser.delete(questionId);
-                  if (state.ws && state.ws.readyState === 1) {
-                    state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: threadId, questionId: questionId }));
-                  }
+                  emitAskUserResolved(threadId, questionId);
                   log("\\u{2753}", "Replying to question via /question API: " + toolId);
                   ocFetch("GET", "/question", null, 5000)
                     .then(function(questions) {
@@ -882,16 +974,19 @@ async function ensureOpenCodeHealthy() {
 }
 
 function emitStartAck(threadId, status, sessionId, error) {
+  if (status === "started") threadJournalStatus.set(threadId, "active");
+  var payload = { type: "start_agent_ack", threadId: threadId, status: status };
+  if (sessionId) payload.sessionId = sessionId;
+  if (error) payload.error = error;
+  journalEvent(threadId, payload);
   if (state.ws && state.ws.readyState === 1) {
-    var payload = { type: "start_agent_ack", threadId: threadId, status: status };
-    if (sessionId) payload.sessionId = sessionId;
-    if (error) payload.error = error;
     state.ws.send(JSON.stringify(payload));
   }
 }
 
 async function handleStartAgent(msg) {
   const threadId = msg.threadId || "default";
+  clearThreadJournal(threadId);
   emitStartAck(threadId, "processing");
   const existingSession = threadToSession.get(threadId);
   if (existingSession && activeThreads.has(threadId)) {
@@ -1074,6 +1169,25 @@ function flushFileChanges() {
   }
 }
 startFileWatcher();
+
+// Prune stale journal files older than 24 hours on boot
+try {
+  if (fs.existsSync(EVENTS_DIR)) {
+    var journalFiles = fs.readdirSync(EVENTS_DIR);
+    var now = Date.now();
+    for (var jf = 0; jf < journalFiles.length; jf++) {
+      if (!journalFiles[jf].endsWith(".jsonl")) continue;
+      try {
+        var jstat = fs.statSync(EVENTS_DIR + "/" + journalFiles[jf]);
+        if (now - jstat.mtimeMs > 86400000) {
+          fs.unlinkSync(EVENTS_DIR + "/" + journalFiles[jf]);
+          log("\\u{1F5D1}", "Pruned stale journal: " + journalFiles[jf]);
+        }
+      } catch {}
+    }
+  }
+} catch {}
+
 startOpenCodeServe();
 
 // ── LSP Manager ──────────────────────────────────────
@@ -1363,23 +1477,17 @@ const server = http.createServer((req, res) => {
         if (!activeThreadId && threadToSession.size > 0) activeThreadId = Array.from(threadToSession.keys()).pop();
         if (!activeThreadId) activeThreadId = "default";
         emitAgentMessage(activeThreadId, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: questionId, name: "AskUserQuestion", input: payload.input || {} }], stop_reason: "tool_use" } });
-        if (state.ws && state.ws.readyState === 1) {
-          state.ws.send(JSON.stringify({ type: "ask_user_pending", threadId: activeThreadId, questionId: questionId }));
-        }
+        emitAskUserPending(activeThreadId, questionId);
         const ASK_TIMEOUT_MS = 300000;
         const entry = { resolve: null, timer: null };
         entry.timer = setTimeout(() => {
           pendingAskUser.delete(questionId);
-          if (state.ws && state.ws.readyState === 1) {
-            state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: activeThreadId, questionId: questionId }));
-          }
+          emitAskUserResolved(activeThreadId, questionId);
           res.writeHead(408, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "User did not respond in time" }));
         }, ASK_TIMEOUT_MS);
         pendingAskUser.set(questionId, { threadId: activeThreadId, resolve: (answer) => {
           clearTimeout(entry.timer); pendingAskUser.delete(questionId);
-          if (state.ws && state.ws.readyState === 1) {
-            state.ws.send(JSON.stringify({ type: "ask_user_resolved", threadId: activeThreadId, questionId: questionId }));
-          }
+          emitAskUserResolved(activeThreadId, questionId);
           res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ answer }));
         } });
       } catch (e) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: e.message })); }
@@ -1503,7 +1611,7 @@ wss.on("connection", (ws) => {
   log("\\u{1F517}", "Orchestrator connected");
   state.ws = ws;
   lastPortsKey = "";
-  ws.send(JSON.stringify({ type: "bridge_ready", port: PORT }));
+  ws.send(JSON.stringify({ type: "bridge_ready", port: PORT, threads: getThreadJournalSummary() }));
 
   // Detect orphaned sessions from a previous bridge instance and resume polling.
   // Two strategies: (1) persisted file mapping, (2) session titles (set to threadId on creation).
@@ -1587,6 +1695,10 @@ wss.on("connection", (ws) => {
       if (msg.type === "start_agent") { handleStartAgent(msg).catch(e => { log("\\u{274C}", "start_agent error: " + e); emitAgentError(msg.threadId || "default", "Bridge failed to start agent: " + (e.message || String(e))); }); }
       else if (msg.type === "agent_user_answer") { handleUserAnswer(msg); }
       else if (msg.type === "stop_agent") { handleStopAgent(msg).catch(e => log("\\u{274C}", "stop_agent error: " + e)); }
+      else if (msg.type === "request_replay") {
+        log("\\u{1F504}", "Replay requested for thread " + msg.threadId + " afterSeq=" + (msg.afterSeq || 0));
+        replayJournal(msg.threadId, msg.afterSeq || 0);
+      }
       else if (msg.type === "terminal_create") {
         try {
           const result = createTerminalPty(msg.terminalId, msg.name, msg.cols, msg.rows, msg.cwd, msg.command);
