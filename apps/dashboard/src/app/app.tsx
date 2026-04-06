@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, useParams } from 'react-router-dom';
 import { HomePage } from '../pages/home-page';
 import { ProjectPage } from '../pages/project-page';
-import { SettingsPage } from '../pages/settings-page';
+import { SettingsPage } from '../pages/settings';
 import { SecretsPage } from '../pages/secrets-page';
 import { MergeStatusDemoPage } from '../pages/merge-status-demo-page';
 import { useGlobalCommands } from '../hooks/use-global-commands';
@@ -19,6 +19,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/settings/:category" element={<SettingsPage />} />
         <Route path="/secrets" element={<SecretsPage />} />
         <Route path="/merge-status-demo" element={<MergeStatusDemoPage />} />
         <Route path="/projects/:projectId" element={<ProjectPageKeyed />} />
