@@ -74,10 +74,17 @@ export type AgentMessage =
   | AgentResultMessage;
 
 // ── Bridge protocol (sandbox <-> orchestrator) ───────
+export interface BridgeThreadJournalEntry {
+  lastSeq: number;
+  status: 'active' | 'completed' | 'error' | 'unknown';
+  sessionId: string | null;
+}
+
 export interface BridgeReadyMessage {
   type: 'bridge_ready';
   port: number;
   sessionId?: string;
+  threads?: Record<string, BridgeThreadJournalEntry>;
 }
 
 export interface BridgeAgentMessage {
@@ -326,6 +333,19 @@ export interface BridgeStartAgentAck {
   error?: string;
 }
 
+export interface BridgeReplayComplete {
+  type: 'replay_complete';
+  threadId: string;
+  lastSeq: number;
+  error?: string;
+}
+
+export interface BridgeRequestReplay {
+  type: 'request_replay';
+  threadId: string;
+  afterSeq: number;
+}
+
 // ── Union of all bridge messages ─────────────────────
 
 export type BridgeMessage =
@@ -356,7 +376,8 @@ export type BridgeMessage =
   | BridgeLspResponse
   | BridgeLspStatus
   | BridgeRunningSessions
-  | BridgeStartAgentAck;
+  | BridgeStartAgentAck
+  | BridgeReplayComplete;
 
 // ── Sandbox session tracking ─────────────────────────
 export type SandboxSessionStatus =

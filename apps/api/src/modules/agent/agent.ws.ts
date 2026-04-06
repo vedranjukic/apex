@@ -37,6 +37,7 @@ const sandboxToProjectId = new Map<string, string>();
 const activeTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 const activeHealthChecks = new Map<string, ReturnType<typeof setInterval>>();
 const stoppedThreads = new Set<string>();
+const lastSeenSeq = new Map<string, number>();
 
 let lastAttachedManager: WeakRef<any> | null = null;
 
@@ -338,6 +339,7 @@ async function executeAgainstSandbox(
 ) {
   console.log(`[agent-ws] executeAgainstSandbox: thread=${threadId.slice(0, 8)} prompt="${prompt?.slice(0, 60)}"`);
   stoppedThreads.delete(threadId);
+  lastSeenSeq.delete(threadId);
   const thread = await threadsService.findById(threadId);
   const project = await projectsService.findById(thread.projectId);
   const effectiveAgentType = thread.agentType ?? project.agentType;
@@ -443,41 +445,51 @@ async function executeAgainstSandbox(
   const prevHealthCheck = activeHealthChecks.get(threadId);
   if (prevHealthCheck) clearInterval(prevHealthCheck);
 
+  const RECONNECT_GRACE_MS = 90_000;
   const startHealthCheck = () => {
     const hc = activeHealthChecks.get(threadId);
     if (hc) clearInterval(hc);
     const interval = setInterval(async () => {
       if (!project.sandboxId || !manager.isBridgeConnected(project.sandboxId)) {
-        console.log(`[agent-ws] Bridge disconnected for thread ${threadId.slice(0, 8)}, triggering reconnect + retry`);
+        console.log(`[agent-ws] Bridge disconnected for thread ${threadId.slice(0, 8)}, waiting for reconnect + replay`);
         clearInterval(interval);
         activeHealthChecks.delete(threadId);
         const prev = activeTimeouts.get(threadId);
         if (prev) { clearTimeout(prev); activeTimeouts.delete(threadId); }
 
-        if (retryCount < 1) {
-          retryCount++;
-          emitToSubscribers(project.sandboxId!, 'agent_status', { threadId, status: 'retrying' });
-          emitToSubscribers(project.sandboxId!, 'agent_message', {
-            threadId, message: { type: 'system', subtype: 'retry', text: 'Lost connection to sandbox. Reconnecting with fresh session…' },
-          });
-          try {
-            await threadsService.updateAgentSessionId(threadId, null);
-            const resumePrompt = await buildRetryPrompt('The sandbox connection was lost and restored.');
-            await manager.sendPrompt(project.sandboxId!, resumePrompt, threadId,
-              null, mode, model, effectiveAgentType, true);
-            receivedFirstMessage = false;
-            resetTimeout(AGENT_INITIAL_TIMEOUT_MS);
-            startHealthCheck();
-            return;
-          } catch (err) {
-            console.error(`[agent-ws] Reconnect retry failed for ${threadId.slice(0, 8)}:`, err);
-          }
-        }
-        cleanupHandler();
-        await updateThreadStatusAndNotify(threadId, 'error');
-        emitToSubscribers(project.sandboxId!, 'agent_error', {
-          threadId, error: 'Lost connection to sandbox and could not recover.',
+        emitToSubscribers(project.sandboxId!, 'agent_status', { threadId, status: 'retrying' });
+        emitToSubscribers(project.sandboxId!, 'agent_message', {
+          threadId, message: { type: 'system', subtype: 'retry', text: 'Lost connection to sandbox. Waiting for reconnect…' },
         });
+
+        const graceTimer = setTimeout(async () => {
+          if (!activeHandlers.has(threadId)) return;
+          if (manager.isBridgeConnected(project.sandboxId!)) {
+            console.log(`[agent-ws] Bridge reconnected during grace for thread ${threadId.slice(0, 8)}, requesting replay`);
+            const afterSeq = lastSeenSeq.get(threadId) || 0;
+            manager.requestReplay(project.sandboxId!, threadId, afterSeq);
+            startHealthCheck();
+            resetTimeout(AGENT_ACTIVITY_TIMEOUT_MS);
+            return;
+          }
+          console.log(`[agent-ws] Grace period expired for thread ${threadId.slice(0, 8)}, attempting reconnect`);
+          try {
+            const dirName = await resolveDirName(project);
+            await manager.reconnectSandbox(project.sandboxId!, dirName, project.localDir || undefined);
+            const afterSeq = lastSeenSeq.get(threadId) || 0;
+            manager.requestReplay(project.sandboxId!, threadId, afterSeq);
+            startHealthCheck();
+            resetTimeout(AGENT_ACTIVITY_TIMEOUT_MS);
+          } catch (err) {
+            console.error(`[agent-ws] Reconnect failed for ${threadId.slice(0, 8)} after grace:`, err);
+            cleanupHandler();
+            await updateThreadStatusAndNotify(threadId, 'error');
+            emitToSubscribers(project.sandboxId!, 'agent_error', {
+              threadId, error: 'Lost connection to sandbox and could not reconnect.',
+            });
+          }
+        }, RECONNECT_GRACE_MS);
+        activeTimeouts.set(threadId, graceTimer);
       }
     }, HEALTH_CHECK_INTERVAL_MS);
     activeHealthChecks.set(threadId, interval);
@@ -489,6 +501,13 @@ async function executeAgainstSandbox(
     const msgThreadId = (msg as any).threadId;
     if (msgThreadId && msgThreadId !== threadId) return;
     if (stoppedThreads.has(threadId)) return;
+
+    const msgSeq = (msg as any)._seq;
+    if (typeof msgSeq === 'number') {
+      const prev = lastSeenSeq.get(threadId) || 0;
+      if (msgSeq <= prev) return;
+      lastSeenSeq.set(threadId, msgSeq);
+    }
 
     if (msg.type === 'agent_stderr') {
       stderrChunks.push((msg as any).data || '');
@@ -856,6 +875,7 @@ async function handleMessage(client: WsClient, message: unknown) {
         await updateThreadStatusAndNotify(threadId, 'completed');
         emitToSubscribers(project.sandboxId, 'agent_status', { threadId, status: 'completed' });
         stoppedThreads.delete(threadId);
+        lastSeenSeq.delete(threadId);
         break;
       }
       case 'update_thread_status': {
@@ -1331,6 +1351,13 @@ function reattachToRunningThread(
     const msgThreadId = (msg as any).threadId;
     if (msgThreadId && msgThreadId !== threadId) return;
 
+    const msgSeq = (msg as any)._seq;
+    if (typeof msgSeq === 'number') {
+      const prev = lastSeenSeq.get(threadId) || 0;
+      if (msgSeq <= prev) return;
+      lastSeenSeq.set(threadId, msgSeq);
+    }
+
     if (msg.type === 'agent_message') {
       const data = msg.data as any;
 
@@ -1446,14 +1473,38 @@ async function reconcileAndReconnect(
           } catch { /* ignore */ }
         };
         manager.on('running_sessions', onRunningSessions);
-        // Auto-cleanup if no running_sessions arrives within 30s (recovery waits for OpenCode health)
-        setTimeout(() => manager.removeListener('running_sessions', onRunningSessions), 30_000);
+
+        const onBridgeThreads = async (sandboxId: string, threads: Record<string, { lastSeq: number; status: string; sessionId: string | null }>) => {
+          if (sandboxId !== reconciled.sandboxId) return;
+          manager.removeListener('bridge_threads', onBridgeThreads);
+          for (const [threadId, info] of Object.entries(threads)) {
+            if (info.status !== 'completed' && info.status !== 'error') continue;
+            try {
+              const thread = await threadsService.findById(threadId);
+              if (!thread || thread.projectId !== projectId) continue;
+              if (thread.status !== 'running' && thread.status !== 'waiting_for_input') continue;
+              console.log(`[agent-ws] Bridge reports thread ${threadId.slice(0, 8)} as ${info.status}, requesting replay (lastSeq=${info.lastSeq})`);
+              reattachToRunningThread(sandboxId, threadId, manager);
+              const afterSeq = lastSeenSeq.get(threadId) || 0;
+              manager.requestReplay(sandboxId, threadId, afterSeq);
+            } catch (err) {
+              console.warn(`[agent-ws] Failed to request replay for thread ${threadId.slice(0, 8)}:`, err);
+            }
+          }
+        };
+        manager.on('bridge_threads', onBridgeThreads);
+        // Auto-cleanup if no running_sessions/bridge_threads arrives within 30s
+        setTimeout(() => {
+          manager.removeListener('running_sessions', onRunningSessions);
+          manager.removeListener('bridge_threads', onBridgeThreads);
+        }, 30_000);
 
         const dirName = await resolveDirName(reconciled);
         try {
           await manager.reconnectSandbox(reconciled.sandboxId!, dirName, reconciled.localDir || undefined);
         } catch (reconnectErr) {
           manager.removeListener('running_sessions', onRunningSessions);
+          manager.removeListener('bridge_threads', onBridgeThreads);
           console.warn(`[agent-ws] reconnect failed for ${projectId}, marking as error:`, reconnectErr);
           const message = reconnectErr instanceof Error ? reconnectErr.message : String(reconnectErr);
           await projectsService.update(projectId, { status: 'error', statusError: message.slice(0, 500) });
