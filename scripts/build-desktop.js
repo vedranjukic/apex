@@ -11,7 +11,7 @@
  */
 
 const { execSync } = require('child_process');
-const { cpSync, readFileSync, readdirSync, existsSync, lstatSync, statSync } = require('fs');
+const { cpSync, chmodSync, readFileSync, readdirSync, existsSync, lstatSync, statSync } = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -82,6 +82,18 @@ const filesToCopy = [
   { src: path.join(ROOT, 'apps', 'api', 'dist'), dest: path.join(resourcesDir, 'apps', 'api', 'dist') },
   { src: path.join(ROOT, 'apps', 'dashboard', 'dist'), dest: path.join(resourcesDir, 'apps', 'dashboard', 'dist') },
 ];
+
+// Bundle the native apex-proxy (MITM secrets proxy) binary.
+// Soft-fail: the proxy is optional and may not be built in all dev environments.
+const proxyBinarySrc = path.join(ROOT, 'apps', 'proxy', 'target', 'release', 'apex-proxy');
+const proxyBinaryDest = path.join(resourcesDir, 'bin', 'apex-proxy');
+if (existsSync(proxyBinarySrc)) {
+  cpSync(proxyBinarySrc, proxyBinaryDest);
+  chmodSync(proxyBinaryDest, 0o755);
+  console.log(`  ✓ ${path.relative(ROOT, proxyBinarySrc)} → ${path.relative(envPath, proxyBinaryDest)}`);
+} else {
+  console.warn(`  ⚠ apex-proxy binary not found at ${path.relative(ROOT, proxyBinarySrc)} — skipping (build with: cd apps/proxy && cargo build --release)`);
+}
 
 // Modules externalized from the API bundle — must ship with all transitive deps.
 const externalRoots = ['better-sqlite3', 'cpu-features', 'ssh2'];

@@ -22,6 +22,17 @@ function getProxyPort(): number {
 }
 
 function resolveProxyBinary(): string {
+  // Desktop app passes the bundled binary path via env var.
+  const envBin = process.env['APEX_PROXY_BIN'];
+  if (envBin) {
+    try {
+      fs.accessSync(envBin, fs.constants.X_OK);
+      return envBin;
+    } catch {
+      // env path not valid, fall through to other candidates
+    }
+  }
+
   // __dirname is apps/api/src/modules/secrets-proxy/ — walk up to workspace root
   const workspaceRoot = path.resolve(__dirname, '..', '..', '..', '..', '..');
   const candidates = [
@@ -43,7 +54,7 @@ function resolveProxyBinary(): string {
   }
 
   throw new Error(
-    `apex-proxy binary not found. Searched: ${candidates.join(', ')}. ` +
+    `apex-proxy binary not found. Searched: ${[envBin, ...candidates].filter(Boolean).join(', ')}. ` +
       'Build it with: cd apps/proxy && cargo build --release',
   );
 }
@@ -170,15 +181,17 @@ async function reloadSecrets(): Promise<void> {
 
   try {
     const allSecrets = await secretsService.findAll();
-    const secretsJson = JSON.stringify(
-      allSecrets.map((s) => ({
+    const githubToken = (await settingsService.get('GITHUB_TOKEN')) || '';
+    const payload = JSON.stringify({
+      secrets: allSecrets.map((s) => ({
         id: s.id,
         name: s.name,
         value: s.value,
         domain: s.domain,
         authType: s.authType || 'bearer',
       })),
-    );
+      github_token: githubToken,
+    });
 
     const port = getProxyPort();
     const http = require('http') as typeof import('http');
@@ -189,7 +202,7 @@ async function reloadSecrets(): Promise<void> {
           port,
           method: 'POST',
           path: '/internal/reload-secrets',
-          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(secretsJson) },
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
         },
         (res) => {
           res.resume();
@@ -197,10 +210,10 @@ async function reloadSecrets(): Promise<void> {
         },
       );
       req.on('error', (err) => reject(err));
-      req.write(secretsJson);
+      req.write(payload);
       req.end();
     });
-    console.log(`[secrets-proxy] secrets reloaded (${allSecrets.length} secrets)`);
+    console.log(`[secrets-proxy] secrets reloaded (${allSecrets.length} secrets, github_token: ${githubToken ? 'present' : 'empty'})`);
   } catch (err) {
     console.warn(`[secrets-proxy] reload failed: ${(err as Error).message}`);
   }

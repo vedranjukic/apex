@@ -37,7 +37,7 @@ export interface ProxySandboxInfo {
 }
 
 // Bump this when the combined proxy service script changes to force recreation
-const PROXY_SCRIPT_VERSION = '7';
+const PROXY_SCRIPT_VERSION = '8';
 
 function hashKeys(anthropicKey: string, openaiKey: string): string {
   return crypto
@@ -265,6 +265,11 @@ class ProxySandboxService {
   }
 
   private loadLinuxBinary(): Buffer {
+    const envBin = process.env['APEX_PROXY_LINUX_BIN'];
+    if (envBin) {
+      try { return fs.readFileSync(envBin); } catch { /* fall through */ }
+    }
+
     const workspaceRoot = path.resolve(__dirname, '..', '..', '..', '..', '..');
     const candidates = [
       path.join(workspaceRoot, 'apps/proxy/target/x86_64-unknown-linux-musl/release/apex-proxy'),
