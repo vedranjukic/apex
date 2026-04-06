@@ -16,7 +16,7 @@
         "executor": "nx:run-commands",
         "defaultConfiguration": "development",
         "options": {
-          "command": "bun run --watch src/main.ts",
+          "command": "PORT=6000 bun run --watch src/main.ts",
           "cwd": "apps/api"
         }
       }
