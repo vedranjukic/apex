@@ -13,6 +13,7 @@ import { useTerminalSocket } from '../hooks/use-terminal-socket';
 import { useLayoutSocket } from '../hooks/use-layout-socket';
 import { useProjectInfoSocket } from '../hooks/use-project-info-socket';
 import { useFileTreeSocket } from '../hooks/use-file-tree-socket';
+import { isSandboxRunning } from '../lib/sandbox-utils';
 import { useSearchSocket } from '../hooks/use-search-socket';
 import { useGitSocket } from '../hooks/use-git-socket';
 import { usePortsSocket } from '../hooks/use-ports-socket';
@@ -226,7 +227,7 @@ export function ProjectPage() {
       try {
         const updated = await projectsApi.get(projectId);
         setProject(updated);
-        if (updated.status === 'running' || updated.status === 'error') {
+        if (isSandboxRunning(updated.status) || updated.status === 'error') {
           clearInterval(pollRef.current);
         }
       } catch {
@@ -249,7 +250,7 @@ export function ProjectPage() {
       socket.current.send('subscribe_project', { projectId });
     }
 
-    const sandboxReady = project?.status === 'running' && !!sandboxId;
+    const sandboxReady = project ? isSandboxRunning(project.status) && !!sandboxId : false;
     const wasReady = prevSandboxReadyRef.current;
     prevSandboxReadyRef.current = sandboxReady;
     if (sandboxReady && !wasReady) {
@@ -350,7 +351,7 @@ export function ProjectPage() {
       terminalPanel={
         <TerminalPanel
           projectId={projectId}
-          sandboxReady={project.status === 'running' && !!project.sandboxId}
+          sandboxReady={isSandboxRunning(project.status) && !!project.sandboxId}
           createTerminal={terminal.createTerminal}
           sendInput={terminal.sendInput}
           resize={terminal.resize}

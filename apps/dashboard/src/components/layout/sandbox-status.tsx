@@ -1,11 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
-import { Loader2, AlertCircle, Play, Square, RotateCw } from 'lucide-react';
+import { Loader2, AlertCircle, Play, Square, RotateCw, WifiOff } from 'lucide-react';
 import { cn } from '../../lib/cn';
+import { useNetworkStore } from '../../stores/network-store';
+import { getEffectiveSandboxStatus, isSandboxRunning } from '../../lib/sandbox-utils';
 
 interface Props {
   status: string;
   sandboxId: string | null;
   statusError?: string | null;
+  provider?: string;
   onStop?: () => void;
   onStart?: () => void;
   onRestart?: () => void;
@@ -44,6 +47,11 @@ const statusConfig: Record<
     color: 'text-emerald-500',
     dotColor: 'bg-emerald-400',
   },
+  'running-offline': {
+    label: 'Running (Offline)',
+    color: 'text-orange-500',
+    dotColor: 'bg-orange-400',
+  },
   stopped: {
     label: 'Stopped',
     color: 'text-text-muted',
@@ -56,15 +64,23 @@ const statusConfig: Record<
   },
 };
 
-export function SandboxStatus({ status, sandboxId, statusError, onStop, onStart, onRestart }: Props) {
-  const config = statusConfig[status] || statusConfig.stopped;
+export function SandboxStatus({ status, sandboxId, statusError, provider, onStop, onStart, onRestart }: Props) {
+  const networkStore = useNetworkStore();
   const [menuOpen, setMenuOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const hasError = status === 'error' && !!statusError;
-  const isRunning = status === 'running';
-  const isStopped = status === 'stopped' || status === 'error';
+  // Determine effective status based on network state for Daytona sandboxes
+  const isDaytonaSandbox = provider === 'daytona';
+  const isNetworkOffline = !networkStore.isOnline || networkStore.connectionType === 'offline';
+  const effectiveStatus = getEffectiveSandboxStatus(status, provider || '', isNetworkOffline);
+
+  const config = statusConfig[effectiveStatus] || statusConfig.stopped;
+
+  const hasError = effectiveStatus === 'error' && !!statusError;
+  const isRunning = isSandboxRunning(effectiveStatus);
+  const isStopped = effectiveStatus === 'stopped' || effectiveStatus === 'error';
   const hasActions = isRunning || isStopped;
+  const showOfflineIndicator = isDaytonaSandbox && isNetworkOffline && effectiveStatus === 'running-offline';
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -103,7 +119,7 @@ export function SandboxStatus({ status, sandboxId, statusError, onStop, onStart,
           <Loader2 className={cn('w-3 h-3 animate-spin', config.color)} />
         ) : (
           <span className="relative flex h-2 w-2">
-            {status === 'running' && (
+            {effectiveStatus === 'running' && (
               <span
                 className={cn(
                   'absolute inline-flex h-full w-full rounded-full opacity-40 animate-ping',
@@ -120,6 +136,7 @@ export function SandboxStatus({ status, sandboxId, statusError, onStop, onStart,
           </span>
         )}
         <span className={config.color}>{config.label}</span>
+        {showOfflineIndicator && <WifiOff className="w-3 h-3 text-orange-400" />}
         {hasError && <AlertCircle className="w-3 h-3 text-red-400" />}
       </button>
 

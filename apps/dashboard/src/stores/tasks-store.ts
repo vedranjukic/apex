@@ -32,6 +32,9 @@ interface ThreadsState {
   threadSessionInfo: Record<string, ThreadSessionInfo>;
   threadDrafts: Record<string, string>;
   threadDraftSelections: Record<string, DraftSelection>;
+  // Offline-aware state
+  pausedThreadIds: Set<string>;
+  offlinePausedThreadIds: Set<string>;
   setSearchQuery: (q: string) => void;
   fetchThreads: (projectId: string) => Promise<void>;
   setActiveThread: (threadId: string) => Promise<void>;
@@ -41,7 +44,7 @@ interface ThreadsState {
     data: { prompt: string; agentType?: string },
   ) => Promise<Thread>;
   addMessage: (msg: Message) => void;
-  updateThreadStatus: (threadId: string, status: string) => void;
+  updateThreadStatus: (threadId: string, status: string, isOnline?: boolean) => void;
   updateThread: (threadId: string, patch: Partial<Thread>) => void;
   setThreadSessionInfo: (threadId: string, info: ThreadSessionInfo) => void;
   deleteThread: (id: string) => Promise<void>;
@@ -53,6 +56,10 @@ interface ThreadsState {
   setThreadDraftSelection: (threadId: string, sel: DraftSelection) => void;
   getThreadDraftSelection: (threadId: string) => DraftSelection | null;
   clearThreadDraft: (threadId: string) => void;
+  // Offline-aware methods
+  pauseThreadsForOffline: () => void;
+  resumeThreadsFromOffline: () => void;
+  canTransitionStatus: (fromStatus: string, toStatus: string, isOnline?: boolean) => boolean;
   reset: () => void;
 }
 
@@ -69,6 +76,8 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
   threadSessionInfo: {},
   threadDrafts: {},
   threadDraftSelections: {},
+  pausedThreadIds: new Set(),
+  offlinePausedThreadIds: new Set(),
 
   setSearchQuery: (q) => set({ searchQuery: q }),
 
@@ -147,7 +156,16 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
     }
   },
 
-  updateThreadStatus: (threadId, status) => {
+  updateThreadStatus: (threadId, status, isOnline = true) => {
+    const { canTransitionStatus } = get();
+    const currentThread = get().threads.find(t => t.id === threadId);
+    
+    // Check if status transition is allowed
+    if (currentThread && !canTransitionStatus(currentThread.status, status, isOnline)) {
+      console.log(`[threads] Blocked status transition from ${currentThread.status} to ${status} for thread ${threadId}`);
+      return;
+    }
+    
     const threads = get().threads.map((c) =>
       c.id === threadId ? { ...c, status } : c,
     );
@@ -215,6 +233,75 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
       return { threadDrafts: remainingDrafts, threadDraftSelections: remainingSelections };
     }),
 
+  pauseThreadsForOffline: () => {
+    const state = get();
+    const runningThreads = state.threads.filter(t => 
+      t.status === 'running' || t.status === 'waiting_for_user_action'
+    );
+    
+    if (runningThreads.length === 0) return;
+    
+    console.log(`[threads] Pausing ${runningThreads.length} threads for offline mode`);
+    
+    const offlinePausedThreadIds = new Set(state.offlinePausedThreadIds);
+    const threads = state.threads.map(thread => {
+      if (thread.status === 'running' || thread.status === 'waiting_for_user_action') {
+        offlinePausedThreadIds.add(thread.id);
+        return { ...thread, status: 'offline_paused', previousStatus: thread.status };
+      }
+      return thread;
+    });
+    
+    set({ threads, offlinePausedThreadIds });
+  },
+
+  resumeThreadsFromOffline: () => {
+    const state = get();
+    if (state.offlinePausedThreadIds.size === 0) return;
+    
+    console.log(`[threads] Resuming ${state.offlinePausedThreadIds.size} threads from offline mode`);
+    
+    const threads = state.threads.map(thread => {
+      if (state.offlinePausedThreadIds.has(thread.id) && thread.status === 'offline_paused') {
+        // Resume with previous status or default to idle
+        const resumeStatus = (thread as any).previousStatus || 'idle';
+        const { previousStatus, ...cleanThread } = thread as any;
+        return { ...cleanThread, status: resumeStatus };
+      }
+      return thread;
+    });
+    
+    set({ threads, offlinePausedThreadIds: new Set() });
+  },
+
+  canTransitionStatus: (fromStatus, toStatus, isOnline = true) => {
+    // Block certain transitions when offline
+    if (!isOnline) {
+      // Don't allow transitioning from offline_paused to running states
+      if (fromStatus === 'offline_paused' && (toStatus === 'running' || toStatus === 'waiting_for_user_action')) {
+        return false;
+      }
+      
+      // Don't allow transitioning to running states when offline
+      if (toStatus === 'running' || toStatus === 'waiting_for_user_action') {
+        return false;
+      }
+    }
+    
+    // Allow transitions to terminal states (completed, error, stopped) regardless of network
+    const terminalStates = ['completed', 'error', 'stopped', 'offline_paused'];
+    if (terminalStates.includes(toStatus)) {
+      return true;
+    }
+    
+    // Allow transitions from offline_paused when back online
+    if (fromStatus === 'offline_paused' && isOnline) {
+      return true;
+    }
+    
+    return true;
+  },
+
   reset: () =>
     set({
       projectId: null,
@@ -229,5 +316,7 @@ export const useThreadsStore = create<ThreadsState>((set, get) => ({
       threadSessionInfo: {},
       threadDrafts: {},
       threadDraftSelections: {},
+      pausedThreadIds: new Set(),
+      offlinePausedThreadIds: new Set(),
     }),
 }));

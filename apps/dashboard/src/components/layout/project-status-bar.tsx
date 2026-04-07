@@ -105,6 +105,7 @@ export function ProjectStatusBar({ project, info, gitActions, onStop, onStart, o
           status={project.status}
           sandboxId={project.sandboxId}
           statusError={project.statusError}
+          provider={project.provider}
           onStop={onStop}
           onStart={onStart}
           onRestart={onRestart}
