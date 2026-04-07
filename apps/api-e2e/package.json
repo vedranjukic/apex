@@ -11,19 +11,16 @@
     ],
     "targets": {
       "e2e": {
-        "executor": "@nx/jest:jest",
+        "executor": "nx:run-commands",
         "outputs": [
           "{projectRoot}/test-output/jest/coverage"
         ],
         "options": {
-          "jestConfig": "apps/api-e2e/jest.config.js",
-          "passWithNoTests": true,
-          "runInBand": true,
-          "forceExit": true
+          "command": "npx jest --config apps/api-e2e/jest.config.js --runInBand --passWithNoTests",
+          "cwd": "{workspaceRoot}"
         },
         "dependsOn": [
-          "@apex/api:build",
-          "@apex/api:serve"
+          "@apex/api:build"
         ]
       }
     }

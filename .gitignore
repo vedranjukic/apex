@@ -71,3 +71,6 @@ apps/cli/bin/
 
 build/
 dist/
+
+# E2E test artifacts
+.api-e2e-pid

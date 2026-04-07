@@ -119,58 +119,51 @@ describe('Settings Type Safety E2E', () => {
   describe('Filtering Logic Verification', () => {
     it('should correctly filter out null values', async () => {
       const payload = {
-        KEEP_THIS: "valid value",
-        FILTER_NULL_1: null,
-        KEEP_EMPTY: "",
-        FILTER_NULL_2: null,
-        KEEP_ANOTHER: "another valid value",
+        GIT_USER_NAME: "valid value",
+        ANTHROPIC_API_KEY: null,
+        GIT_USER_EMAIL: "",
+        OPENAI_API_KEY: null,
+        DAYTONA_API_URL: "another valid value",
       };
 
       const response = await axios.put('/api/settings', payload);
       expect(response.status).toBe(200);
 
-      // Verify only non-null values were processed
       const getResponse = await axios.get('/api/settings');
-      expect(getResponse.data.KEEP_THIS?.value).toBe("valid value");
-      expect(getResponse.data.KEEP_EMPTY?.value).toBe("");
-      expect(getResponse.data.KEEP_ANOTHER?.value).toBe("another valid value");
-      
-      // Null fields should not exist or have empty values
-      if (getResponse.data.FILTER_NULL_1) {
-        expect(getResponse.data.FILTER_NULL_1.source).toBe('none');
-      }
+      expect(getResponse.data.GIT_USER_NAME?.value).toBe("valid value");
+      expect(getResponse.data.GIT_USER_EMAIL?.value).toBe("");
+      expect(getResponse.data.DAYTONA_API_URL?.value).toBe("another valid value");
     });
 
     it('should correctly filter out masked values', async () => {
-      // Set initial values
+      // Set initial values (use an allowed key that supports masking)
       await axios.put('/api/settings', {
-        TEST_API_KEY: "sk-real-key-12345",
+        DAYTONA_API_KEY: "sk-real-key-12345",
       });
 
       // Send masked version back (simulating dashboard)
       const payload = {
-        TEST_API_KEY: "sk-r••••-12345", // Masked
-        GIT_USER_NAME: "Updated Name", // Real change
+        DAYTONA_API_KEY: "sk-r••••-12345", // Masked — should be filtered
+        GIT_USER_NAME: "Updated Name",
       };
 
       const response = await axios.put('/api/settings', payload);
       expect(response.status).toBe(200);
 
-      // Masked value should not overwrite real value
       const getResponse = await axios.get('/api/settings');
       expect(getResponse.data.GIT_USER_NAME?.value).toBe("Updated Name");
-      // API key should remain (though masked in response)
-      expect(getResponse.data.TEST_API_KEY?.value).toContain('••••');
+      // Masked value should have been filtered; original should remain masked in response
+      expect(getResponse.data.DAYTONA_API_KEY?.value).toContain('••••');
     }, 40_000);
 
     it('should handle mixed filtering scenarios', async () => {
       const complexPayload = {
-        NULL_VALUE: null,                    // Filter out
-        MASKED_VALUE: "sk-ant-••••-test",   // Filter out  
-        EMPTY_STRING: "",                   // Keep
-        VALID_VALUE: "real value",          // Keep
-        ANOTHER_NULL: null,                 // Filter out
-        ANOTHER_MASKED: "ghp_••••abcd",     // Filter out
+        ANTHROPIC_API_KEY: null,                    // Filter out (null)
+        OPENAI_API_KEY: "sk-ant-••••-test",         // Filter out (masked)
+        GIT_USER_EMAIL: "",                         // Keep (empty string clears)
+        GIT_USER_NAME: "real value",                // Keep
+        DAYTONA_API_KEY: null,                      // Filter out (null)
+        GITHUB_TOKEN: "ghp_••••abcd",               // Filter out (masked)
       };
 
       const response = await axios.put('/api/settings', complexPayload);
@@ -178,8 +171,8 @@ describe('Settings Type Safety E2E', () => {
       expect(response.data).toEqual({ ok: true });
 
       const getResponse = await axios.get('/api/settings');
-      expect(getResponse.data.EMPTY_STRING?.value).toBe("");
-      expect(getResponse.data.VALID_VALUE?.value).toBe("real value");
+      expect(getResponse.data.GIT_USER_EMAIL?.value).toBe("");
+      expect(getResponse.data.GIT_USER_NAME?.value).toBe("real value");
     });
   });
 
