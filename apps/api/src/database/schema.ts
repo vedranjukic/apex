@@ -77,6 +77,7 @@ export const tasks = sqliteTable('tasks', {
   agentType: text('agent_type'),
   model: text('model'),
   planData: text('plan_data', { mode: 'json' }).$type<{ id: string; title: string; filename: string; content: string } | null>(),
+  lastPersistedSeq: integer('last_persisted_seq'),
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()).$onUpdateFn(() => new Date().toISOString()),
 });

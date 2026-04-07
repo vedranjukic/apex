@@ -222,6 +222,16 @@ export async function getThreadStatus(threadId: string): Promise<string> {
   return res.data.status;
 }
 
+export async function getThread(threadId: string): Promise<any> {
+  const res = await axios.get(`/api/threads/${threadId}`);
+  return res.data;
+}
+
+export async function getThreadMessages(threadId: string): Promise<any[]> {
+  const res = await axios.get(`/api/threads/${threadId}/messages`);
+  return res.data;
+}
+
 // ── Event collection ─────────────────────────────────
 
 /**
