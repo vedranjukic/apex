@@ -546,6 +546,7 @@ async function executeAgainstSandbox(
             content: data.message.content,
             metadata: { model: data.message.model, stopReason: data.message.stop_reason, usage: data.message.usage },
           });
+          if (typeof msgSeq === 'number') await threadsService.updateLastPersistedSeq(threadId, msgSeq);
         }
       }
 
@@ -553,6 +554,7 @@ async function executeAgainstSandbox(
         const hasToolResult = data.message.content.some((b: { type?: string }) => b?.type === 'tool_result');
         if (hasToolResult) {
           await threadsService.addMessage(threadId, { role: 'user', content: data.message.content, metadata: null });
+          if (typeof msgSeq === 'number') await threadsService.updateLastPersistedSeq(threadId, msgSeq);
         }
       }
 
@@ -567,6 +569,7 @@ async function executeAgainstSandbox(
             numTurns: data.num_turns, inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens,
           },
         });
+        if (typeof msgSeq === 'number') await threadsService.updateLastPersistedSeq(threadId, msgSeq);
         const currentThread = await threadsService.findById(threadId);
         if (currentThread.status !== 'waiting_for_input' && currentThread.status !== 'waiting_for_user_action') {
           const finalStatus = data.is_error ? 'error' : 'completed';
@@ -646,6 +649,7 @@ async function executeAgainstSandbox(
           const hasGap = lastMsg && (lastMsg.role === 'user' || (lastMsg.role === 'system' && currentMessages.length > 1 && currentMessages[currentMessages.length - 2]?.role === 'user'));
           if (hasGap) {
             await threadsService.addMessage(threadId, { role: 'assistant', content: blocks, metadata: { catchup: true } });
+            if (typeof msgSeq === 'number') await threadsService.updateLastPersistedSeq(threadId, msgSeq);
             console.log(`[agent-ws] Saved ${blocks.length} catch-up blocks for thread ${threadId.slice(0, 8)}`);
           }
           emitToSubscribers(project.sandboxId!, 'agent_message', {
@@ -1373,12 +1377,14 @@ function reattachToRunningThread(
             role: 'assistant', content: data.message.content,
             metadata: { model: data.message.model, stopReason: data.message.stop_reason, usage: data.message.usage },
           });
+          if (typeof msgSeq === 'number') await threadsService.updateLastPersistedSeq(threadId, msgSeq);
         }
       }
       if (data.type === 'user' && data.message?.content?.length) {
         const hasToolResult = data.message.content.some((b: { type?: string }) => b?.type === 'tool_result');
         if (hasToolResult) {
           await threadsService.addMessage(threadId, { role: 'user', content: data.message.content, metadata: null });
+          if (typeof msgSeq === 'number') await threadsService.updateLastPersistedSeq(threadId, msgSeq);
         }
       }
       if (data.type === 'result') {
@@ -1390,6 +1396,7 @@ function reattachToRunningThread(
             numTurns: data.num_turns, inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens,
           },
         });
+        if (typeof msgSeq === 'number') await threadsService.updateLastPersistedSeq(threadId, msgSeq);
         const finalStatus = data.is_error ? 'error' : 'completed';
         await updateThreadStatusAndNotify(threadId, finalStatus);
         emitToSubscribers(sandboxId, 'agent_status', { threadId, status: finalStatus });
@@ -1482,11 +1489,20 @@ async function reconcileAndReconnect(
             try {
               const thread = await threadsService.findById(threadId);
               if (!thread || thread.projectId !== projectId) continue;
-              if (thread.status !== 'running' && thread.status !== 'waiting_for_input') continue;
-              console.log(`[agent-ws] Bridge reports thread ${threadId.slice(0, 8)} as ${info.status}, requesting replay (lastSeq=${info.lastSeq})`);
-              reattachToRunningThread(sandboxId, threadId, manager);
-              const afterSeq = lastSeenSeq.get(threadId) || 0;
-              manager.requestReplay(sandboxId, threadId, afterSeq);
+
+              const dbSeq = thread.lastPersistedSeq ?? 0;
+              const memSeq = lastSeenSeq.get(threadId) || 0;
+              const afterSeq = Math.max(dbSeq, memSeq);
+
+              if (thread.status === 'running' || thread.status === 'waiting_for_input') {
+                console.log(`[agent-ws] Bridge reports thread ${threadId.slice(0, 8)} as ${info.status}, requesting replay (afterSeq=${afterSeq})`);
+                reattachToRunningThread(sandboxId, threadId, manager);
+                manager.requestReplay(sandboxId, threadId, afterSeq);
+              } else if (info.lastSeq > afterSeq) {
+                console.log(`[agent-ws] Thread ${threadId.slice(0, 8)} force-completed but bridge has events beyond persisted seq (bridge=${info.lastSeq}, persisted=${afterSeq}), backfilling`);
+                reattachToRunningThread(sandboxId, threadId, manager);
+                manager.requestReplay(sandboxId, threadId, afterSeq);
+              }
             } catch (err) {
               console.warn(`[agent-ws] Failed to request replay for thread ${threadId.slice(0, 8)}:`, err);
             }

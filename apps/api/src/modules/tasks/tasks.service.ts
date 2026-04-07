@@ -99,6 +99,13 @@ class ThreadsService {
     await db.update(tasks).set({ planData, updatedAt: new Date().toISOString() }).where(eq(tasks.id, threadId));
   }
 
+  async updateLastPersistedSeq(threadId: string, seq: number): Promise<void> {
+    await db
+      .update(tasks)
+      .set({ lastPersistedSeq: seq })
+      .where(eq(tasks.id, threadId));
+  }
+
   async addMessage(
     threadId: string,
     data: {
