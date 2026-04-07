@@ -17,107 +17,37 @@
  * Run: npx nx e2e @apex/api-e2e --testPathPattern=ask-user
  */
 import axios from 'axios';
-import { io, Socket } from 'socket.io-client';
-
-const host = process.env.HOST ?? 'localhost';
-const port = process.env.PORT ?? '6000';
-const baseUrl = `http://${host}:${port}`;
+import {
+  AgentSocket,
+  createProject,
+  waitForApiSettled,
+  waitForSandbox,
+  deleteProject,
+  connectSocket,
+  subscribeProject,
+  createThread,
+  getThreadStatus,
+  type AgentEvent,
+} from './support/e2e-helpers';
 
 const hasSandboxKeys =
   !!process.env.DAYTONA_API_KEY && !!process.env.ANTHROPIC_API_KEY;
 
 const describeE2e = hasSandboxKeys ? describe : describe.skip;
 
-// ── Helpers ──────────────────────────────────────────
-
-async function createProject(name: string): Promise<string> {
-  const res = await axios.post('/api/projects', { name, agentType: 'build' });
-  expect([200, 201]).toContain(res.status);
-  return res.data.id;
-}
-
-async function waitForSandbox(
-  projectId: string,
-  timeoutMs = 5 * 60 * 1000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const res = await axios.get(`/api/projects/${projectId}`);
-    if (res.data.status === 'running' && res.data.sandboxId) return;
-    if (res.data.status === 'error') {
-      throw new Error(`Provision failed: ${res.data.statusError}`);
-    }
-    await new Promise((r) => setTimeout(r, 3000));
-  }
-  throw new Error('Sandbox did not become ready in time');
-}
-
-function connectSocket(): Promise<Socket> {
-  const socket = io(`${baseUrl}/ws/agent`, {
-    path: '/ws/socket.io',
-    transports: ['polling', 'websocket'],
-    autoConnect: true,
-  });
-  return new Promise((resolve, reject) => {
-    socket.on('connect', () => resolve(socket));
-    socket.on('connect_error', (err) => reject(err));
-  });
-}
-
-function subscribeProject(socket: Socket, projectId: string): Promise<void> {
-  return new Promise((resolve) => {
-    socket.emit('subscribe_project', { projectId });
-    socket.once('subscribed', () => resolve());
-  });
-}
-
-async function createThread(
-  projectId: string,
-  prompt: string,
-): Promise<string> {
-  const res = await axios.post(`/api/projects/${projectId}/threads`, { prompt });
-  expect([200, 201]).toContain(res.status);
-  return res.data.id;
-}
-
-async function deleteProject(projectId: string): Promise<void> {
-  try {
-    await axios.delete(`/api/projects/${projectId}`);
-  } catch {
-    // ignore cleanup errors
-  }
-}
-
-async function getThreadStatus(threadId: string): Promise<string> {
-  const res = await axios.get(`/api/threads/${threadId}`);
-  return res.data.status;
-}
-
-// ── Types ────────────────────────────────────────────
-
-interface AgentEvent {
-  type: string;
-  subtype?: string;
-  message?: {
-    role?: string;
-    content?: Array<{ type: string; text?: string; name?: string; id?: string; input?: Record<string, unknown> }>;
-    stop_reason?: string;
-  };
-  session_id?: string;
-  is_error?: boolean;
-}
-
 interface StatusEvent {
   threadId: string;
   status: string;
 }
 
-// ── Tests ────────────────────────────────────────────
-
 describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
   let projectId: string;
   let threadId: string;
-  let socket: Socket;
+  let socket: AgentSocket;
+
+  beforeAll(async () => {
+    await waitForApiSettled();
+  }, 30_000);
 
   afterAll(async () => {
     socket?.disconnect();
@@ -135,8 +65,6 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
   }, 30_000);
 
   it('should trigger ask_user and receive waiting_for_input status', async () => {
-    // Prompt that forces the agent to ask a question via the MCP ask_user tool.
-    // We explicitly instruct the agent to use ask_user.
     const prompt = [
       'You have the mcp__terminal-server__ask_user tool available.',
       'Use it now to ask the user which programming language they prefer.',
@@ -156,8 +84,6 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
     }>((resolve, reject) => {
       const timeout = setTimeout(() => {
         cleanup();
-        // If we never saw waiting_for_input, resolve with what we have
-        // so we can produce a descriptive failure message
         resolve({
           questionToolUseId: '',
           statuses: statusUpdates,
@@ -165,13 +91,12 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
         });
       }, 3 * 60 * 1000);
 
-      const onStatus = (data: StatusEvent) => {
-        if (data.threadId !== threadId) return;
-        console.log(`[ask-user e2e] agent_status: ${data.status}`);
-        statusUpdates.push(data);
+      const onStatus = (payload: any) => {
+        if (payload.threadId !== threadId) return;
+        console.log(`[ask-user e2e] agent_status: ${payload.status}`);
+        statusUpdates.push(payload);
 
-        if (data.status === 'waiting_for_input') {
-          // Find the AskUserQuestion tool_use ID from events
+        if (payload.status === 'waiting_for_input') {
           const askEvent = agentEvents.find((e) =>
             e.message?.content?.some(
               (b) => b.type === 'tool_use' && b.name === 'AskUserQuestion',
@@ -190,18 +115,18 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
         }
       };
 
-      const onMessage = (data: { threadId?: string; message?: AgentEvent }) => {
-        if (data.threadId !== threadId) return;
-        if (data.message) {
-          agentEvents.push(data.message);
+      const onMessage = (payload: any) => {
+        if (payload.threadId !== threadId) return;
+        if (payload.message) {
+          agentEvents.push(payload.message);
         }
       };
 
-      const onError = (data: { threadId?: string; error?: string }) => {
-        if (data.threadId !== threadId) return;
+      const onError = (payload: any) => {
+        if (payload.threadId !== threadId) return;
         clearTimeout(timeout);
         cleanup();
-        reject(new Error(`Agent error: ${data.error}`));
+        reject(new Error(`Agent error: ${payload.error}`));
       };
 
       const cleanup = () => {
@@ -215,35 +140,29 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
       socket.on('agent_error', onError);
     });
 
-    socket.emit('execute_thread', { threadId, mode: 'agent' });
+    socket.send('execute_thread', { threadId, mode: 'agent' });
 
     const result = await waitForAskUser;
 
     console.log(`[ask-user e2e] ${result.events.length} events, ${result.statuses.length} status updates`);
     console.log(`[ask-user e2e] Status sequence: ${result.statuses.map((s) => s.status).join(' → ')}`);
 
-    // The agent should have transitioned to waiting_for_input
     const waitingStatus = result.statuses.find((s) => s.status === 'waiting_for_input');
     expect(waitingStatus).toBeDefined();
 
-    // An AskUserQuestion tool_use should appear in the events
     const askEvent = result.events.find((e) =>
       e.message?.content?.some(
         (b) => b.type === 'tool_use' && b.name === 'AskUserQuestion',
       ),
     );
     expect(askEvent).toBeDefined();
-
-    // The tool_use should have a valid ID
     expect(result.questionToolUseId).toBeTruthy();
 
-    // The DB status should also be waiting_for_input
     const dbStatus = await getThreadStatus(threadId);
     expect(dbStatus).toBe('waiting_for_input');
   }, 4 * 60 * 1000);
 
   it('should transition back to running when user answers', async () => {
-    // Retrieve the AskUserQuestion tool_use ID from the thread messages
     const messagesRes = await axios.get(`/api/threads/${threadId}/messages`);
     const messages = messagesRes.data;
     let toolUseId = '';
@@ -261,7 +180,6 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
 
     expect(toolUseId).toBeTruthy();
 
-    // Listen for status changes
     const statusSequence: string[] = [];
 
     const waitForCompletion = new Promise<string[]>((resolve) => {
@@ -270,12 +188,12 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
         resolve(statusSequence);
       }, 3 * 60 * 1000);
 
-      const onStatus = (data: StatusEvent) => {
-        if (data.threadId !== threadId) return;
-        console.log(`[ask-user e2e] post-answer status: ${data.status}`);
-        statusSequence.push(data.status);
+      const onStatus = (payload: any) => {
+        if (payload.threadId !== threadId) return;
+        console.log(`[ask-user e2e] post-answer status: ${payload.status}`);
+        statusSequence.push(payload.status);
 
-        if (data.status === 'completed' || data.status === 'error') {
+        if (payload.status === 'completed' || payload.status === 'error') {
           clearTimeout(timeout);
           cleanup();
           resolve(statusSequence);
@@ -289,20 +207,13 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
       socket.on('agent_status', onStatus);
     });
 
-    // Send the user answer
-    socket.emit('user_answer', {
-      threadId,
-      toolUseId,
-      answer: 'Python',
-    });
+    socket.send('user_answer', { threadId, toolUseId, answer: 'Python' });
 
     const statuses = await waitForCompletion;
     console.log(`[ask-user e2e] Post-answer status sequence: ${statuses.join(' → ')}`);
 
-    // Should have transitioned to running after the answer
     expect(statuses).toContain('running');
 
-    // Should eventually complete
     const finalStatus = await getThreadStatus(threadId);
     expect(['completed', 'running']).toContain(finalStatus);
   }, 4 * 60 * 1000);

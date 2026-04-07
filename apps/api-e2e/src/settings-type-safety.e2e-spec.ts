@@ -283,13 +283,12 @@ describe('Settings Type Safety E2E', () => {
 
   describe('Type Safety Validation', () => {
     it('should handle all primitive type variations in a single save', async () => {
-      // Send all primitive types at once to avoid triggering reinit per value
       const payload = {
         ANTHROPIC_API_KEY: null,        // null → filtered out
         GIT_USER_NAME: "test-string",   // string → kept
         GIT_USER_EMAIL: "",             // empty string → kept (clears)
         AGENT_MAX_TOKENS: 42,           // number → converted to "42"
-        DAYTONA_API_URL: false,         // boolean → converted to "false"
+        AGENT_PLAN_MAX_TOKENS: false,   // boolean → converted to "false"
       };
 
       const response = await axios.put('/api/settings', payload as any);
@@ -300,7 +299,7 @@ describe('Settings Type Safety E2E', () => {
       expect(getResponse.data.GIT_USER_NAME?.value).toBe("test-string");
       expect(getResponse.data.GIT_USER_EMAIL?.value).toBe("");
       expect(getResponse.data.AGENT_MAX_TOKENS?.value).toBe("42");
-      expect(getResponse.data.DAYTONA_API_URL?.value).toBe("false");
+      expect(getResponse.data.AGENT_PLAN_MAX_TOKENS?.value).toBe("false");
     }, 40_000);
 
     it('should validate string conversion behavior', async () => {
