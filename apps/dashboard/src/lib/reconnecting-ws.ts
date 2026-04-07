@@ -30,11 +30,6 @@ export class ReconnectingWebSocket {
           this.reconnectDelay = 1000; // Reset delay when coming back online
           this.connect();
         }
-        
-        // Update socket connection status in the network store
-        if (this.connected !== state.socketConnected) {
-          useNetworkStore.getState().setSocketConnected(this.connected);
-        }
       }
     );
     
