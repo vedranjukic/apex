@@ -7,6 +7,7 @@ export * from './editor-store';
 export * from './file-tree-store';
 export * from './git-store';
 export * from './lsp-store';
+export * from './network-store';
 export * from './panels-store';
 export * from './plan-store';
 export * from './project-agent-settings-store';

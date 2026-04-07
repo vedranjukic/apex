@@ -13,6 +13,7 @@ import { useProjectsSocket } from '../../hooks/use-projects-socket';
 import { CreateProjectDialog } from './create-project-dialog';
 import { settingsApi, projectsApi, githubApi } from '../../api/client';
 import type { Project, Thread, GitHubUser, SettingEntry } from '../../api/client';
+import { isSandboxRunning } from '../../lib/sandbox-utils';
 import { TourTooltip } from '../tour/tour-tooltip';
 import { useTourStore } from '../../stores/tour-store';
 
@@ -94,7 +95,7 @@ function SandboxControls({ project, className }: { project: Project; className?:
   const { fetchProjects, setProjectStatus } = useProjectsStore();
   const iconSize = className ?? 'w-4 h-4';
 
-  const isRunning = project.status === 'running';
+  const isRunning = isSandboxRunning(project.status);
   const isStopped = project.status === 'stopped' || project.status === 'error';
   const isTransitioning = project.status === 'starting' || project.status === 'stopping' || project.status === 'creating' || project.status === 'pulling_image' || project.status === 'deleting';
 
