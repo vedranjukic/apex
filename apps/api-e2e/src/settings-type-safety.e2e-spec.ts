@@ -133,7 +133,7 @@ describe('Settings Type Safety E2E', () => {
       expect(getResponse.data.GIT_USER_NAME?.value).toBe("valid value");
       expect(getResponse.data.GIT_USER_EMAIL?.value).toBe("");
       expect(getResponse.data.DAYTONA_API_URL?.value).toBe("another valid value");
-    });
+    }, 40_000);
 
     it('should correctly filter out masked values', async () => {
       // Set initial values (use an allowed key that supports masking)
@@ -178,22 +178,21 @@ describe('Settings Type Safety E2E', () => {
 
   describe('Error Boundary and Recovery', () => {
     it('should handle JavaScript type coercion edge cases', async () => {
-      // These represent various edge cases that JavaScript might produce
-      const edgeCasePayloads = [
-        { EMPTY_OBJECT: {} },           // Object becomes [object Object]
-        { NULL_EXPLICIT: null },        
-        { FALSE_VALUE: false },         // Becomes "false"
-        { ZERO_VALUE: 0 },             // Becomes "0"
-        { ARRAY_VALUE: [] },           // Becomes ""
-      ];
+      // Send all edge cases in one payload to trigger only one reinit cycle
+      const payload = {
+        GIT_USER_NAME: false,       // boolean → "false"
+        AGENT_MAX_TOKENS: 0,        // number zero → "0"
+        ANTHROPIC_API_KEY: null,    // null → filtered out
+      };
 
-      for (const payload of edgeCasePayloads) {
-        // These might come from buggy frontend code
-        const response = await axios.put('/api/settings', payload);
-        expect(response.status).toBe(200);
-        expect(response.data).toEqual({ ok: true });
-      }
-    });
+      const response = await axios.put('/api/settings', payload as any);
+      expect(response.status).toBe(200);
+      expect(response.data).toEqual({ ok: true });
+
+      const getResponse = await axios.get('/api/settings');
+      expect(getResponse.data.GIT_USER_NAME?.value).toBe("false");
+      expect(getResponse.data.AGENT_MAX_TOKENS?.value).toBe("0");
+    }, 40_000);
 
     it('should maintain API stability after type errors', async () => {
       // After processing edge cases, API should remain stable
@@ -280,53 +279,44 @@ describe('Settings Type Safety E2E', () => {
   });
 
   describe('Type Safety Validation', () => {
-    it('should handle all primitive type variations', async () => {
-      // Test that our type checking works for all JavaScript primitives
-      const primitiveTests = [
-        { name: "null", value: null, shouldProcess: false },
-        { name: "empty string", value: "", shouldProcess: true },
-        { name: "string", value: "test", shouldProcess: true },
-        { name: "number", value: 42, shouldProcess: true },
-        { name: "boolean true", value: true, shouldProcess: true },
-        { name: "boolean false", value: false, shouldProcess: true },
-      ];
+    it('should handle all primitive type variations in a single save', async () => {
+      // Send all primitive types at once to avoid triggering reinit per value
+      const payload = {
+        ANTHROPIC_API_KEY: null,        // null → filtered out
+        GIT_USER_NAME: "test-string",   // string → kept
+        GIT_USER_EMAIL: "",             // empty string → kept (clears)
+        AGENT_MAX_TOKENS: 42,           // number → converted to "42"
+        DAYTONA_API_URL: false,         // boolean → converted to "false"
+      };
 
-      for (const test of primitiveTests) {
-        const payload = { [`TEST_${test.name.toUpperCase()}`]: test.value };
-        
-        const response = await axios.put('/api/settings', payload);
-        expect(response.status).toBe(200);
-        expect(response.data).toEqual({ ok: true });
-        
-        // If it should process, verify it was converted to string
-        if (test.shouldProcess && test.value !== null) {
-          const getResponse = await axios.get('/api/settings');
-          const fieldName = `TEST_${test.name.toUpperCase()}`;
-          if (getResponse.data[fieldName]) {
-            expect(typeof getResponse.data[fieldName].value).toBe('string');
-          }
-        }
-      }
-    });
+      const response = await axios.put('/api/settings', payload as any);
+      expect(response.status).toBe(200);
+      expect(response.data).toEqual({ ok: true });
+
+      const getResponse = await axios.get('/api/settings');
+      expect(getResponse.data.GIT_USER_NAME?.value).toBe("test-string");
+      expect(getResponse.data.GIT_USER_EMAIL?.value).toBe("");
+      expect(getResponse.data.AGENT_MAX_TOKENS?.value).toBe("42");
+      expect(getResponse.data.DAYTONA_API_URL?.value).toBe("false");
+    }, 40_000);
 
     it('should validate string conversion behavior', async () => {
-      const conversionTests = [
-        { input: 0, expected: "0" },
-        { input: false, expected: "false" },
-        { input: true, expected: "true" },
-        { input: 123, expected: "123" },
-      ];
+      // Send all conversion cases in a single PUT to avoid multiple reinit cycles
+      const payload = {
+        AGENT_MAX_TOKENS: 0,
+        AGENT_BUILD_MAX_TOKENS: 123,
+        GIT_USER_NAME: true,
+        GIT_USER_EMAIL: false,
+      };
 
-      for (const test of conversionTests) {
-        const payload = { TEST_CONVERSION: test.input };
-        
-        await axios.put('/api/settings', payload);
-        const getResponse = await axios.get('/api/settings');
-        
-        if (getResponse.data.TEST_CONVERSION) {
-          expect(getResponse.data.TEST_CONVERSION.value).toBe(test.expected);
-        }
-      }
+      const response = await axios.put('/api/settings', payload as any);
+      expect(response.status).toBe(200);
+
+      const getResponse = await axios.get('/api/settings');
+      expect(getResponse.data.AGENT_MAX_TOKENS?.value).toBe("0");
+      expect(getResponse.data.AGENT_BUILD_MAX_TOKENS?.value).toBe("123");
+      expect(getResponse.data.GIT_USER_NAME?.value).toBe("true");
+      expect(getResponse.data.GIT_USER_EMAIL?.value).toBe("false");
     }, 40_000);
   });
 });

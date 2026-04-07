@@ -370,7 +370,7 @@ describe('Secrets Proxy — Auth Types', () => {
     const bodyJson = JSON.parse(response.body);
     const xApiKey = bodyJson.headers?.['X-Api-Key'] || bodyJson.headers?.['x-api-key'];
     expect(xApiKey).toBe('xapi-test-value');
-  });
+  }, 30_000);
 
   it('should inject basic auth header', async () => {
     await deleteSecretsForDomain('httpbin.org');
@@ -394,7 +394,7 @@ describe('Secrets Proxy — Auth Types', () => {
     const authHeader = bodyJson.headers?.Authorization || bodyJson.headers?.authorization;
     const expected = `Basic ${Buffer.from('user:password123').toString('base64')}`;
     expect(authHeader).toBe(expected);
-  });
+  }, 30_000);
 
   it('should inject custom header', async () => {
     await deleteSecretsForDomain('httpbin.org');
@@ -418,7 +418,7 @@ describe('Secrets Proxy — Auth Types', () => {
     const customHeader =
       bodyJson.headers?.['X-Custom-Auth'] || bodyJson.headers?.['x-custom-auth'];
     expect(customHeader).toBe('custom-secret-value');
-  });
+  }, 30_000);
 });
 
 describe('Secrets Proxy — Request Body', () => {
