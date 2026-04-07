@@ -8,12 +8,28 @@
 import { spawn, execSync, type ChildProcess } from 'child_process';
 import { resolve } from 'path';
 import { writeFileSync } from 'fs';
+import { config as loadDotenv } from 'dotenv';
 import * as http from 'http';
+
+const WORKSPACE_ROOT = resolve(__dirname, '../../../..');
+
+// Load .env so E2E-specific keys (DAYTONA_API_KEY_E2E, etc.) are available
+loadDotenv({ path: resolve(WORKSPACE_ROOT, '.env') });
+
+// Map *_E2E keys to their base names so the API server and tests see them
+if (process.env.DAYTONA_API_KEY_E2E && !process.env.DAYTONA_API_KEY) {
+  process.env.DAYTONA_API_KEY = process.env.DAYTONA_API_KEY_E2E;
+}
+if (process.env.ANTHROPIC_API_KEY_E2E && !process.env.ANTHROPIC_API_KEY) {
+  process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY_E2E;
+}
+if (process.env.GITHUB_TOKEN_E2E && !process.env.GITHUB_TOKEN) {
+  process.env.GITHUB_TOKEN = process.env.GITHUB_TOKEN_E2E;
+}
 
 const HOST = process.env.HOST ?? 'localhost';
 const PORT = process.env.PORT ? Number(process.env.PORT) : 6000;
 const PROXY_PORT = 9350;
-const WORKSPACE_ROOT = resolve(__dirname, '../../../..');
 const PID_FILE = resolve(__dirname, '../../.api-e2e-pid');
 
 function killProcessOnPort(port: number): void {
