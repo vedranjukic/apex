@@ -166,6 +166,12 @@ module.exports = async function () {
   child.removeListener('exit', (child as any).__earlyExitListener);
   earlyExit.catch(() => {});
 
+  // Monitor for unexpected exits during test run
+  child.on('exit', (code, signal) => {
+    console.error(`\n[global-setup] API server exited unexpectedly! code=${code} signal=${signal}`);
+    console.error(`[global-setup] Last output:\n${serverOutput.slice(-1000)}`);
+  });
+
   console.log('API server is ready.\n');
 
   (globalThis as any).__E2E_API_PROCESS__ = child;
