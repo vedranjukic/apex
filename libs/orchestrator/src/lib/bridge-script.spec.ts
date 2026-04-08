@@ -6,8 +6,10 @@
  * 2. The serve adapter uses HTTP API + SSE for communication
  * 3. The bridge core routes messages correctly
  * 4. Session management maps threads to OpenCode sessions
+ * 5. Working directory context is injected for continued sessions
  */
 import { describe, it, expect } from 'vitest';
+import vm from 'node:vm';
 import { getBridgeScript } from './bridge-script';
 
 describe('getBridgeScript', () => {
@@ -418,5 +420,293 @@ describe('Event journal and replay', () => {
     );
     expect(ackFn).toContain('status === "started"');
     expect(ackFn).toContain('threadJournalStatus.set(threadId, "active")');
+  });
+});
+
+/**
+ * Regression tests for agent cwd drift between prompts.
+ *
+ * When the agent sends a follow-up prompt to an existing OpenCode session,
+ * the shell's working directory may have drifted from the project root
+ * (e.g. after a `cd` in a previous turn). The bridge must prepend a
+ * [cwd: PROJECT_DIR] context marker so the agent knows where to operate.
+ */
+describe('cwd context injection for continued sessions', () => {
+  const PROJECT_DIR = '/home/daytona/my-project';
+
+  // ── Static analysis tests ──────────────────────────
+
+  it('should track whether the session is continued via isContinuedSession flag', () => {
+    const script = getBridgeScript(8080, PROJECT_DIR);
+    expect(script).toContain('var isContinuedSession = !!ocSessionId');
+  });
+
+  it('should mark stored sessionId reuse as a continued session', () => {
+    const script = getBridgeScript(8080, PROJECT_DIR);
+    const sendPromptFn = script.slice(
+      script.indexOf('async function sendPrompt('),
+      script.indexOf('function pollSession('),
+    );
+    const matches = sendPromptFn.match(/isContinuedSession\s*=\s*true/g) || [];
+    expect(matches.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('should prepend [cwd: PROJECT_DIR] to prompt for continued sessions', () => {
+    const script = getBridgeScript(8080, PROJECT_DIR);
+    expect(script).toContain('if (isContinuedSession && PROJECT_DIR)');
+    expect(script).toContain('"[cwd: " + PROJECT_DIR + "]\\n\\n" + prompt');
+  });
+
+  it('should use effectivePrompt in the prompt_async payload, not raw prompt', () => {
+    const script = getBridgeScript(8080, PROJECT_DIR);
+    expect(script).toContain('text: effectivePrompt');
+  });
+
+  it('should default effectivePrompt to the raw prompt for new sessions', () => {
+    const script = getBridgeScript(8080, PROJECT_DIR);
+    expect(script).toContain('var effectivePrompt = prompt');
+  });
+
+  // ── Functional VM-based tests ──────────────────────
+  //
+  // Evaluates the generated bridge script in an isolated VM context with
+  // mocked Node modules, then exercises sendPrompt() end-to-end.
+
+  /**
+   * Create a VM sandbox that evaluates the full bridge script with mocked
+   * dependencies. Returns helpers to manipulate internal state and inspect
+   * what was sent to OpenCode's prompt_async endpoint.
+   */
+  function createBridgeSandbox(projectDir: string) {
+    const script = getBridgeScript(8080, projectDir);
+
+    // Collect all POST /session/:id/prompt_async payloads
+    const promptAsyncCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    // Collect all POST /session creation calls
+    const sessionCreateCalls: Array<{ body: Record<string, unknown> }> = [];
+
+    const noopFn = () => {};
+    const noopStream = { on: noopFn, pipe: noopFn, pause: noopFn, resume: noopFn };
+    const noopServer = { listen: noopFn, on: noopFn, address: () => ({ port: 0 }) };
+    const noopWs = { on: noopFn, send: noopFn, readyState: 1 };
+
+    function mockHttpRequest(opts: { path: string; method: string }, cb: (res: unknown) => void) {
+      const url = opts.path;
+      const method = opts.method;
+
+      let responseBody = 'null';
+      let statusCode = 200;
+
+      if (method === 'POST' && url === '/session') {
+        const data = { chunks: '' };
+        return {
+          on: noopFn,
+          write(chunk: string) { data.chunks += chunk; },
+          end() {
+            try { sessionCreateCalls.push({ body: JSON.parse(data.chunks) }); } catch {}
+            responseBody = JSON.stringify({ id: 'oc-session-new' });
+            const res = { statusCode, on: (evt: string, fn: (d?: string) => void) => {
+              if (evt === 'data') fn(responseBody);
+              if (evt === 'end') fn();
+            }};
+            cb(res);
+          },
+        };
+      }
+
+      if (method === 'POST' && /\/session\/[^/]+\/prompt_async/.test(url)) {
+        const data = { chunks: '' };
+        return {
+          on: noopFn,
+          write(chunk: string) { data.chunks += chunk; },
+          end() {
+            try { promptAsyncCalls.push({ url, body: JSON.parse(data.chunks) }); } catch {}
+            statusCode = 204;
+            const res = { statusCode, on: (evt: string, fn: (d?: string) => void) => {
+              if (evt === 'end') fn();
+            }};
+            cb(res);
+          },
+        };
+      }
+
+      if (method === 'GET' && url.includes('/session/status')) {
+        responseBody = JSON.stringify({ 'oc-session-existing': { type: 'idle' } });
+      } else if (method === 'GET' && url.includes('/message')) {
+        responseBody = JSON.stringify([]);
+      }
+
+      return {
+        on: noopFn,
+        write: noopFn,
+        end() {
+          const res = { statusCode, on: (evt: string, fn: (d?: string) => void) => {
+            if (evt === 'data') fn(responseBody);
+            if (evt === 'end') fn();
+          }};
+          cb(res);
+        },
+      };
+    }
+
+    const fsMock = {
+      accessSync: noopFn,
+      writeFileSync: noopFn,
+      readFileSync: () => '{}',
+      existsSync: () => false,
+      readdirSync: () => [],
+      unlinkSync: noopFn,
+      mkdirSync: noopFn,
+      appendFileSync: noopFn,
+      statSync: () => ({ mtimeMs: Date.now() }),
+      constants: { X_OK: 1 },
+    };
+
+    const modules: Record<string, unknown> = {
+      http: { createServer: () => noopServer, request: mockHttpRequest },
+      ws: Object.assign(function WS() { return noopWs; }, { WebSocketServer: function WSS() { return { on: noopFn }; } }),
+      child_process: { spawn: () => ({ ...noopStream, stdout: noopStream, stderr: noopStream, pid: 1, on: noopFn, kill: noopFn }), execSync: () => Buffer.from('opencode') },
+      'node-pty': { spawn: () => ({ ...noopStream, onData: noopFn, onExit: noopFn, write: noopFn, resize: noopFn, kill: noopFn, pid: 1 }) },
+      crypto: { randomUUID: () => 'test-uuid-' + Math.random().toString(36).slice(2, 8) },
+      https: { request: mockHttpRequest, Agent: function() {} },
+      url: { parse: (u: string) => ({ hostname: 'localhost', port: 80, path: u }) },
+      net: { createServer: () => noopServer, createConnection: () => noopStream },
+      fs: fsMock,
+      tls: { connect: () => ({ ...noopStream, authorized: true }), createSecureContext: noopFn },
+      path: { join: (...parts: string[]) => parts.join('/'), dirname: (p: string) => p, resolve: (...parts: string[]) => parts.join('/'), basename: (p: string) => p },
+    };
+
+    const context = vm.createContext({
+      require: (mod: string) => {
+        const m = modules[mod];
+        if (!m) throw new Error('Mock not available for module: ' + mod);
+        return m;
+      },
+      process: { env: { HOME: '/home/daytona', SHELL: '/bin/bash' }, platform: 'linux' },
+      console: { log: noopFn, error: noopFn, warn: noopFn },
+      setTimeout: (fn: () => void) => { fn(); return 0; },
+      setInterval: () => 0,
+      clearInterval: noopFn,
+      clearTimeout: noopFn,
+      Buffer,
+      JSON,
+      Map,
+      Set,
+      Array,
+      Object,
+      String,
+      Number,
+      Error,
+      Promise,
+      Date,
+      Math,
+      RegExp,
+      parseInt,
+      parseFloat,
+      isNaN,
+      encodeURIComponent,
+      decodeURIComponent,
+    });
+
+    // Append accessors so we can reach internal state from outside the VM
+    const testScript = script + `
+globalThis.__sendPrompt = sendPrompt;
+globalThis.__threadToSession = threadToSession;
+globalThis.__sessionToThread = sessionToThread;
+globalThis.__activeThreads = activeThreads;
+globalThis.__sessionEmittedParts = sessionEmittedParts;
+globalThis.__sessionCosts = sessionCosts;
+globalThis.__state = state;
+`;
+
+    vm.runInNewContext(testScript, context);
+
+    return {
+      sendPrompt: context.__sendPrompt as (
+        threadId: string, prompt: string, agent?: string, model?: string,
+        sessionId?: string, images?: unknown[], agentSettings?: unknown,
+      ) => Promise<void>,
+      threadToSession: context.__threadToSession as Map<string, string>,
+      sessionToThread: context.__sessionToThread as Map<string, string>,
+      activeThreads: context.__activeThreads as Set<string>,
+      sessionEmittedParts: context.__sessionEmittedParts as Map<string, Set<string>>,
+      sessionCosts: context.__sessionCosts as Map<string, number>,
+      state: context.__state as { ws: unknown },
+      promptAsyncCalls,
+      sessionCreateCalls,
+    };
+  }
+
+  it('should NOT prepend cwd for first prompt in a new session', async () => {
+    const sb = createBridgeSandbox(PROJECT_DIR);
+    sb.state.ws = { readyState: 1, send: () => {} };
+
+    await sb.sendPrompt('thread-1', 'hello world');
+
+    expect(sb.promptAsyncCalls).toHaveLength(1);
+    const sent = sb.promptAsyncCalls[0];
+    const textPart = sent.body.parts as Array<{ type: string; text: string }>;
+    const text = textPart.find(p => p.type === 'text')!.text;
+    expect(text).toBe('hello world');
+    expect(text).not.toContain('[cwd:');
+  });
+
+  it('should prepend [cwd: PROJECT_DIR] for second prompt in the same thread', async () => {
+    const sb = createBridgeSandbox(PROJECT_DIR);
+    sb.state.ws = { readyState: 1, send: () => {} };
+
+    // First prompt creates a new session
+    await sb.sendPrompt('thread-1', 'first message');
+    expect(sb.promptAsyncCalls).toHaveLength(1);
+    expect(sb.threadToSession.get('thread-1')).toBeTruthy();
+
+    // Second prompt reuses the session → should have cwd prefix
+    await sb.sendPrompt('thread-1', 'create commit and push');
+    expect(sb.promptAsyncCalls).toHaveLength(2);
+
+    const secondCall = sb.promptAsyncCalls[1];
+    const textPart = (secondCall.body.parts as Array<{ type: string; text: string }>)
+      .find(p => p.type === 'text')!.text;
+    expect(textPart).toBe(`[cwd: ${PROJECT_DIR}]\n\ncreate commit and push`);
+  });
+
+  it('should prepend cwd when reusing a stored sessionId', async () => {
+    const sb = createBridgeSandbox(PROJECT_DIR);
+    sb.state.ws = { readyState: 1, send: () => {} };
+
+    // Simulate a stored session from a previous bridge lifecycle
+    await sb.sendPrompt('thread-2', 'resume work', undefined, undefined, 'oc-session-existing');
+    expect(sb.promptAsyncCalls).toHaveLength(1);
+
+    const textPart = (sb.promptAsyncCalls[0].body.parts as Array<{ type: string; text: string }>)
+      .find(p => p.type === 'text')!.text;
+    expect(textPart).toBe(`[cwd: ${PROJECT_DIR}]\n\nresume work`);
+  });
+
+  it('should fall back to HOME when projectDir is empty and still prepend cwd', async () => {
+    const sb = createBridgeSandbox('');
+    sb.state.ws = { readyState: 1, send: () => {} };
+
+    await sb.sendPrompt('thread-3', 'first');
+    await sb.sendPrompt('thread-3', 'second');
+
+    // PROJECT_DIR falls back to process.env.HOME (/home/daytona), so cwd is still prepended
+    const secondText = (sb.promptAsyncCalls[1].body.parts as Array<{ type: string; text: string }>)
+      .find(p => p.type === 'text')!.text;
+    expect(secondText).toBe('[cwd: /home/daytona]\n\nsecond');
+  });
+
+  it('should preserve user prompt text after the cwd prefix', async () => {
+    const sb = createBridgeSandbox(PROJECT_DIR);
+    sb.state.ws = { readyState: 1, send: () => {} };
+
+    await sb.sendPrompt('thread-4', 'first');
+    const userPrompt = 'please run:\ngit status\ngit diff --staged';
+    await sb.sendPrompt('thread-4', userPrompt);
+
+    const textPart = (sb.promptAsyncCalls[1].body.parts as Array<{ type: string; text: string }>)
+      .find(p => p.type === 'text')!.text;
+    expect(textPart).toContain(userPrompt);
+    expect(textPart).toBe(`[cwd: ${PROJECT_DIR}]\n\n${userPrompt}`);
   });
 });

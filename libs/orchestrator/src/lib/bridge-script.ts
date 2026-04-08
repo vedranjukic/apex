@@ -570,6 +570,7 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images, age
   log("\\u{1F916}", "Sending prompt thread=" + threadId + " agent=" + ocAgent + " model=" + (ocModel || "default") + " storedSession=" + (sessionId || "none"));
 
   let ocSessionId = threadToSession.get(threadId);
+  var isContinuedSession = !!ocSessionId;
   if (!ocSessionId && sessionId) {
     try {
       var allStatuses = await ocFetch("GET", "/session/status", null, 5000);
@@ -578,6 +579,7 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images, age
       }
       const checkMsgs = await ocFetch("GET", "/session/" + sessionId + "/message?limit=50", null, 10000);
       ocSessionId = sessionId;
+      isContinuedSession = true;
       log("\\u{1F504}", "Reusing stored session " + ocSessionId + " for thread " + threadId);
       if (!sessionEmittedParts.has(ocSessionId) && Array.isArray(checkMsgs)) {
         var priorParts = new Set();
@@ -657,7 +659,11 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images, age
       parts.push({ type: "file", mime: img.media_type, url: "data:" + img.media_type + ";base64," + img.data, filename: "image-" + (imgIdx + 1) + "." + (img.media_type.split("/")[1] || "png") });
     }
   }
-  parts.push({ type: "text", text: prompt });
+  var effectivePrompt = prompt;
+  if (isContinuedSession && PROJECT_DIR) {
+    effectivePrompt = "[cwd: " + PROJECT_DIR + "]\\n\\n" + prompt;
+  }
+  parts.push({ type: "text", text: effectivePrompt });
 
   if (agentSettings && typeof agentSettings === "object") {
     var cfgPatch = {};
