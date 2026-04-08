@@ -35,9 +35,11 @@ jobs:
         run: |
           cd node_modules/bun && node install.js && cd ../..
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Build Rust MITM proxy
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo build --release --manifest-path apps/proxy/Cargo.toml
+        run: cargo build --release --manifest-path apps/proxy/Cargo.toml
 
       - name: Build API
         run: bun run build:api
@@ -77,9 +79,11 @@ jobs:
         run: |
           cd node_modules/bun && node install.js && cd ../..
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Build Rust MITM proxy
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo build --release --manifest-path apps/proxy/Cargo.toml
+        run: cargo build --release --manifest-path apps/proxy/Cargo.toml
 
       - name: Build API
         run: bun run build:api
