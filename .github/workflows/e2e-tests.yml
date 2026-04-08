@@ -94,4 +94,4 @@ jobs:
           PORT: 6000
           DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY_E2E }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY_E2E }}
-          GITHUB_TOKEN_E2E: ${{ secrets.GITHUB_TOKEN_E2E }}
+          GH_TOKEN_E2E: ${{ secrets.GH_TOKEN_E2E }}

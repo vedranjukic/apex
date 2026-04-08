@@ -22,7 +22,7 @@ const host = process.env.HOST ?? 'localhost';
 const port = process.env.PORT ?? '6000';
 const proxyPort = process.env.SECRETS_PROXY_PORT ?? '9350';
 
-const VALID_TOKEN = process.env.GITHUB_TOKEN_E2E ?? '';
+const VALID_TOKEN = process.env.GH_TOKEN_E2E || process.env.GITHUB_TOKEN_E2E || '';
 const hasToken = !!VALID_TOKEN;
 const describeE2e = hasToken ? describe : describe.skip;
 

@@ -24,8 +24,9 @@ if (process.env.DAYTONA_API_KEY_E2E && !process.env.DAYTONA_API_KEY) {
 if (process.env.ANTHROPIC_API_KEY_E2E && !process.env.ANTHROPIC_API_KEY) {
   process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY_E2E;
 }
-if (process.env.GITHUB_TOKEN_E2E && !process.env.GITHUB_TOKEN) {
-  process.env.GITHUB_TOKEN = process.env.GITHUB_TOKEN_E2E;
+const ghTokenE2e = process.env.GH_TOKEN_E2E || process.env.GITHUB_TOKEN_E2E;
+if (ghTokenE2e && !process.env.GITHUB_TOKEN) {
+  process.env.GITHUB_TOKEN = ghTokenE2e;
 }
 
 const HOST = process.env.HOST ?? 'localhost';
