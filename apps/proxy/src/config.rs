@@ -5,6 +5,7 @@ use std::env;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct Secret {
     pub id: String,
     pub name: String,

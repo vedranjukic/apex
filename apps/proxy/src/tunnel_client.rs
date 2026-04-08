@@ -3,7 +3,7 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// Run a TCP-to-WebSocket tunnel client.
 /// Listens on `listen_addr` for TCP connections, and for each one opens a
@@ -91,6 +91,7 @@ async fn handle_tunnel_connection(
 /// Run a port relay client for a specific port.
 /// Listens on a local port and forwards each connection to a WebSocket
 /// endpoint at `{base_url}/port-relay/{target_port}`.
+#[allow(dead_code)]
 pub async fn start_port_relay_client(
     listen_port: u16,
     target_port: u16,
