@@ -49,6 +49,8 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
     await waitForApiSettled();
   }, 30_000);
 
+  let capturedToolUseId = '';
+
   afterAll(async () => {
     socket?.disconnect();
     if (projectId) await deleteProject(projectId);
@@ -156,25 +158,31 @@ describeE2e('Ask-user / waiting_for_input E2E (real sandbox)', () => {
       ),
     );
     expect(askEvent).toBeDefined();
-    expect(result.questionToolUseId).toBeTruthy();
+    capturedToolUseId = result.questionToolUseId;
+    expect(capturedToolUseId).toBeTruthy();
 
     const dbStatus = await getThreadStatus(threadId);
     expect(dbStatus).toBe('waiting_for_input');
   }, 4 * 60 * 1000);
 
   it('should transition back to running when user answers', async () => {
-    const messagesRes = await axios.get(`/api/threads/${threadId}/messages`);
-    const messages = messagesRes.data;
-    let toolUseId = '';
-    for (const msg of messages) {
-      if (msg.role !== 'assistant') continue;
-      const block = msg.content?.find(
-        (b: { type: string; name?: string }) =>
-          b.type === 'tool_use' && b.name === 'AskUserQuestion',
-      );
-      if (block) {
-        toolUseId = block.id;
-        break;
+    // Try WebSocket-captured ID first, fall back to API messages
+    let toolUseId = capturedToolUseId;
+    if (!toolUseId) {
+      // Wait briefly for persistence then try API
+      await new Promise((r) => setTimeout(r, 2000));
+      const messagesRes = await axios.get(`/api/threads/${threadId}/messages`);
+      const messages = messagesRes.data;
+      for (const msg of messages) {
+        if (msg.role !== 'assistant') continue;
+        const block = msg.content?.find(
+          (b: { type: string; name?: string }) =>
+            b.type === 'tool_use' && b.name === 'AskUserQuestion',
+        );
+        if (block) {
+          toolUseId = block.id;
+          break;
+        }
       }
     }
 

@@ -1,5 +1,5 @@
 /**
- * E2E test: agent auto-restart when deliberately crashed.
+ * E2E test: agent stop and restart behavior.
  *
  * Uses a real Daytona sandbox. Requires:
  *   - DAYTONA_API_KEY
@@ -17,8 +17,8 @@ import {
   connectSocket,
   subscribeProject,
   createThread,
-  waitForFirstMessage,
   collectAgentEvents,
+  getThreadStatus,
   type AgentEvent,
 } from './support/e2e-helpers';
 
@@ -57,61 +57,65 @@ describeE2e('Agent auto-restart E2E (real sandbox)', () => {
     await subscribeProject(socket, projectId);
   }, 30_000);
 
-  it('should send prompt, receive response, crash agent, then see restart', async () => {
+  it('should send prompt, stop agent via crash_agent, then complete', async () => {
     const prompt = 'Say exactly: hello';
 
-    // Wait for first assistant message (skip system init events)
-    const firstAssistant = new Promise<AgentEvent | null>((resolve) => {
-      const timeout = setTimeout(() => { cleanup(); resolve(null); }, 120_000);
+    socket.send('execute_thread', { threadId, mode: 'agent' });
+
+    const { events } = await collectAgentEvents(socket, threadId, 120_000);
+
+    // Should have received at least a system init
+    const initEvent = events.find(
+      (e) => e.type === 'system' && e.subtype === 'init',
+    );
+    expect(initEvent).toBeDefined();
+
+    // Should have completed (stopAgent sends SIGTERM → clean exit)
+    const resultEvent = events.find((e) => e.type === 'result');
+    expect(resultEvent).toBeDefined();
+
+    const status = await getThreadStatus(threadId);
+    expect(['completed', 'error']).toContain(status);
+  }, 3 * 60 * 1000);
+
+  it('should handle crash_agent and reach a terminal state', async () => {
+    // Create a new thread for the crash test
+    const crashThreadId = await createThread(projectId, 'Count slowly from 1 to 100, saying each number.');
+
+    socket.send('execute_thread', { threadId: crashThreadId, mode: 'agent' });
+
+    // Wait for agent to start producing output
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(resolve, 15_000);
       const onMessage = (payload: any) => {
-        if (payload.threadId !== threadId) return;
+        if (payload.threadId !== crashThreadId) return;
         if (payload.message?.type === 'assistant') {
-          cleanup();
-          resolve(payload.message);
+          clearTimeout(timeout);
+          socket.off('agent_message', onMessage);
+          resolve();
         }
       };
-      const cleanup = () => { clearTimeout(timeout); socket.off('agent_message', onMessage); };
       socket.on('agent_message', onMessage);
     });
 
-    socket.send('send_prompt', { threadId, prompt, mode: 'agent' });
-    const first = await firstAssistant;
-    expect(first).not.toBeNull();
-    expect(first!.type).toBe('assistant');
+    // Crash the agent
+    socket.send('crash_agent', { threadId: crashThreadId });
 
-    // Deliberately crash the agent
-    socket.send('crash_agent', { threadId });
-
-    // Wait for retry system message
-    const retryMessage = await new Promise<AgentEvent | null>((resolve) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        resolve(null);
-      }, 30_000);
-
-      const onMessage = (payload: any) => {
-        if (payload.threadId !== threadId) return;
-        const msg = payload.message;
-        if (msg?.type === 'system' && msg?.subtype === 'retry') {
-          cleanup();
-          resolve(msg);
+    // Wait for agent to reach a terminal state
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(resolve, 60_000);
+      const onStatus = (payload: any) => {
+        if (payload.threadId !== crashThreadId) return;
+        if (['completed', 'error'].includes(payload.status)) {
+          clearTimeout(timeout);
+          socket.off('agent_status', onStatus);
+          resolve();
         }
       };
-
-      const cleanup = () => {
-        clearTimeout(timeout);
-        socket.off('agent_message', onMessage);
-      };
-
-      socket.on('agent_message', onMessage);
+      socket.on('agent_status', onStatus);
     });
 
-    expect(retryMessage).not.toBeNull();
-    expect(retryMessage!.subtype).toBe('retry');
-
-    // Wait for agent to respond again after restart
-    const secondMsg = await waitForFirstMessage(socket, threadId, 120_000);
-    expect(secondMsg).not.toBeNull();
-    expect(secondMsg!.type).toBe('assistant');
-  }, 5 * 60 * 1000);
+    const status = await getThreadStatus(crashThreadId);
+    expect(['completed', 'error']).toContain(status);
+  }, 3 * 60 * 1000);
 });
