@@ -60,11 +60,22 @@ describeE2e('Agent auto-restart E2E (real sandbox)', () => {
   it('should send prompt, receive response, crash agent, then see restart', async () => {
     const prompt = 'Say exactly: hello';
 
-    // Listen for first assistant message
-    const firstMsgPromise = waitForFirstMessage(socket, threadId, 120_000);
+    // Wait for first assistant message (skip system init events)
+    const firstAssistant = new Promise<AgentEvent | null>((resolve) => {
+      const timeout = setTimeout(() => { cleanup(); resolve(null); }, 120_000);
+      const onMessage = (payload: any) => {
+        if (payload.threadId !== threadId) return;
+        if (payload.message?.type === 'assistant') {
+          cleanup();
+          resolve(payload.message);
+        }
+      };
+      const cleanup = () => { clearTimeout(timeout); socket.off('agent_message', onMessage); };
+      socket.on('agent_message', onMessage);
+    });
 
     socket.send('send_prompt', { threadId, prompt, mode: 'agent' });
-    const first = await firstMsgPromise;
+    const first = await firstAssistant;
     expect(first).not.toBeNull();
     expect(first!.type).toBe('assistant');
 

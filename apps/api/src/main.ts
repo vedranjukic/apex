@@ -35,6 +35,15 @@ function setupGracefulShutdown() {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
+  // Prevent unhandled errors from crashing the server — background handlers
+  // (health checks, bridge message handlers) can throw after resource cleanup.
+  process.on('uncaughtException', (err) => {
+    console.error('[main] Uncaught exception (non-fatal):', err.message);
+  });
+  process.on('unhandledRejection', (reason) => {
+    console.error('[main] Unhandled rejection (non-fatal):', reason instanceof Error ? reason.message : reason);
+  });
+
   // Exit when parent dies — the desktop app spawns us with stdin: 'pipe',
   // so EOF on stdin means the parent process is gone.
   process.stdin.resume();

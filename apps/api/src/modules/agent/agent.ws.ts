@@ -570,11 +570,15 @@ async function executeAgainstSandbox(
           },
         });
         if (typeof msgSeq === 'number') await threadsService.updateLastPersistedSeq(threadId, msgSeq);
-        const currentThread = await threadsService.findById(threadId);
-        if (currentThread.status !== 'waiting_for_input' && currentThread.status !== 'waiting_for_user_action') {
-          const finalStatus = data.is_error ? 'error' : 'completed';
-          await updateThreadStatusAndNotify(threadId, finalStatus);
-          emitToSubscribers(project.sandboxId!, 'agent_status', { threadId, status: finalStatus });
+        try {
+          const currentThread = await threadsService.findById(threadId);
+          if (currentThread.status !== 'waiting_for_input' && currentThread.status !== 'waiting_for_user_action') {
+            const finalStatus = data.is_error ? 'error' : 'completed';
+            await updateThreadStatusAndNotify(threadId, finalStatus);
+            emitToSubscribers(project.sandboxId!, 'agent_status', { threadId, status: finalStatus });
+            cleanupHandler();
+          }
+        } catch {
           cleanupHandler();
         }
       }
@@ -628,10 +632,14 @@ async function executeAgainstSandbox(
           threadId, error: `Agent exited with code ${msg.code}\n\n${stderrChunks.join('').slice(0, 500)}`,
         });
       }
-      const exitThread = await threadsService.findById(threadId);
-      if (exitThread.status !== 'waiting_for_input' && exitThread.status !== 'waiting_for_user_action') {
-        await updateThreadStatusAndNotify(threadId, status);
-        emitToSubscribers(project.sandboxId!, 'agent_status', { threadId, status });
+      try {
+        const exitThread = await threadsService.findById(threadId);
+        if (exitThread.status !== 'waiting_for_input' && exitThread.status !== 'waiting_for_user_action') {
+          await updateThreadStatusAndNotify(threadId, status);
+          emitToSubscribers(project.sandboxId!, 'agent_status', { threadId, status });
+          cleanupHandler();
+        }
+      } catch {
         cleanupHandler();
       }
     } else if (msg.type === 'ask_user_pending') {
