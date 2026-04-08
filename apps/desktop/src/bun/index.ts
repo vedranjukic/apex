@@ -369,7 +369,7 @@ async function startApi(port: number): Promise<void> {
 
 // ── RPC Setup ───────────────────────────────────────
 
-function createRpcHandlers() {
+function createRpcHandlers(winRef: { current: BrowserWindow | null }) {
   return BrowserView.defineRPC<ApexRPCType>({
     maxRequestTime: 10000,
     handlers: {
@@ -496,6 +496,11 @@ function createRpcHandlers() {
         openExternal: ({ url }) => {
           Utils.openExternal(url);
         },
+        urlChanged: ({ urlPath }) => {
+          if (winRef.current) {
+            (winRef.current as any).__urlPath = urlPath;
+          }
+        },
       },
     },
   });
@@ -504,7 +509,8 @@ function createRpcHandlers() {
 // ── Window Management ───────────────────────────────
 
 function createWindow(urlPath = '/'): BrowserWindow {
-  const rpc = createRpcHandlers();
+  const winRef: { current: BrowserWindow | null } = { current: null };
+  const rpc = createRpcHandlers(winRef);
 
   const win = new BrowserWindow({
     title: 'Apex',
@@ -522,6 +528,7 @@ function createWindow(urlPath = '/'): BrowserWindow {
 
   // Track URL path for focus-or-open logic
   (win as any).__urlPath = urlPath;
+  winRef.current = win;
 
   allWindows.set(win.id, win);
 

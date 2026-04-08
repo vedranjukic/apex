@@ -696,7 +696,11 @@ class ProjectsService {
 
   /** Resolve the correct sandbox manager for a project using its provider field. */
   private getManagerForProject(project: { provider: string }): SandboxManager | null {
-    return this.sandboxManagers.get(project.provider) ?? this.getSandboxManager();
+    const mgr = this.sandboxManagers.get(project.provider);
+    if (!mgr) {
+      console.warn(`[projects] No sandbox manager for provider "${project.provider}" — available: [${[...this.sandboxManagers.keys()].join(', ')}]`);
+    }
+    return mgr ?? null;
   }
 
   private async triggerAutoStart(project: Project): Promise<void> {

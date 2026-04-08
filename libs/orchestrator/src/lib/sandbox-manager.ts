@@ -201,6 +201,40 @@ const SANDBOX_CACHE_TTL = 60_000;
 /** How long to trust a "started" state without re-checking */
 const STARTED_STATE_TTL = 30_000;
 
+const TRANSITIONAL_STATES = new Set(["starting", "stopping"]);
+const STATE_POLL_INTERVAL = 2_000;
+const STATE_POLL_TIMEOUT = 120_000;
+
+/**
+ * Poll a sandbox until it reaches a non-transitional state.
+ * Returns the settled state (e.g. "started", "stopped", "error").
+ * Throws if the timeout expires while still in a transitional state.
+ */
+async function waitForStableState(
+  sandbox: SandboxInstance,
+  label: string,
+): Promise<string> {
+  const deadline = Date.now() + STATE_POLL_TIMEOUT;
+
+  while (TRANSITIONAL_STATES.has(sandbox.state)) {
+    if (Date.now() > deadline) {
+      throw new Error(
+        `Timed out waiting for sandbox ${label} to leave "${sandbox.state}" state`,
+      );
+    }
+    console.log(
+      `[sandbox:${label}] Waiting for state "${sandbox.state}" to settle…`,
+    );
+    await new Promise((r) => setTimeout(r, STATE_POLL_INTERVAL));
+    try {
+      await sandbox.refreshState();
+    } catch {
+      /* best-effort */
+    }
+  }
+  return sandbox.state;
+}
+
 export class SandboxManager extends EventEmitter {
   private config: Required<OrchestratorConfig>;
   private provider: SandboxProvider | null = null;
@@ -677,8 +711,13 @@ export class SandboxManager extends EventEmitter {
    * After starting, also restarts the bridge process.
    * Skips the expensive refreshData() API call when we have recent proof the
    * sandbox is running (active WS connection or recently verified state).
+   *
+   * Handles transitional states gracefully: if the sandbox is already
+   * "starting" we wait for it to settle instead of issuing a redundant
+   * start() that would error with "state change in progress".
    */
   private async ensureSandboxStarted(sandbox: SandboxInstance): Promise<void> {
+    const label = sandbox.id.slice(0, 8);
     const session = this.sessions.get(sandbox.id);
     if (session?.ws?.readyState === WebSocket.OPEN) {
       return;
@@ -695,6 +734,13 @@ export class SandboxManager extends EventEmitter {
       /* best-effort */
     }
 
+    // If the sandbox is mid-transition (starting/stopping), wait for it
+    // to reach a stable state before deciding what to do.
+    if (TRANSITIONAL_STATES.has(sandbox.state)) {
+      this.emit("status", sandbox.id, "starting_sandbox" as any);
+      await waitForStableState(sandbox, label);
+    }
+
     if (sandbox.state === "started") {
       this.startedAt.set(sandbox.id, Date.now());
       return;
@@ -702,6 +748,18 @@ export class SandboxManager extends EventEmitter {
 
     this.emit("status", sandbox.id, "starting_sandbox" as any);
     await sandbox.start(60);
+
+    // The provider may have bailed from the SDK's aggressive internal
+    // polling.  Refresh and verify we actually reached "started".
+    try { await sandbox.refreshState(); } catch { /* best-effort */ }
+    const postStartState = sandbox.state as string;
+    if (postStartState !== "started") {
+      await waitForStableState(sandbox, label);
+      if ((sandbox.state as string) !== "started") {
+        throw new Error(`Sandbox ${label} failed to start (state: ${sandbox.state})`);
+      }
+    }
+
     this.startedAt.set(sandbox.id, Date.now());
 
     if (session) {
@@ -880,44 +938,91 @@ export class SandboxManager extends EventEmitter {
    * Delete a sandbox. Throws if the Daytona delete call fails (e.g. the
    * sandbox still has fork children), so callers can fall back to
    * {@link stopSandbox}.
+   * Waits for transitional states to settle before issuing the delete.
    */
   async deleteSandbox(sandboxId: string): Promise<void> {
+    const label = sandboxId.slice(0, 8);
     this.sandboxCache.delete(sandboxId);
     this.startedAt.delete(sandboxId);
     this.projectNames.delete(sandboxId);
     this.projectIds.delete(sandboxId);
+
     const session = this.sessions.get(sandboxId);
+    const sandbox = session
+      ? session.sandbox
+      : await (async () => {
+          if (!this.provider) throw new Error("SandboxManager not initialized");
+          return this.provider.get(sandboxId);
+        })();
+
     if (session) {
       session.ws?.close();
       this.sessions.delete(sandboxId);
-      await session.sandbox.delete();
-      return;
     }
 
-    if (!this.provider) throw new Error("SandboxManager not initialized");
-    const sandbox = await this.provider.get(sandboxId);
+    try {
+      await sandbox.refreshState();
+    } catch {
+      /* best-effort */
+    }
+
+    if (TRANSITIONAL_STATES.has(sandbox.state)) {
+      await waitForStableState(sandbox, label);
+    }
+
     await sandbox.delete();
   }
 
   /**
    * Stop a sandbox without deleting it (closes the WS session if tracked).
+   * Handles transitional states: waits for "starting" to finish before
+   * stopping, and skips the stop() call if already stopped/archived.
    */
   async stopSandbox(sandboxId: string): Promise<void> {
+    const label = sandboxId.slice(0, 8);
     this.sandboxCache.delete(sandboxId);
     this.startedAt.delete(sandboxId);
     this.projectNames.delete(sandboxId);
     this.projectIds.delete(sandboxId);
+
     const session = this.sessions.get(sandboxId);
+    const sandbox = session
+      ? session.sandbox
+      : await (async () => {
+          if (!this.provider) throw new Error("SandboxManager not initialized");
+          return this.provider.get(sandboxId);
+        })();
+
     if (session) {
       session.ws?.close();
       this.sessions.delete(sandboxId);
-      await session.sandbox.stop();
+    }
+
+    try {
+      await sandbox.refreshState();
+    } catch {
+      /* best-effort */
+    }
+
+    if (sandbox.state === "stopped" || sandbox.state === "archived") {
       return;
     }
 
-    if (!this.provider) throw new Error("SandboxManager not initialized");
-    const sandbox = await this.provider.get(sandboxId);
+    if (TRANSITIONAL_STATES.has(sandbox.state)) {
+      const settled = await waitForStableState(sandbox, label);
+      if (settled === "stopped" || settled === "archived") {
+        return;
+      }
+    }
+
     await sandbox.stop();
+
+    // Verify the stop completed (provider may bail from SDK internal polling).
+    try { await sandbox.refreshState(); } catch { /* best-effort */ }
+    const postStopState = sandbox.state as string;
+    if (postStopState !== "stopped" && postStopState !== "archived") {
+      await waitForStableState(sandbox, label);
+    }
   }
 
   /** Stop all sandboxes */

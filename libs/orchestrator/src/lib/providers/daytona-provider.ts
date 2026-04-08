@@ -1,5 +1,9 @@
 /**
  * Daytona sandbox provider — wraps the @daytonaio/sdk.
+ *
+ * All SDK calls go through a shared concurrency limiter so we never
+ * burst more than {@link MAX_CONCURRENT} requests to the Daytona API
+ * at once. This prevents 502 / 429 errors from rate-limit hits.
  */
 
 import { Daytona, Sandbox } from "@daytonaio/sdk";
@@ -17,6 +21,55 @@ import type {
   ExecuteCommandResult,
   SessionCommandOpts,
 } from "./types.js";
+
+// ── Concurrency limiter ──────────────────────────────
+
+const MAX_CONCURRENT = 3;
+const MIN_INTERVAL_MS = 150;
+
+class ApiLimiter {
+  private running = 0;
+  private queue: Array<() => void> = [];
+  private lastCallTime = 0;
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    await this.acquire();
+    try {
+      return await fn();
+    } finally {
+      this.release();
+    }
+  }
+
+  private acquire(): Promise<void> {
+    if (this.running < MAX_CONCURRENT) {
+      this.running++;
+      return this.waitMinInterval();
+    }
+    return new Promise<void>((resolve) => {
+      this.queue.push(() => {
+        this.running++;
+        this.waitMinInterval().then(resolve);
+      });
+    });
+  }
+
+  private async waitMinInterval(): Promise<void> {
+    const elapsed = Date.now() - this.lastCallTime;
+    if (elapsed < MIN_INTERVAL_MS) {
+      await new Promise((r) => setTimeout(r, MIN_INTERVAL_MS - elapsed));
+    }
+    this.lastCallTime = Date.now();
+  }
+
+  private release(): void {
+    this.running--;
+    const next = this.queue.shift();
+    if (next) next();
+  }
+}
+
+const limiter = new ApiLimiter();
 
 // ── SandboxInstance wrapper around Daytona Sandbox ───
 
@@ -46,15 +99,38 @@ class DaytonaSandboxInstance implements SandboxInstance {
   // ── Lifecycle ─────────────────────────────────────
 
   async start(timeoutSecs = 60): Promise<void> {
-    await this.sandbox.start(timeoutSecs);
+    // The SDK's start() internally polls getSandbox every 100ms which
+    // hammers the API.  We trigger the start, then let the caller
+    // (ensureSandboxStarted / waitForStableState) poll at a sane rate.
+    await limiter.run(async () => {
+      try {
+        await this.sandbox.start(timeoutSecs);
+      } catch (err: any) {
+        // If the SDK times out waiting for 'started', that's fine — our
+        // caller will poll.  Re-throw anything else.
+        if (err?.message?.includes?.("timeout") || err?.message?.includes?.("Sandbox failed to become ready")) {
+          return;
+        }
+        throw err;
+      }
+    });
   }
 
   async stop(): Promise<void> {
-    await this.sandbox.stop();
+    await limiter.run(async () => {
+      try {
+        await this.sandbox.stop();
+      } catch (err: any) {
+        if (err?.message?.includes?.("timeout") || err?.message?.includes?.("Sandbox failed to become stopped")) {
+          return;
+        }
+        throw err;
+      }
+    });
   }
 
   async delete(): Promise<void> {
-    await this.sandbox.delete();
+    await limiter.run(() => this.sandbox.delete());
   }
 
   async fork(
@@ -66,7 +142,7 @@ class DaytonaSandboxInstance implements SandboxInstance {
         "Update @daytonaio/sdk to a version that supports sandbox forking.",
       );
     }
-    const result = await (this.sandbox as any).fork(name);
+    const result: any = await limiter.run(() => (this.sandbox as any).fork(name));
     return {
       id: result.id,
       name: result.name,
@@ -76,7 +152,7 @@ class DaytonaSandboxInstance implements SandboxInstance {
 
   async refreshState(): Promise<void> {
     if (typeof (this.sandbox as any).refreshData === "function") {
-      await (this.sandbox as any).refreshData();
+      await limiter.run(() => (this.sandbox as any).refreshData());
     }
   }
 
@@ -140,7 +216,7 @@ class DaytonaSandboxInstance implements SandboxInstance {
   // ── Networking ────────────────────────────────────
 
   async getPreviewLink(port: number): Promise<PreviewInfo> {
-    const info = await this.sandbox.getPreviewLink(port);
+    const info = await limiter.run(() => this.sandbox.getPreviewLink(port));
     return { url: (info as any).url, token: (info as any).token };
   }
 
@@ -148,7 +224,9 @@ class DaytonaSandboxInstance implements SandboxInstance {
     port: number,
     ttlSecs: number,
   ): Promise<PreviewInfo> {
-    const info = await (this.sandbox as any).getSignedPreviewUrl(port, ttlSecs);
+    const info: any = await limiter.run(() =>
+      (this.sandbox as any).getSignedPreviewUrl(port, ttlSecs),
+    );
     return { url: info.url, token: info.token };
   }
 
@@ -161,7 +239,9 @@ class DaytonaSandboxInstance implements SandboxInstance {
   }
 
   async createSshAccess(expiresInMinutes: number): Promise<SshAccessInfo> {
-    const access = await this.sandbox.createSshAccess(expiresInMinutes);
+    const access = await limiter.run(() =>
+      this.sandbox.createSshAccess(expiresInMinutes),
+    );
     return {
       sshCommand: access.sshCommand,
       expiresAt: String(access.expiresAt),
@@ -184,27 +264,32 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
   async create(params: CreateSandboxParams): Promise<SandboxInstance> {
     if (!this.daytona) throw new Error("DaytonaSandboxProvider not initialized");
-    const sandbox = await this.daytona.create({
-      snapshot: params.snapshot,
-      autoStopInterval: params.autoStopInterval ?? 0,
-      autoDeleteInterval: params.autoDeleteInterval ?? -1,
-      autoArchiveInterval: params.autoArchiveInterval ?? 0,
-      envVars: params.envVars,
-      labels: params.labels,
-      name: params.name,
-    });
+    const daytona = this.daytona;
+    const sandbox = await limiter.run(() =>
+      daytona.create({
+        snapshot: params.snapshot,
+        autoStopInterval: params.autoStopInterval ?? 0,
+        autoDeleteInterval: params.autoDeleteInterval ?? -1,
+        autoArchiveInterval: params.autoArchiveInterval ?? 0,
+        envVars: params.envVars,
+        labels: params.labels,
+        name: params.name,
+      }),
+    );
     return new DaytonaSandboxInstance(sandbox);
   }
 
   async get(sandboxId: string): Promise<SandboxInstance> {
     if (!this.daytona) throw new Error("DaytonaSandboxProvider not initialized");
-    const sandbox = await this.daytona.get(sandboxId);
+    const daytona = this.daytona;
+    const sandbox = await limiter.run(() => daytona.get(sandboxId));
     return new DaytonaSandboxInstance(sandbox);
   }
 
   async list(): Promise<SandboxInstance[]> {
     if (!this.daytona) throw new Error("DaytonaSandboxProvider not initialized");
-    const result = await this.daytona.list();
+    const daytona = this.daytona;
+    const result = await limiter.run(() => daytona.list());
     const sandboxes = (result as any).items ?? result;
     return (Array.isArray(sandboxes) ? sandboxes : []).map(
       (s: Sandbox) => new DaytonaSandboxInstance(s),

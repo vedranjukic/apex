@@ -53,6 +53,23 @@ window.open = function (
   return null;
 };
 
+// Keep the main process in sync when client-side routing changes the URL
+// (React Router uses pushState/replaceState under the hood).
+const notifyUrlChange = () => {
+  electroview.rpc?.send?.urlChanged({ urlPath: window.location.pathname });
+};
+const _pushState = history.pushState.bind(history);
+history.pushState = function (...args: Parameters<typeof _pushState>) {
+  _pushState(...args);
+  notifyUrlChange();
+};
+const _replaceState = history.replaceState.bind(history);
+history.replaceState = function (...args: Parameters<typeof _replaceState>) {
+  _replaceState(...args);
+  notifyUrlChange();
+};
+window.addEventListener('popstate', notifyUrlChange);
+
 (window as any).apex = {
   platform: 'unknown',
   isElectron: true,

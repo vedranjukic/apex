@@ -77,6 +77,7 @@ export type ApexRPCType = {
       openWindow: { urlPath: string };
       focusOrOpenWindow: { urlPath: string };
       openExternal: { url: string };
+      urlChanged: { urlPath: string };
     };
   }>;
   webview: RPCSchema<{
