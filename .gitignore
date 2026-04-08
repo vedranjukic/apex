@@ -74,3 +74,4 @@ dist/
 
 # E2E test artifacts
 .api-e2e-pid
+.api-e2e-state.json

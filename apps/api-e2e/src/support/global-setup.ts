@@ -1,15 +1,16 @@
 /**
  * Global setup for E2E tests.
  *
- * Starts the API server as a child process, waits for it to be ready,
- * and stores the PID for teardown. Cleans up stale processes from
- * previous runs to avoid port conflicts.
+ * Starts the API server with an isolated temp database, waits for it
+ * to be ready, and stores the PID + DB path for teardown. Cleans up
+ * stale processes from previous runs to avoid port conflicts.
  */
 import { spawn, execSync, type ChildProcess } from 'child_process';
-import { resolve } from 'path';
-import { writeFileSync } from 'fs';
+import { resolve, join } from 'path';
+import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { config as loadDotenv } from 'dotenv';
 import * as http from 'http';
+import * as os from 'os';
 
 const WORKSPACE_ROOT = resolve(__dirname, '../../../..');
 
@@ -30,7 +31,7 @@ if (process.env.GITHUB_TOKEN_E2E && !process.env.GITHUB_TOKEN) {
 const HOST = process.env.HOST ?? 'localhost';
 const PORT = process.env.PORT ? Number(process.env.PORT) : 6000;
 const PROXY_PORT = 9350;
-const PID_FILE = resolve(__dirname, '../../.api-e2e-pid');
+const STATE_FILE = resolve(__dirname, '../../.api-e2e-state.json');
 
 function killProcessOnPort(port: number): void {
   try {
@@ -86,6 +87,12 @@ module.exports = async function () {
   killProcessOnPort(PROXY_PORT);
   await new Promise((r) => setTimeout(r, 1000));
 
+  // Create an isolated temp database so tests never pollute the dev DB
+  const tmpDir = join(os.tmpdir(), `apex-e2e-${Date.now()}`);
+  mkdirSync(tmpDir, { recursive: true });
+  const dbPath = join(tmpDir, 'apex-e2e.sqlite');
+  console.log(`Using temp DB: ${dbPath}`);
+
   const bunBin = resolve(WORKSPACE_ROOT, 'node_modules/.bin/bun');
   const apiEntry = resolve(WORKSPACE_ROOT, 'apps/api/src/main.ts');
 
@@ -98,6 +105,7 @@ module.exports = async function () {
       PORT: String(PORT),
       HOST: HOST,
       APEX_E2E_TEST: '1',
+      DB_PATH: dbPath,
     },
     // stdin must be 'pipe' and kept open — the API exits on stdin EOF
     // (desktop parent-death detection). 'ignore' would cause immediate shutdown.
@@ -105,7 +113,8 @@ module.exports = async function () {
     detached: false,
   });
 
-  writeFileSync(PID_FILE, String(child.pid));
+  // Persist PID + DB path so teardown can clean up even if globalThis isn't shared
+  writeFileSync(STATE_FILE, JSON.stringify({ pid: child.pid, dbPath, tmpDir }));
 
   let serverOutput = '';
   let startupComplete = false;
@@ -126,8 +135,6 @@ module.exports = async function () {
     }
   });
 
-  // Detect crashes during startup only. Once startup is complete,
-  // the exit listener is removed to avoid unhandled rejections during teardown.
   const earlyExit = new Promise<never>((_, reject) => {
     const onExit = (code: number | null, signal: string | null) => {
       if (!startupComplete) {
@@ -140,7 +147,6 @@ module.exports = async function () {
       }
     };
     child.on('exit', onExit);
-    // Store for cleanup
     (child as any).__earlyExitListener = onExit;
   });
 
@@ -148,7 +154,7 @@ module.exports = async function () {
 
   try {
     await Promise.race([
-      waitForReady(HOST, PORT, 30_000),
+      waitForReady(HOST, PORT, 90_000),
       earlyExit,
     ]);
   } catch (err) {
@@ -156,15 +162,12 @@ module.exports = async function () {
     throw err;
   }
 
-  // Startup succeeded — remove the exit listener so teardown kill doesn't
-  // trigger an unhandled rejection
   startupComplete = true;
   child.removeListener('exit', (child as any).__earlyExitListener);
-
-  // Suppress any unhandled rejections from the now-orphaned earlyExit promise
   earlyExit.catch(() => {});
 
   console.log('API server is ready.\n');
 
   (globalThis as any).__E2E_API_PROCESS__ = child;
+  (globalThis as any).__E2E_TMP_DIR__ = tmpDir;
 };
