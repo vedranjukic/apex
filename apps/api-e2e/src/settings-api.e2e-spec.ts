@@ -22,22 +22,9 @@ import { waitForApiSettled } from './support/e2e-helpers';
 const baseURL = `http://localhost:${process.env.PORT || '6000'}`;
 axios.defaults.baseURL = baseURL;
 
-// ── Test Gates ───────────────────────────────────────
-
-const hasRequiredKeys = !!process.env.ANTHROPIC_API_KEY;
-
-const describeMaybe = hasRequiredKeys ? describe : describe.skip;
-const skipReason = !hasRequiredKeys 
-  ? 'Missing ANTHROPIC_API_KEY (required for proxy sandbox scenarios)'
-  : '';
-
 // ── Main Test Suite ─────────────────────────────────
 
-describeMaybe('Settings API E2E', () => {
-  if (!hasRequiredKeys) {
-    console.log(`[settings-api.e2e] Skipped: ${skipReason}`);
-    return;
-  }
+describe('Settings API E2E', () => {
 
   beforeAll(async () => {
     // Wait for API server to finish initialization and settle

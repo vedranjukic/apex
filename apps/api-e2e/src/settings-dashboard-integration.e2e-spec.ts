@@ -30,15 +30,7 @@ axios.defaults.baseURL = baseURL;
 // Dashboard would normally proxy through port 4200 to API on port 6000
 // For E2E, we test the API directly but simulate the request patterns
 
-const hasRequiredKeys = !!process.env.ANTHROPIC_API_KEY;
-const describeMaybe = hasRequiredKeys ? describe : describe.skip;
-
-describeMaybe('Settings Dashboard Integration E2E', () => {
-  if (!hasRequiredKeys) {
-    console.log('[settings-dashboard-integration.e2e] Skipped: Missing ANTHROPIC_API_KEY');
-    return;
-  }
-
+describe('Settings Dashboard Integration E2E', () => {
   let initialSettings: Record<string, any> = {};
 
   beforeAll(async () => {

@@ -48,7 +48,7 @@ jobs:
             --config apps/api-e2e/jest.config.js \
             --runInBand \
             --passWithNoTests \
-            --testPathIgnorePatterns='agent-interaction|agent-retry|ask-user|multi-agent|bridge-replay|replay-backfill|secrets-proxy-daytona'
+            --testPathIgnorePatterns='agent-interaction|agent-retry|ask-user|multi-agent|bridge-replay|replay-backfill|secrets-proxy-daytona|github-token-proxy'
         env:
           PORT: 6000
 
@@ -90,7 +90,7 @@ jobs:
             --config apps/api-e2e/jest.config.js \
             --runInBand \
             --passWithNoTests \
-            --testPathPatterns='agent-interaction|agent-retry|ask-user|multi-agent|bridge-replay|replay-backfill|secrets-proxy-daytona'
+            --testPathPatterns='agent-interaction|agent-retry|ask-user|multi-agent|bridge-replay|replay-backfill|secrets-proxy-daytona|github-token-proxy'
         env:
           PORT: 6000
           DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY_E2E }}
