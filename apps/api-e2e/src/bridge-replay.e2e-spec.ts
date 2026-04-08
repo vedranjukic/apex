@@ -162,7 +162,7 @@ describeE2e('Bridge event journal & replay E2E', () => {
     socket = await connectSocket();
 
     const bridgeThreads = await new Promise<Record<string, any> | null>((resolve) => {
-      const timeout = setTimeout(() => resolve(null), 60_000);
+      const timeout = setTimeout(() => resolve(null), 10_000);
 
       socket.on('*', (msg: any) => {
         if (msg.type === 'project_updated') return;
@@ -182,7 +182,7 @@ describeE2e('Bridge event journal & replay E2E', () => {
     } else {
       console.log('[replay-e2e] bridge_ready threads not captured (may have been handled by gateway)');
     }
-  }, 90_000);
+  }, 30_000);
 
   // ── Test 4: explicit replay via new socket connection ─
 
@@ -207,7 +207,7 @@ describeE2e('Bridge event journal & replay E2E', () => {
       const timeout = setTimeout(() => {
         console.log(`[replay-e2e] Replay collection timed out with ${replayedEvents.length} events`);
         resolve();
-      }, 60_000);
+      }, 15_000);
 
       socket.on('agent_message', (payload: any) => {
         if (payload.threadId !== threadId) return;
@@ -222,7 +222,7 @@ describeE2e('Bridge event journal & replay E2E', () => {
           setTimeout(() => {
             clearTimeout(timeout);
             resolve();
-          }, 3000);
+          }, 2000);
         }
       });
     });
