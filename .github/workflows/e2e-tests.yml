@@ -1,0 +1,97 @@
+name: E2E Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # ── Fast local tests (no sandbox, no secrets needed) ────────────
+  e2e-local:
+    name: E2E Local Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: bun install --ignore-scripts
+
+      - name: Run postinstall scripts
+        run: |
+          cd node_modules/bun && node install.js && cd ../..
+
+      - name: Build Rust MITM proxy
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo build --release --manifest-path apps/proxy/Cargo.toml
+
+      - name: Build API
+        run: bun run build:api
+
+      - name: Run local E2E tests
+        run: |
+          APEX_E2E_TEST=1 npx jest \
+            --config apps/api-e2e/jest.config.js \
+            --runInBand \
+            --passWithNoTests \
+            --testPathIgnorePatterns='agent-interaction|agent-retry|ask-user|multi-agent|bridge-replay|replay-backfill|secrets-proxy-daytona'
+        env:
+          PORT: 6000
+
+  # ── Sandbox tests (needs Daytona + Anthropic secrets) ───────────
+  e2e-sandbox:
+    name: E2E Sandbox Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: bun install --ignore-scripts
+
+      - name: Run postinstall scripts
+        run: |
+          cd node_modules/bun && node install.js && cd ../..
+
+      - name: Build Rust MITM proxy
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo build --release --manifest-path apps/proxy/Cargo.toml
+
+      - name: Build API
+        run: bun run build:api
+
+      - name: Run sandbox E2E tests
+        run: |
+          APEX_E2E_TEST=1 npx jest \
+            --config apps/api-e2e/jest.config.js \
+            --runInBand \
+            --passWithNoTests \
+            --testPathPatterns='agent-interaction|agent-retry|ask-user|multi-agent|bridge-replay|replay-backfill|secrets-proxy-daytona'
+        env:
+          PORT: 6000
+          DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY_E2E }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY_E2E }}
+          GITHUB_TOKEN_E2E: ${{ secrets.GITHUB_TOKEN_E2E }}
