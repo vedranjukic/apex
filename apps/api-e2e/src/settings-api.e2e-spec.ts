@@ -289,20 +289,19 @@ describeMaybe('Settings API E2E', () => {
       const payload = {
         GIT_USER_NAME: "Normal User",
         GIT_USER_EMAIL: "normal@example.com",
-        DAYTONA_API_URL: "https://api.daytona.io",
+        AGENT_MAX_TOKENS: "8192",
       };
 
       const response = await axios.put('/api/settings', payload);
       expect(response.status).toBe(200);
       expect(response.data).toEqual({ ok: true });
 
-      // Verify values were saved
       const getResponse = await axios.get('/api/settings');
       const settings = getResponse.data;
       
       expect(settings.GIT_USER_NAME?.value).toBe("Normal User");
       expect(settings.GIT_USER_EMAIL?.value).toBe("normal@example.com");
-      expect(settings.DAYTONA_API_URL?.value).toBe("https://api.daytona.io");
+      expect(settings.AGENT_MAX_TOKENS?.value).toBe("8192");
     }, 40_000);
 
     it('should preserve the settings API response format', async () => {
@@ -327,7 +326,7 @@ describeMaybe('Settings API E2E', () => {
       await axios.put('/api/settings', {
         GIT_USER_NAME: "",
         GIT_USER_EMAIL: "",
-        DAYTONA_API_URL: "",
+        AGENT_MAX_TOKENS: "",
       });
     } catch {
       // Ignore cleanup errors

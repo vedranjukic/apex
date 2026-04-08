@@ -120,10 +120,10 @@ describe('Settings Type Safety E2E', () => {
     it('should correctly filter out null values', async () => {
       const payload = {
         GIT_USER_NAME: "valid value",
-        ANTHROPIC_API_KEY: null,
+        AGENT_MAX_TOKENS: null,
         GIT_USER_EMAIL: "",
-        OPENAI_API_KEY: null,
-        DAYTONA_API_URL: "another valid value",
+        AGENT_BUILD_MAX_TOKENS: null,
+        AGENT_PLAN_MAX_TOKENS: "another valid value",
       };
 
       const response = await axios.put('/api/settings', payload);
@@ -132,19 +132,19 @@ describe('Settings Type Safety E2E', () => {
       const getResponse = await axios.get('/api/settings');
       expect(getResponse.data.GIT_USER_NAME?.value).toBe("valid value");
       expect(getResponse.data.GIT_USER_EMAIL?.value).toBe("");
-      expect(getResponse.data.DAYTONA_API_URL?.value).toBe("another valid value");
+      expect(getResponse.data.AGENT_PLAN_MAX_TOKENS?.value).toBe("another valid value");
     }, 40_000);
 
     it('should correctly filter out masked values', async () => {
-      // Set initial values (use an allowed key that supports masking)
+      // Set an initial value, then send it back masked — mask should be filtered
       await axios.put('/api/settings', {
-        DAYTONA_API_KEY: "sk-real-key-12345",
+        GIT_USER_NAME: "Original Name",
+        GIT_USER_EMAIL: "original@test.com",
       });
 
-      // Send masked version back (simulating dashboard)
       const payload = {
-        DAYTONA_API_KEY: "sk-r••••-12345", // Masked — should be filtered
         GIT_USER_NAME: "Updated Name",
+        GIT_USER_EMAIL: "upd••••com", // Masked — should be filtered
       };
 
       const response = await axios.put('/api/settings', payload);
@@ -152,18 +152,18 @@ describe('Settings Type Safety E2E', () => {
 
       const getResponse = await axios.get('/api/settings');
       expect(getResponse.data.GIT_USER_NAME?.value).toBe("Updated Name");
-      // Masked value should have been filtered; original should remain masked in response
-      expect(getResponse.data.DAYTONA_API_KEY?.value).toContain('••••');
+      // Masked email should have been filtered; original should remain
+      expect(getResponse.data.GIT_USER_EMAIL?.value).toBe("original@test.com");
     }, 40_000);
 
     it('should handle mixed filtering scenarios', async () => {
       const complexPayload = {
-        ANTHROPIC_API_KEY: null,                    // Filter out (null)
-        OPENAI_API_KEY: "sk-ant-••••-test",         // Filter out (masked)
+        AGENT_MAX_TOKENS: null,                     // Filter out (null)
+        AGENT_BUILD_MAX_TOKENS: "sk-ant-••••-test", // Filter out (masked)
         GIT_USER_EMAIL: "",                         // Keep (empty string clears)
         GIT_USER_NAME: "real value",                // Keep
-        DAYTONA_API_KEY: null,                      // Filter out (null)
-        GITHUB_TOKEN: "ghp_••••abcd",               // Filter out (masked)
+        AGENT_PLAN_MAX_TOKENS: null,                // Filter out (null)
+        AGENT_SISYPHUS_MAX_TOKENS: "ghp_••••abcd",  // Filter out (masked)
       };
 
       const response = await axios.put('/api/settings', complexPayload);

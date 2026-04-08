@@ -213,28 +213,24 @@ describeMaybe('Settings Dashboard Integration E2E', () => {
       const settingsToSave = {
         GIT_USER_NAME: "Workflow User", 
         GIT_USER_EMAIL: "workflow@test.com",
-        DAYTONA_API_URL: "https://custom.daytona.io/api",
+        AGENT_MAX_TOKENS: "4096",
       };
 
-      // Step 1: Save settings (this was failing with 500 error)
       const saveResponse = await axios.put('/api/settings', settingsToSave);
       expect(saveResponse.status).toBe(200);
       expect(saveResponse.data).toEqual({ ok: true });
 
-      // Step 2: Refresh settings (dashboard does this after successful save)
       const refreshResponse = await axios.get('/api/settings');
       expect(refreshResponse.status).toBe(200);
 
-      // Step 3: Verify UI would be updated with correct values
       const settings = refreshResponse.data;
       expect(settings.GIT_USER_NAME?.value).toBe("Workflow User");
       expect(settings.GIT_USER_EMAIL?.value).toBe("workflow@test.com");
-      expect(settings.DAYTONA_API_URL?.value).toBe("https://custom.daytona.io/api");
+      expect(settings.AGENT_MAX_TOKENS?.value).toBe("4096");
       
-      // Verify source information is correct
       expect(settings.GIT_USER_NAME?.source).toBe("settings");
       expect(settings.GIT_USER_EMAIL?.source).toBe("settings");
-      expect(settings.DAYTONA_API_URL?.source).toBe("settings");
+      expect(settings.AGENT_MAX_TOKENS?.source).toBe("settings");
     }, 40_000);
 
     it('should handle concurrent requests gracefully', async () => {
