@@ -1,11 +1,12 @@
-import { Bot, Wrench, Link, Globe, ChevronLeft } from "lucide-react";
+import { Bot, Wrench, Link, Globe, Smartphone, ChevronLeft } from "lucide-react";
 import { cn } from "../../lib/cn";
 
 export type SettingsCategory = 
   | "agent-configuration"
   | "sandbox"
   | "integrations" 
-  | "networking";
+  | "networking"
+  | "mobile";
 
 interface SettingsCategoryDefinition {
   id: SettingsCategory;
@@ -38,6 +39,12 @@ const CATEGORIES: SettingsCategoryDefinition[] = [
     label: "Networking",
     icon: Globe,
     description: "Port forwarding and proxy settings"
+  },
+  {
+    id: "mobile",
+    label: "Mobile View",
+    icon: Smartphone,
+    description: "Remote dashboard access"
   }
 ];
 

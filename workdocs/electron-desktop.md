@@ -100,6 +100,7 @@ if (existsSync(dashboardDir)) {
 ```
 
 - In desktop mode, `DASHBOARD_DIR` is set by the main process to the built dashboard location
+- `MOBILE_DASHBOARD_DIR` points to the mobile dashboard dist for upload to the Daytona proxy sandbox
 - Handles SPA fallback so `BrowserRouter` works
 
 ## Build & Run Commands

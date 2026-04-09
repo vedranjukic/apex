@@ -308,6 +308,7 @@ async function startApi(port: number): Promise<void> {
       HOST: '0.0.0.0',
       DB_PATH: dbPath,
       DASHBOARD_DIR: dashboardDir,
+      MOBILE_DASHBOARD_DIR: resolveAppPath('apps', 'mobile-dashboard', 'dist'),
       APEX_PROXY_BIN: (() => {
         const bundled = resolveAppPath('bin', 'apex-proxy');
         if (fs.existsSync(bundled)) return bundled;

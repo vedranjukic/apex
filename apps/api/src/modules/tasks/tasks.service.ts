@@ -1,13 +1,75 @@
 import { eq, desc, asc, inArray, sql } from 'drizzle-orm';
 import { db } from '../../database/db';
-import { tasks, messages } from '../../database/schema';
+import { tasks, messages, projects } from '../../database/schema';
+import { proxyProjectsService } from '../llm-proxy/proxy-projects.service';
+import type { ThreadSyncPayload, MessageSyncPayload } from '../llm-proxy/proxy-projects.service';
 
 export type Task = typeof tasks.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 
 const STALE_ACTIVE_STATUSES = ['idle', 'running', 'waiting_for_input'];
+const TERMINAL_STATUSES = new Set(['completed', 'error']);
 
 class ThreadsService {
+  private providerCache = new Map<string, string>();
+
+  private async getProjectProvider(projectId: string): Promise<string> {
+    const cached = this.providerCache.get(projectId);
+    if (cached) return cached;
+    const project = await db.query.projects.findFirst({
+      where: eq(projects.id, projectId),
+      columns: { provider: true },
+    });
+    const provider = project?.provider || '';
+    this.providerCache.set(projectId, provider);
+    return provider;
+  }
+
+  private toThreadPayload(thread: Task): ThreadSyncPayload {
+    return {
+      id: thread.id,
+      projectId: thread.projectId,
+      title: thread.title,
+      status: thread.status,
+      agentType: thread.agentType,
+      model: thread.model,
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+    };
+  }
+
+  private syncThreadToProxy(thread: Task): void {
+    this.getProjectProvider(thread.projectId).then((provider) => {
+      if (provider !== 'daytona') return;
+      proxyProjectsService.syncThread(this.toThreadPayload(thread)).catch(() => {});
+    }).catch(() => {});
+  }
+
+  private syncThreadAndMessagesToProxy(thread: Task): void {
+    this.getProjectProvider(thread.projectId).then(async (provider) => {
+      if (provider !== 'daytona') return;
+      proxyProjectsService.syncThread(this.toThreadPayload(thread)).catch(() => {});
+      const msgs = await this.getMessages(thread.id);
+      if (msgs.length > 0) {
+        const payload: MessageSyncPayload[] = msgs.map((m) => ({
+          id: m.id,
+          taskId: m.taskId,
+          role: m.role,
+          content: m.content as unknown[],
+          metadata: m.metadata,
+          createdAt: m.createdAt,
+        }));
+        proxyProjectsService.syncMessages(thread.id, payload).catch(() => {});
+      }
+    }).catch(() => {});
+  }
+
+  private removeThreadFromProxy(threadId: string, projectId: string): void {
+    this.getProjectProvider(projectId).then((provider) => {
+      if (provider !== 'daytona') return;
+      proxyProjectsService.removeThread(threadId).catch(() => {});
+    }).catch(() => {});
+  }
   async init() {
     // Mark active threads as completed (they can't survive a restart)
     await db
@@ -68,12 +130,20 @@ class ThreadsService {
       metadata: null,
     });
 
-    return this.findById(id);
+    const saved = await this.findById(id);
+    this.syncThreadToProxy(saved);
+    return saved;
   }
 
   async updateStatus(id: string, status: string): Promise<Task & { messages?: Message[] }> {
     await db.update(tasks).set({ status, updatedAt: new Date().toISOString() }).where(eq(tasks.id, id));
-    return this.findById(id);
+    const updated = await this.findById(id);
+    if (TERMINAL_STATUSES.has(status)) {
+      this.syncThreadAndMessagesToProxy(updated);
+    } else {
+      this.syncThreadToProxy(updated);
+    }
+    return updated;
   }
 
   async updateAgentSessionId(threadId: string, sessionId: string | null): Promise<void> {
@@ -139,7 +209,9 @@ class ThreadsService {
 
   async updateTitle(threadId: string, title: string): Promise<Task & { messages?: Message[] }> {
     await db.update(tasks).set({ title, updatedAt: new Date().toISOString() }).where(eq(tasks.id, threadId));
-    return this.findById(threadId);
+    const updated = await this.findById(threadId);
+    this.syncThreadToProxy(updated);
+    return updated;
   }
 
   async forkThread(threadId: string): Promise<Task & { messages?: Message[] }> {
@@ -177,7 +249,9 @@ class ThreadsService {
   }
 
   async remove(id: string): Promise<void> {
+    const thread = await db.query.tasks.findFirst({ where: eq(tasks.id, id) });
     await db.delete(tasks).where(eq(tasks.id, id));
+    if (thread) this.removeThreadFromProxy(id, thread.projectId);
   }
 }
 

@@ -274,6 +274,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         envVars: params.envVars,
         labels: params.labels,
         name: params.name,
+        public: params.public,
       }),
     );
     return new DaytonaSandboxInstance(sandbox);

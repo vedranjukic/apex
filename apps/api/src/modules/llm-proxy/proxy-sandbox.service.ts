@@ -14,11 +14,14 @@ import * as path from 'path';
 import { secretsService } from '../secrets/secrets.service';
 import { getCACertPem, getCAKeyPem } from '../secrets-proxy/ca-manager';
 import type { SandboxProvider, SandboxInstance } from '@apex/orchestrator';
+import { getProxyProjectsScript } from '@apex/orchestrator';
 
 const PROXY_PORT = 3000;
+const PROJECTS_API_PORT = 3001;
 const MITM_PORT = 9340;
 const PORT_RELAY_PORT = 9341;
 const PROXY_BIN_PATH = '/home/daytona/apex-proxy';
+const PROJECTS_SCRIPT_PATH = '/home/daytona/projects-api.js';
 const HEALTH_MAX_ATTEMPTS = 30;
 const HEALTH_INTERVAL_MS = 1000;
 const SIGNED_URL_TTL_SECS = 86_400; // 24 hours (Daytona max)
@@ -29,15 +32,17 @@ const SETTINGS_KEYS = {
   url: 'LLM_PROXY_URL',
   keysHash: 'LLM_PROXY_KEYS_HASH',
   snapshot: 'PROXY_SANDBOX_SNAPSHOT',
+  projectsUrl: 'LLM_PROXY_PROJECTS_URL',
 } as const;
 
 export interface ProxySandboxInfo {
   proxyBaseUrl: string;
   authToken: string;
+  projectsApiUrl: string;
 }
 
 // Bump this when the combined proxy service script changes to force recreation
-const PROXY_SCRIPT_VERSION = '8';
+const PROXY_SCRIPT_VERSION = '14';
 
 function hashKeys(anthropicKey: string, openaiKey: string): string {
   return crypto
@@ -79,11 +84,12 @@ class ProxySandboxService {
   ): Promise<ProxySandboxInfo> {
     const currentHash = hashKeys(anthropicKey, openaiKey);
 
-    const [storedId, storedHash, storedUrl, storedToken] = await Promise.all([
+    const [storedId, storedHash, storedUrl, storedToken, storedProjectsUrl] = await Promise.all([
       settingsService.get(SETTINGS_KEYS.sandboxId),
       settingsService.get(SETTINGS_KEYS.keysHash),
       settingsService.get(SETTINGS_KEYS.url),
       settingsService.get(SETTINGS_KEYS.authToken),
+      settingsService.get(SETTINGS_KEYS.projectsUrl),
     ]);
 
     let needsRecreate = false;
@@ -92,10 +98,27 @@ class ProxySandboxService {
     if (storedId && storedHash === currentHash && storedUrl && storedToken) {
       const freshUrl = await this.checkHealthAndRefreshUrl(daytonaProvider, storedId, storedUrl);
       if (freshUrl) {
+        const settingsToUpdate: Record<string, string> = {};
         if (freshUrl !== storedUrl) {
-          await settingsService.setAll({ [SETTINGS_KEYS.url]: freshUrl });
+          settingsToUpdate[SETTINGS_KEYS.url] = freshUrl;
         }
-        this.cachedInfo = { proxyBaseUrl: freshUrl, authToken: storedToken };
+
+        let projectsUrl = storedProjectsUrl || '';
+        try {
+          const sandbox = await daytonaProvider.get(storedId);
+          const projPreview = await sandbox.getPreviewLink(PROJECTS_API_PORT);
+          projectsUrl = projPreview.url.replace(/\/$/, '');
+          if (projectsUrl !== storedProjectsUrl) {
+            settingsToUpdate[SETTINGS_KEYS.projectsUrl] = projectsUrl;
+          }
+        } catch {
+          // Non-fatal — projects API URL refresh failed
+        }
+
+        if (Object.keys(settingsToUpdate).length > 0) {
+          await settingsService.setAll(settingsToUpdate);
+        }
+        this.cachedInfo = { proxyBaseUrl: freshUrl, authToken: storedToken, projectsApiUrl: projectsUrl };
         return this.cachedInfo;
       }
       needsRecreate = true;
@@ -213,6 +236,7 @@ class ProxySandboxService {
 
     const sandbox = await this.createProxySandboxWithConflictResolution(daytonaProvider, {
       snapshot,
+      public: true,
       autoStopInterval: 0,
       autoDeleteInterval: -1,
       autoArchiveInterval: 0,
@@ -221,6 +245,7 @@ class ProxySandboxService {
         REAL_OPENAI_API_KEY: openaiKey,
         PROXY_AUTH_TOKEN: authToken,
         PROXY_PORT: String(PROXY_PORT),
+        PROJECTS_API_PORT: String(PROJECTS_API_PORT),
         MITM_PROXY_PORT: String(MITM_PORT),
         PORT_RELAY_PORT: String(PORT_RELAY_PORT),
         SECRETS_JSON: secretsJson,
@@ -238,10 +263,18 @@ class ProxySandboxService {
         : await sandbox.getPreviewLink(PROXY_PORT);
       const proxyBaseUrl = previewInfo.url.replace(/\/$/, '');
 
-      await this.persistSettings(sandbox.id, authToken, proxyBaseUrl, keysHash);
+      let projectsApiUrl = '';
+      try {
+        const projPreview = await sandbox.getPreviewLink(PROJECTS_API_PORT);
+        projectsApiUrl = projPreview.url.replace(/\/$/, '');
+      } catch (err) {
+        console.warn('[proxy-sandbox] Failed to get projects API URL:', err);
+      }
 
-      console.log(`[proxy-sandbox] Proxy sandbox ready: ${sandbox.id} → ${proxyBaseUrl}`);
-      return { proxyBaseUrl, authToken };
+      await this.persistSettings(sandbox.id, authToken, proxyBaseUrl, keysHash, projectsApiUrl);
+
+      console.log(`[proxy-sandbox] Proxy sandbox ready: ${sandbox.id} → ${proxyBaseUrl} (projects: ${projectsApiUrl})`);
+      return { proxyBaseUrl, authToken, projectsApiUrl };
     } catch (err) {
       console.error('[proxy-sandbox] Failed to set up proxy sandbox, cleaning up:', err);
       await this.destroyQuietly(daytonaProvider, sandbox.id);
@@ -262,6 +295,27 @@ class ProxySandboxService {
     });
 
     await this.waitForHealth(sandbox);
+
+    // Upload and start the projects registry API alongside the Rust binary
+    try {
+      const scriptSource = getProxyProjectsScript(PROJECTS_API_PORT);
+      await sandbox.fs.uploadFile(Buffer.from(scriptSource, 'utf8'), PROJECTS_SCRIPT_PATH);
+
+      // Upload mobile dashboard static files if available
+      await this.uploadMobileDashboard(sandbox);
+
+      const projSessionId = `projects-api-${Date.now()}`;
+      await sandbox.process.createSession(projSessionId);
+      await sandbox.process.executeSessionCommand(projSessionId, {
+        command: `node ${PROJECTS_SCRIPT_PATH} > /tmp/projects-api.log 2>&1`,
+        async: true,
+      });
+
+      await this.waitForHealthOnPort(sandbox, PROJECTS_API_PORT);
+      console.log('[proxy-sandbox] Projects API started on port ' + PROJECTS_API_PORT);
+    } catch (err) {
+      console.warn('[proxy-sandbox] Failed to start projects API (non-fatal):', err);
+    }
   }
 
   private loadLinuxBinary(): Buffer {
@@ -293,18 +347,81 @@ class ProxySandboxService {
     );
   }
 
+  private async uploadMobileDashboard(sandbox: SandboxInstance): Promise<void> {
+    const dashboardDir = this.findMobileDashboardDir();
+    if (!dashboardDir) return;
+
+    const REMOTE_DIR = '/home/daytona/mobile-dashboard';
+    await sandbox.process.executeCommand(`mkdir -p ${REMOTE_DIR}`);
+
+    let fileCount = 0;
+    const uploadRecursive = async (localDir: string, remoteBase: string) => {
+      const entries = fs.readdirSync(localDir, { withFileTypes: true });
+      for (const entry of entries) {
+        const localPath = path.join(localDir, entry.name);
+        const remotePath = `${remoteBase}/${entry.name}`;
+        if (entry.isDirectory()) {
+          await sandbox.process.executeCommand(`mkdir -p ${remotePath}`);
+          await uploadRecursive(localPath, remotePath);
+        } else {
+          const buf = fs.readFileSync(localPath);
+          await sandbox.fs.uploadFile(buf, remotePath);
+          fileCount++;
+        }
+      }
+    };
+
+    try {
+      await uploadRecursive(dashboardDir, REMOTE_DIR);
+      console.log(`[proxy-sandbox] Mobile dashboard uploaded (${fileCount} files from ${dashboardDir})`);
+    } catch (err) {
+      console.warn('[proxy-sandbox] Failed to upload mobile dashboard:', err);
+    }
+  }
+
+  private findMobileDashboardDir(): string | null {
+    const envDir = process.env['MOBILE_DASHBOARD_DIR'];
+    if (envDir) {
+      const idx = path.join(envDir, 'index.html');
+      if (fs.existsSync(idx)) return envDir;
+      console.log(`[proxy-sandbox] MOBILE_DASHBOARD_DIR set but no index.html at ${idx}`);
+    }
+
+    const fromDirname = path.resolve(__dirname, '..', '..', '..', '..', '..');
+    const candidates = [
+      path.join(fromDirname, 'apps/mobile-dashboard/dist'),
+      path.join(process.cwd(), 'apps/mobile-dashboard/dist'),
+      '/usr/local/share/apex/mobile-dashboard',
+    ];
+
+    for (const dir of candidates) {
+      try {
+        if (fs.existsSync(path.join(dir, 'index.html'))) {
+          console.log(`[proxy-sandbox] Found mobile dashboard at ${dir}`);
+          return dir;
+        }
+      } catch { /* skip */ }
+    }
+    console.log(`[proxy-sandbox] Mobile dashboard not found. Searched: ${candidates.join(', ')}`);
+    return null;
+  }
+
   private async waitForHealth(sandbox: SandboxInstance): Promise<void> {
+    await this.waitForHealthOnPort(sandbox, PROXY_PORT);
+  }
+
+  private async waitForHealthOnPort(sandbox: SandboxInstance, port: number): Promise<void> {
     for (let i = 0; i < HEALTH_MAX_ATTEMPTS; i++) {
       try {
         const result = await sandbox.process.executeCommand(
-          `curl -sf http://localhost:${PROXY_PORT}/health 2>&1 || echo "NOT_READY"`,
+          `curl -sf http://localhost:${port}/health 2>&1 || echo "NOT_READY"`,
         );
         const output = (result.result ?? '').trim();
         if (output.includes('"ok"')) return;
       } catch { /* retry */ }
       await new Promise((r) => setTimeout(r, HEALTH_INTERVAL_MS));
     }
-    throw new Error('Proxy sandbox health check timed out');
+    throw new Error(`Health check timed out for port ${port}`);
   }
 
   private urlRefreshedAt = 0;
@@ -381,12 +498,14 @@ class ProxySandboxService {
     authToken: string,
     url: string,
     keysHash: string,
+    projectsUrl: string = '',
   ): Promise<void> {
     await settingsService.setAll({
       [SETTINGS_KEYS.sandboxId]: sandboxId,
       [SETTINGS_KEYS.authToken]: authToken,
       [SETTINGS_KEYS.url]: url,
       [SETTINGS_KEYS.keysHash]: keysHash,
+      [SETTINGS_KEYS.projectsUrl]: projectsUrl,
     });
   }
 
@@ -396,6 +515,7 @@ class ProxySandboxService {
       [SETTINGS_KEYS.authToken]: '',
       [SETTINGS_KEYS.url]: '',
       [SETTINGS_KEYS.keysHash]: '',
+      [SETTINGS_KEYS.projectsUrl]: '',
     });
   }
 }

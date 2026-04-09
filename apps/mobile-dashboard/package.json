@@ -1,0 +1,23 @@
+{
+  "name": "@apex/mobile-dashboard",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "nx": {
+    "targets": {
+      "build": {
+        "executor": "nx:run-commands",
+        "options": {
+          "command": "npx vite build",
+          "cwd": "apps/mobile-dashboard"
+        },
+        "outputs": ["{projectRoot}/dist"]
+      }
+    }
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }
+}

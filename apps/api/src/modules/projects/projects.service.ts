@@ -12,6 +12,8 @@ import { secretsService } from '../secrets/secrets.service';
 import { settingsService } from '../settings/settings.service';
 import { threadsService } from '../tasks/tasks.service';
 import { proxySandboxService } from '../llm-proxy/proxy-sandbox.service';
+import { proxyProjectsService } from '../llm-proxy/proxy-projects.service';
+import type { ProjectSyncPayload } from '../llm-proxy/proxy-projects.service';
 import { DaytonaSandboxProvider } from '@apex/orchestrator';
 
 export type Project = typeof projects.$inferSelect & { threads?: (typeof tasks.$inferSelect)[] };
@@ -177,6 +179,13 @@ class ProjectsService {
                providerConfig.proxyBaseUrl = proxyInfo.proxyBaseUrl;
                providerConfig.proxyAuthToken = proxyInfo.authToken;
                console.log(`[projects] Daytona LLM proxy sandbox ready: ${proxyInfo.proxyBaseUrl}`);
+               if (proxyInfo.projectsApiUrl) {
+                 console.log(`[projects] 📱 Mobile dashboard: ${proxyInfo.projectsApiUrl}/app`);
+               }
+
+               this.syncExistingDaytonaProjects().catch((err) => {
+                 console.warn('[projects] Initial proxy project sync failed (non-fatal):', err);
+               });
              } catch (proxyErr) {
                console.warn(`[projects] Daytona LLM proxy sandbox failed (non-fatal):`, proxyErr);
              }
@@ -265,6 +274,14 @@ class ProjectsService {
   private async ensureSandboxManager(provider?: string): Promise<boolean> {
     if (provider && this.sandboxManagers.has(provider)) return true;
     if (!provider && this.sandboxManagers.size > 0) return true;
+
+    // If we already checked this provider and it was unavailable, skip the
+    // expensive full reinit — it won't change the outcome.
+    if (provider && this.providerStatuses.length > 0) {
+      const status = this.providerStatuses.find((s) => s.type === provider);
+      if (status && !status.available) return false;
+    }
+
     await this.initSandboxManagers();
     if (provider) return this.sandboxManagers.has(provider);
     return this.sandboxManagers.size > 0;
@@ -360,7 +377,9 @@ class ProjectsService {
       const message = err instanceof Error ? err.message : String(err);
       await db.update(projects).set({ status: 'error', statusError: message }).where(eq(projects.id, projectId));
     }
-    projectsWsBroadcast('project_updated', await this.findById(projectId));
+    const updated = await this.findById(projectId);
+    projectsWsBroadcast('project_updated', updated);
+    this.syncToProxy(updated);
   }
 
   async restartProject(projectId: string): Promise<Project> {
@@ -484,6 +503,7 @@ class ProjectsService {
     });
     const saved = await this.findById(id);
     projectsWsBroadcast('project_created', saved);
+    this.syncToProxy(saved);
 
     this.provisionSandbox(saved.id, saved.sandboxSnapshot, saved.provider as ProviderType, saved.name, saved.gitRepo, saved.agentType, saved.localDir || undefined, gitBranch, createBranch, saved.sandboxConfig).catch((err) => {
       console.error(`[projects] Failed to provision sandbox for project ${saved.id}:`, err);
@@ -496,6 +516,7 @@ class ProjectsService {
     await db.update(projects).set({ ...data, updatedAt: new Date().toISOString() } as any).where(eq(projects.id, id));
     const updated = await this.findById(id);
     projectsWsBroadcast('project_updated', updated);
+    this.syncToProxy(updated);
     return updated;
   }
 
@@ -605,6 +626,7 @@ class ProjectsService {
     }
 
     projectsWsBroadcast('project_deleted', { id });
+    this.removeFromProxy(id, project.provider);
 
     if (sandboxId && manager && familySandboxIds.length > 0) {
       this.cleanupOrphanedFamilySandboxes(familySandboxIds, manager).catch(() => {});
@@ -658,6 +680,7 @@ class ProjectsService {
     });
     const saved = await this.findById(id);
     projectsWsBroadcast('project_created', saved);
+    this.syncToProxy(saved);
 
     const rootName = source.forkedFromId
       ? (await this.findById(source.forkedFromId)).name
@@ -721,6 +744,67 @@ class ProjectsService {
     }
   }
 
+  private toSyncPayload(project: Project): ProjectSyncPayload {
+    return {
+      id: project.id,
+      name: project.name,
+      description: project.description,
+      status: project.status,
+      gitRepo: project.gitRepo,
+      sandboxId: project.sandboxId,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+    };
+  }
+
+  private syncToProxy(project: Project): void {
+    if (project.provider !== 'daytona') return;
+    proxyProjectsService.syncProject(this.toSyncPayload(project)).catch(() => {});
+  }
+
+  /**
+   * Push all existing Daytona projects and their threads to the proxy
+   * registry on startup. Ensures data created before this feature was
+   * added is visible on the mobile dashboard.
+   */
+  private async syncExistingDaytonaProjects(): Promise<void> {
+    const allProjects = await db.query.projects.findMany({
+      where: and(eq(projects.provider, 'daytona'), isNull(projects.deletedAt)),
+    });
+    if (allProjects.length === 0) return;
+    console.log(`[projects] Syncing ${allProjects.length} existing Daytona project(s) to proxy registry`);
+    for (const p of allProjects) {
+      await proxyProjectsService.syncProject(this.toSyncPayload(p as Project));
+    }
+
+    const projectIds = allProjects.map((p) => p.id);
+    const allThreads = await db.query.tasks.findMany({
+      where: sql`${tasks.projectId} IN (${sql.join(projectIds.map((id) => sql`${id}`), sql`, `)})`,
+    });
+    if (allThreads.length > 0) {
+      console.log(`[projects] Syncing ${allThreads.length} thread(s) to proxy registry`);
+      for (const t of allThreads) {
+        await proxyProjectsService.syncThread({
+          id: t.id,
+          projectId: t.projectId,
+          title: t.title,
+          status: t.status,
+          agentType: t.agentType,
+          model: t.model,
+          createdAt: t.createdAt,
+          updatedAt: t.updatedAt,
+        });
+      }
+    }
+
+    console.log(`[projects] Initial proxy sync complete`);
+  }
+
+  private removeFromProxy(projectId: string, provider: string): void {
+    if (provider !== 'daytona') return;
+    proxyProjectsService.removeProject(projectId).catch(() => {});
+  }
+
   private async provisionSandbox(
     projectId: string, snapshot: string, provider: ProviderType,
     projectName?: string, gitRepo?: string | null, agentType?: string,
@@ -745,6 +829,7 @@ class ProjectsService {
       await db.update(projects).set({ sandboxId, status: 'running', statusError: null }).where(eq(projects.id, projectId));
       const readyProject = await this.findById(projectId);
       projectsWsBroadcast('project_updated', readyProject);
+      this.syncToProxy(readyProject);
       await this.triggerAutoStart(readyProject);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

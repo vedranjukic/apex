@@ -1,8 +1,17 @@
 import { Elysia } from 'elysia';
 import { projectsService } from './projects.service';
 import { usersService } from '../users/users.service';
+import { proxyProjectsService } from '../llm-proxy/proxy-projects.service';
 
 export const projectsRoutes = new Elysia({ prefix: '/api/projects' })
+  .get('/remote', async ({ set }) => {
+    try {
+      return await proxyProjectsService.listProjects();
+    } catch (err) {
+      set.status = 502;
+      return { error: `Failed to fetch remote projects: ${err}` };
+    }
+  })
   .get('/', () => {
     const userId = usersService.getDefaultUserId();
     return projectsService.findAllByUser(userId);
