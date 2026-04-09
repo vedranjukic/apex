@@ -7,6 +7,7 @@ Nx monorepo with these packages:
 - `apps/dashboard` -- React 19 + Vite frontend (Zustand, Tailwind CSS 4, Lucide icons)
 - `apps/api` -- NestJS backend (TypeORM, SQLite, Socket.io)
 - `apps/cli` -- TypeScript/Bun CLI (Commander.js, native SQLite, shared orchestrator)
+- `apps/mobile-dashboard` -- React + Vite mobile dashboard (served from Daytona proxy sandbox)
 - `libs/orchestrator` -- Sandbox/orchestration logic
 - `libs/shared` -- Shared TypeScript types
 
@@ -67,6 +68,7 @@ Additional docs live in `workdocs/`. Read these only when working on the relevan
 - `workdocs/tcp-over-websocket-tunnel.md` -- TCP-over-WebSocket tunnel for MITM proxy on Daytona, combined proxy service, architecture
 - `workdocs/open-in-ide.md` -- Open in IDE button, SSH remote connection, IDE detection, SSH config management
 - `workdocs/lsp-integration.md` -- LSP architecture, bridge LSP manager, MCP LSP server, dashboard language client, Monaco editor migration
+- `workdocs/proxy-project-manager.md` -- Daytona proxy project manager, mobile dashboard, remote project/thread sync
 
 ## LLM API Key Proxy
 
@@ -83,3 +85,11 @@ User-defined API key secrets (Stripe, Twilio, etc.) are managed via a transparen
 Containers get `HTTPS_PROXY`/`HTTP_PROXY` env vars pointing at the proxy (or tunnel client for Daytona), the CA cert in the system trust store, and placeholder env vars (e.g. `STRIPE_KEY=sk-proxy-placeholder`) so SDKs can initialize. The agent can discover secret names (never values) via the `list_secrets` MCP tool.
 
 Key files: `apps/api/src/modules/secrets/`, `apps/api/src/modules/secrets-proxy/`, `apps/proxy/` (Rust MITM binary), dashboard UI at `/secrets`. See the "Secrets Proxy (MITM)" section in `workdocs/architecture-overview.md` and `workdocs/tcp-over-websocket-tunnel.md` for the full design.
+
+## Proxy Project Manager & Mobile Dashboard
+
+The Daytona proxy sandbox runs a **project registry API** (Node script on port 3001) alongside the Rust `apex-proxy` binary. The desktop app syncs Daytona projects, threads, and messages to this registry on every lifecycle event (create, update, delete, agent completion). A **mobile-optimized React dashboard** is served from `/app` on the same port, allowing remote monitoring of projects and threads from any device.
+
+The proxy sandbox is created as **public** so the mobile dashboard URL is stable and doesn't require signed URL refresh. API endpoints still require Bearer token authentication (`PROXY_AUTH_TOKEN`). The mobile dashboard URL and token are visible in **Settings > Mobile View** in the desktop app.
+
+Key files: `libs/orchestrator/src/lib/proxy-projects-script.ts` (Node script), `apps/api/src/modules/llm-proxy/proxy-projects.service.ts` (sync client), `apps/mobile-dashboard/` (React SPA). See `workdocs/proxy-project-manager.md` for the full design.

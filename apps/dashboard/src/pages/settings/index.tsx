@@ -14,6 +14,7 @@ import { AgentConfiguration } from "./categories/agent-configuration";
 import { SandboxSettings } from "./categories/sandbox-settings";
 import { Integrations } from "./categories/integrations";
 import { Networking } from "./categories/networking";
+import { MobileView } from "./categories/mobile-view";
 import {
   settingsApi,
   githubApi,
@@ -159,6 +160,8 @@ export function SettingsPage() {
         return <Integrations {...commonProps} />;
       case "networking":
         return <Networking {...commonProps} />;
+      case "mobile":
+        return <MobileView {...commonProps} />;
       default:
         return <AgentConfiguration {...commonProps} />;
     }

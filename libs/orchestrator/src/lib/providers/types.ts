@@ -39,6 +39,8 @@ export interface CreateSandboxParams {
   labels?: Record<string, string>;
   /** Human-readable sandbox name. */
   name?: string;
+  /** Whether the sandbox should be publicly accessible (Daytona provider). */
+  public?: boolean;
   /** User-specified working directory (Local provider). */
   localDir?: string;
   /** Called by the provider to signal status changes (e.g. 'pulling_image'). */

@@ -199,13 +199,11 @@ Regular Sandbox (OpenCode) → https://<proxy-sandbox-preview-url>/llm-proxy/ant
 
 A **proxy sandbox** is a lightweight Daytona sandbox that runs the **`apex-proxy` Rust binary** — a single statically-linked binary providing LLM proxy, MITM secrets proxy, and WebSocket tunnel functionality. One proxy sandbox is shared across all regular Daytona sandboxes in the same application instance. It is created automatically at startup and lazily re-created if it becomes unhealthy. The binary is cross-compiled for `x86_64-unknown-linux-musl` and uploaded to the sandbox at creation time.
 
-**Services in Proxy Sandbox (single `apex-proxy` binary):**
-- **LLM Proxy** (port 3000) — API key proxying functionality + `/health` endpoint
-- **MITM Secrets Proxy** (port 9340, internal) — TLS termination with secrets injection, ECDSA P256 domain certs signed by RSA CA
-- **WebSocket Tunnel Bridge** (`/tunnel` endpoint) — enables TCP-over-WebSocket tunneling for HTTPS proxy connections from regular sandboxes
-- **Port Relay Bridge** (`/port-relay/:port` endpoint) — arbitrary TCP port forwarding via WebSocket
+**Services in Proxy Sandbox:**
+- **`apex-proxy` Rust binary** (port 3000) — LLM API key proxy + `/health`, MITM secrets proxy (port 9340), WebSocket tunnel (`/tunnel`), port relay (`/port-relay/:port`)
+- **Projects API + Mobile Dashboard** (port 3001, Node script) — project/thread/message registry with Bearer auth, serves the mobile dashboard SPA from `/app`
 
-**Security:** The proxy sandbox's Daytona preview URL contains the sandbox UUID (hard to guess). Each application instance generates a unique auth token (e.g. `sk-proxy-<random-hex>`) that regular sandboxes send as their "API key". The proxy verifies this token before forwarding requests. Real API keys never leave the proxy sandbox.
+**Security:** The proxy sandbox is created as **public** so the mobile dashboard URL is stable. The LLM proxy (port 3000) uses signed preview URLs with token rotation. The projects API (port 3001) requires Bearer token authentication (`PROXY_AUTH_TOKEN`) for all data endpoints; the `/app` static files and `/health` are unauthenticated. Real API keys never leave the proxy sandbox.
 
 **Lifecycle:** The proxy sandbox is created on first Daytona sandbox operation and persists across app restarts (sandbox ID stored in the settings DB). It is recreated when API keys change (detected via SHA-256 hash comparison) or when the sandbox is found to be stopped/destroyed.
 

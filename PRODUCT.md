@@ -197,7 +197,8 @@ The IDE is available as a native desktop application for macOS, Linux, and Windo
 - **Native window management** — multiple project windows, draggable title bar, macOS dock behavior
 - **Open in IDE** — detects locally installed Cursor or VS Code and launches a native SSH remote connection to the sandbox (managed SSH config with 24-hour tokens)
 - **Code-server fallback** — in the web version, "Open in IDE" launches a code-server URL instead
-- **Settings UI** — configure API keys from a built-in settings page (grouped by context: Agent API Keys, GitHub, Sandbox) instead of `.env` files
+- **Settings UI** — configure API keys from a built-in settings page (grouped by context: Agent Configuration, Sandbox, Integrations, Networking, Mobile View) instead of `.env` files
+- **Mobile Dashboard** — a mobile-optimized web dashboard hosted on the Daytona proxy sandbox, accessible from any device; shows project list with status, thread previews, and full conversation history. Link and auth token available in Settings > Mobile View
 - **Delta updates** — binary diff (bsdiff) updates for small download sizes
 - **Identical features** — everything that works in the web version works identically in the desktop app
 
