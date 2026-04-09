@@ -54,7 +54,7 @@ const HOME_DIR = "/home/daytona";
  *   with the host's LAN IP so the container can reach it.
  * - For Daytona (cloud): only works when a public `API_BASE_URL` is set.
  *   If the URL still points at localhost, returns `null` to signal that the
- *   proxy is unreachable and the caller should fall back to direct keys.
+ *   proxy is unreachable (LLM calls will fail but keys stay safe).
  */
 function resolveProxyBaseUrl(
   raw: string,
@@ -367,23 +367,15 @@ export class SandboxManager extends EventEmitter {
     const isDaytona = this.config.provider === "daytona";
 
     if (this.config.anthropicApiKey) {
+      envVars["ANTHROPIC_API_KEY"] = "sk-proxy-placeholder";
       if (useProxy) {
-        envVars["ANTHROPIC_API_KEY"] = "sk-proxy-placeholder";
         envVars["ANTHROPIC_BASE_URL"] = `${proxyBase}/llm-proxy/anthropic/v1`;
-      } else if (isDaytona) {
-        envVars["ANTHROPIC_API_KEY"] = "sk-proxy-placeholder";
-      } else {
-        envVars["ANTHROPIC_API_KEY"] = this.config.anthropicApiKey;
       }
     }
     if (this.config.openaiApiKey) {
+      envVars["OPENAI_API_KEY"] = "sk-proxy-placeholder";
       if (useProxy) {
-        envVars["OPENAI_API_KEY"] = "sk-proxy-placeholder";
         envVars["OPENAI_BASE_URL"] = `${proxyBase}/llm-proxy/openai/v1`;
-      } else if (isDaytona) {
-        envVars["OPENAI_API_KEY"] = "sk-proxy-placeholder";
-      } else {
-        envVars["OPENAI_API_KEY"] = this.config.openaiApiKey;
       }
     }
 
@@ -469,9 +461,15 @@ export class SandboxManager extends EventEmitter {
     let envVars: Record<string, string> | undefined;
     if (this.config.provider !== "local") {
       envVars = this.buildContainerEnvVars();
-      // Merge custom environment variables if provided
+      // Merge custom environment variables, but never allow overriding LLM key
+      // placeholders — real keys must never enter sandbox environments.
       if (advancedSettings?.environmentVariables) {
-        envVars = { ...envVars, ...advancedSettings.environmentVariables };
+        const LLM_KEY_NAMES = new Set(["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]);
+        const safeVars = Object.fromEntries(
+          Object.entries(advancedSettings.environmentVariables)
+            .filter(([k]) => !LLM_KEY_NAMES.has(k)),
+        );
+        envVars = { ...envVars, ...safeVars };
       }
     }
 
@@ -2369,22 +2367,14 @@ export class SandboxManager extends EventEmitter {
     const apexProxyForBridge = proxyBase || this.config.proxyBaseUrl;
     const placeholderR = this.config.proxyAuthToken || "sk-proxy-placeholder";
     const envParts = [
+      `ANTHROPIC_API_KEY="${placeholderR}"`,
+      `OPENAI_API_KEY="${placeholderR}"`,
       ...(useProxy
         ? [
-            `ANTHROPIC_API_KEY="${placeholderR}"`,
             `ANTHROPIC_BASE_URL="${proxyBase}/llm-proxy/anthropic/v1"`,
-            `OPENAI_API_KEY="${placeholderR}"`,
             `OPENAI_BASE_URL="${proxyBase}/llm-proxy/openai/v1"`,
           ]
-        : isDaytonaR
-          ? [
-              `ANTHROPIC_API_KEY="${placeholderR}"`,
-              `OPENAI_API_KEY="${placeholderR}"`,
-            ]
-          : [
-              `ANTHROPIC_API_KEY="${this.config.anthropicApiKey}"`,
-              `OPENAI_API_KEY="${this.config.openaiApiKey}"`,
-            ]),
+        : []),
       `DAYTONA_API_KEY="${daytonaApiKeyR}"`,
       `DAYTONA_API_URL="${daytonaApiUrlR}"`,
       `DAYTONA_SANDBOX_ID="${sandbox.id}"`,
@@ -2770,22 +2760,14 @@ export class SandboxManager extends EventEmitter {
 
     const placeholderI = this.config.proxyAuthToken || "sk-proxy-placeholder";
     const envParts = [
+      `ANTHROPIC_API_KEY="${placeholderI}"`,
+      `OPENAI_API_KEY="${placeholderI}"`,
       ...(useProxyI
         ? [
-            `ANTHROPIC_API_KEY="${placeholderI}"`,
             `ANTHROPIC_BASE_URL="${proxyBaseUrlForEnv}/llm-proxy/anthropic/v1"`,
-            `OPENAI_API_KEY="${placeholderI}"`,
             `OPENAI_BASE_URL="${proxyBaseUrlForEnv}/llm-proxy/openai/v1"`,
           ]
-        : isDaytonaI
-          ? [
-              `ANTHROPIC_API_KEY="${placeholderI}"`,
-              `OPENAI_API_KEY="${placeholderI}"`,
-            ]
-          : [
-              `ANTHROPIC_API_KEY="${this.config.anthropicApiKey}"`,
-              `OPENAI_API_KEY="${this.config.openaiApiKey}"`,
-            ]),
+        : []),
       `DAYTONA_API_KEY="${daytonaApiKey}"`,
       `DAYTONA_API_URL="${daytonaApiUrl}"`,
       `DAYTONA_SANDBOX_ID="${sandbox.id}"`,
