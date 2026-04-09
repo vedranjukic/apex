@@ -274,6 +274,7 @@ class ProxySandboxService {
     const candidates = [
       path.join(workspaceRoot, 'apps/proxy/target/x86_64-unknown-linux-musl/release/apex-proxy'),
       path.join(workspaceRoot, 'apps/proxy/target/x86_64-unknown-linux-gnu/release/apex-proxy'),
+      path.join(workspaceRoot, 'apps/proxy/target/release/apex-proxy'),
       '/usr/local/share/apex/apex-proxy-linux',
     ];
 
