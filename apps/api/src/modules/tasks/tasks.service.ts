@@ -131,7 +131,7 @@ class ThreadsService {
     });
 
     const saved = await this.findById(id);
-    this.syncThreadToProxy(saved);
+    this.syncThreadAndMessagesToProxy(saved);
     return saved;
   }
 

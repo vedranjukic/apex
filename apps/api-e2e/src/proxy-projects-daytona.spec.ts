@@ -352,6 +352,47 @@ describeE2e('Proxy Projects Registry — Daytona', () => {
     }, 3 * 60 * 1000);
   });
 
+  // ── Thread message sync ───────────────────────
+
+  describe('Thread message sync', () => {
+    it('should sync thread messages to proxy when a thread is created', async () => {
+      // Create a Daytona project
+      const pid = await createProject('E2E Message Sync Test', 'build', 'daytona');
+      createdProjectIds.push(pid);
+
+      // Wait for the project to appear on the proxy
+      await waitForProxyProject(proxyBaseUrl, authToken, pid);
+
+      // Create a thread via the local API (this inserts a user message + syncs)
+      const threadRes = await axios.post(`/api/projects/${pid}/threads`, {
+        prompt: 'Hello from the message sync test',
+      });
+      expect(threadRes.status).toBe(200);
+      const threadId = threadRes.data.id;
+
+      // Poll proxy until the thread's messages are synced
+      const deadline = Date.now() + 30_000;
+      let messages: any[] = [];
+      while (Date.now() < deadline) {
+        try {
+          const resp = await fetch(
+            `${proxyBaseUrl}/threads/${threadId}/messages`,
+            { headers: { Authorization: `Bearer ${authToken}` } },
+          );
+          if (resp.ok) {
+            messages = await resp.json();
+            if (messages.length > 0) break;
+          }
+        } catch { /* retry */ }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+
+      expect(messages.length).toBeGreaterThan(0);
+      expect(messages[0].role).toBe('user');
+      expect(messages[0].content[0].text).toBe('Hello from the message sync test');
+    }, 60_000);
+  });
+
   // ── Non-Daytona projects should NOT sync ─────
 
   describe('Non-Daytona project isolation', () => {

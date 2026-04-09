@@ -795,6 +795,26 @@ class ProjectsService {
           updatedAt: t.updatedAt,
         });
       }
+
+      const completedThreads = allThreads.filter(
+        (t) => t.status === 'completed' || t.status === 'error',
+      );
+      if (completedThreads.length > 0) {
+        console.log(`[projects] Syncing messages for ${completedThreads.length} completed thread(s)`);
+        for (const t of completedThreads) {
+          const msgs = await threadsService.getMessages(t.id);
+          if (msgs.length > 0) {
+            await proxyProjectsService.syncMessages(t.id, msgs.map((m) => ({
+              id: m.id,
+              taskId: m.taskId,
+              role: m.role,
+              content: m.content as unknown[],
+              metadata: m.metadata,
+              createdAt: m.createdAt,
+            })));
+          }
+        }
+      }
     }
 
     console.log(`[projects] Initial proxy sync complete`);
