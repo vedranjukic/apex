@@ -16,9 +16,14 @@ function getBaseUrl(): string {
   return window.location.origin;
 }
 
-async function request<T>(path: string): Promise<T> {
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(`${getBaseUrl()}${path}`, {
-    headers: { Authorization: `Bearer ${getToken()}` },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${getToken()}`,
+      ...init?.headers,
+    },
+    ...init,
   });
   if (resp.status === 401) {
     clearToken();
@@ -76,4 +81,9 @@ export const api = {
   projects: () => request<Project[]>('/projects'),
   projectThreads: (projectId: string) => request<Thread[]>(`/projects/${projectId}/threads`),
   threadMessages: (threadId: string) => request<Message[]>(`/threads/${threadId}/messages`),
+  submitPrompt: (projectId: string, threadId: string, prompt: string) =>
+    request<{ id: string }>('/prompts', {
+      method: 'POST',
+      body: JSON.stringify({ projectId, threadId, prompt }),
+    }),
 };

@@ -39,6 +39,7 @@ class ProjectsService {
   private sandboxManagers = new Map<string, SandboxManager>();
   private providerStatuses: ProviderStatus[] = [];
   private autoStartHandler: AutoStartHandler | null = null;
+  private promptPollTimer: ReturnType<typeof setInterval> | null = null;
 
   async init() {
     await this.initSandboxManagers();
@@ -46,6 +47,45 @@ class ProjectsService {
 
   registerAutoStartHandler(handler: AutoStartHandler) {
     this.autoStartHandler = handler;
+  }
+
+  /**
+   * Start polling the proxy for prompts submitted from the mobile dashboard.
+   * Called after the auto-start handler is registered so we can execute prompts.
+   */
+  startMobilePromptPolling() {
+    if (this.promptPollTimer) return;
+    this.promptPollTimer = setInterval(() => {
+      this.pollMobilePrompts().catch(() => {});
+    }, 5000);
+  }
+
+  private async pollMobilePrompts(): Promise<void> {
+    if (!this.autoStartHandler) return;
+    const pending = await proxyProjectsService.fetchPendingPrompts();
+    if (pending.length === 0) return;
+
+    for (const p of pending) {
+      try {
+        await proxyProjectsService.acknowledgePrompt(p.id);
+        const thread = await threadsService.findById(p.threadId).catch(() => null);
+        if (!thread) {
+          const newThread = await threadsService.create(p.projectId, { prompt: p.prompt });
+          console.log(`[projects] Mobile prompt → new thread ${newThread.id.slice(0, 8)} for project ${p.projectId.slice(0, 8)}`);
+          await this.autoStartHandler(newThread.id, p.prompt);
+        } else {
+          const msg = await threadsService.addMessage(p.threadId, {
+            role: 'user',
+            content: [{ type: 'text', text: p.prompt }],
+            metadata: null,
+          });
+          console.log(`[projects] Mobile prompt → follow-up on thread ${p.threadId.slice(0, 8)}`);
+          await this.autoStartHandler(p.threadId, p.prompt);
+        }
+      } catch (err) {
+        console.warn(`[projects] Failed to execute mobile prompt ${p.id}:`, err);
+      }
+    }
   }
 
   /** Run lightweight dependency checks for every provider (once at startup). */

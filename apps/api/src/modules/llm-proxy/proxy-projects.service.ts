@@ -159,6 +159,40 @@ class ProxyProjectsService {
     }
   }
 
+  async fetchPendingPrompts(): Promise<Array<{
+    id: string;
+    threadId: string;
+    projectId: string;
+    prompt: string;
+  }>> {
+    const conn = this.getConnectionInfo();
+    if (!conn) return [];
+
+    try {
+      const resp = await fetch(`${conn.projectsApiUrl}/prompts/pending`, {
+        headers: { 'Authorization': `Bearer ${conn.authToken}` },
+      });
+      if (!resp.ok) return [];
+      return await resp.json();
+    } catch {
+      return [];
+    }
+  }
+
+  async acknowledgePrompt(promptId: string): Promise<void> {
+    const conn = this.getConnectionInfo();
+    if (!conn) return;
+
+    try {
+      await fetch(`${conn.projectsApiUrl}/prompts/${promptId}/ack`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${conn.authToken}` },
+      });
+    } catch {
+      // non-fatal
+    }
+  }
+
   async listProjects(): Promise<RemoteProjectInfo[]> {
     const conn = this.getConnectionInfo();
     if (!conn) return [];

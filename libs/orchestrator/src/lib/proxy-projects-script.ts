@@ -29,6 +29,7 @@ var DASHBOARD_DIR = DATA_DIR + "/mobile-dashboard";
 var projects = new Map();
 var threads = new Map();
 var messagesMap = new Map();
+var pendingPrompts = [];
 
 // ── Persistence ──────────────────────────────────────
 
@@ -332,6 +333,57 @@ var server = http.createServer(function (req, res) {
       return sendJson(res, 200, { ok: true, deleted: existed });
     }
     return sendJson(res, 405, { error: "Method not allowed" });
+  }
+
+  // ── Prompt queue ──────────────────────────
+
+  if (urlPath === "/prompts" || urlPath === "/prompts/") {
+    if (method === "POST") {
+      return readBody(req).then(function (body) {
+        if (!body.threadId || !body.projectId || !body.prompt) {
+          return sendJson(res, 400, { error: "Missing threadId, projectId, or prompt" });
+        }
+        var entry = {
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+          threadId: body.threadId,
+          projectId: body.projectId,
+          prompt: body.prompt,
+          status: "pending",
+          createdAt: new Date().toISOString(),
+        };
+        pendingPrompts.push(entry);
+        console.log("[projects-api] Prompt queued for thread " + body.threadId.slice(0, 8));
+        return sendJson(res, 201, entry);
+      }).catch(function (err) {
+        return sendJson(res, 400, { error: "Invalid JSON: " + err.message });
+      });
+    }
+    return sendJson(res, 405, { error: "Method not allowed" });
+  }
+
+  if (urlPath === "/prompts/pending" || urlPath === "/prompts/pending/") {
+    if (method === "GET") {
+      var pending = pendingPrompts.filter(function (p) { return p.status === "pending"; });
+      return sendJson(res, 200, pending);
+    }
+    return sendJson(res, 405, { error: "Method not allowed" });
+  }
+
+  var promptAckMatch = urlPath.match(/^\\/prompts\\/([^\\/]+)\\/ack\\/?$/);
+  if (promptAckMatch && method === "POST") {
+    var pid = promptAckMatch[1];
+    var found = false;
+    for (var i = 0; i < pendingPrompts.length; i++) {
+      if (pendingPrompts[i].id === pid) {
+        pendingPrompts[i].status = "acknowledged";
+        found = true;
+        break;
+      }
+    }
+    // Clean up old acknowledged prompts (keep last 100)
+    pendingPrompts = pendingPrompts.filter(function (p) { return p.status === "pending"; })
+      .concat(pendingPrompts.filter(function (p) { return p.status !== "pending"; }).slice(-100));
+    return sendJson(res, 200, { ok: true, found: found });
   }
 
   sendJson(res, 404, { error: "Not found" });

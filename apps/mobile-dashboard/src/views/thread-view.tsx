@@ -12,6 +12,9 @@ interface Props {
 export function ThreadView({ threadId, projectId, projectName, threadTitle }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
+  const [prompt, setPrompt] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
@@ -27,6 +30,22 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  const handleSend = async () => {
+    if (!prompt.trim() || sending) return;
+    setSending(true);
+    setSent(false);
+    try {
+      await api.submitPrompt(projectId, threadId, prompt.trim());
+      setPrompt('');
+      setSent(true);
+      setTimeout(() => setSent(false), 3000);
+    } catch {
+      // error handled silently
+    } finally {
+      setSending(false);
+    }
+  };
 
   const backHref = `#/project/${projectId}?name=${encodeURIComponent(projectName)}`;
 
@@ -56,6 +75,38 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
           <p className="py-12 text-center text-text-muted">No messages synced yet</p>
         )}
         <div ref={endRef} />
+      </div>
+
+      <div className="border-t border-border bg-surface p-3">
+        {sent && (
+          <p className="mb-2 text-center text-xs text-accent">Prompt queued -- will execute when desktop picks it up</p>
+        )}
+        <div className="flex items-end gap-2">
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+            }}
+            placeholder="Send a prompt..."
+            rows={1}
+            className="min-h-[44px] max-h-32 flex-1 resize-none rounded-xl border border-border bg-surface-card px-4 py-3 text-sm text-text placeholder-text-muted outline-none focus:border-primary"
+          />
+          <button
+            onClick={handleSend}
+            disabled={!prompt.trim() || sending}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-white disabled:opacity-40"
+          >
+            {sending ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

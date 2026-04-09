@@ -63,6 +63,7 @@ async function bootstrap() {
   }
   await projectsService.init();
   projectsService.registerAutoStartHandler(autoExecuteThread);
+  projectsService.startMobilePromptPolling();
   
   // Initialize GitHub merge status polling service
   await gitHubMergePollerService.init();
