@@ -41,6 +41,12 @@ class ProjectsService {
   private autoStartHandler: AutoStartHandler | null = null;
   async init() {
     await this.initSandboxManagers();
+    // Reconnect bridges after everything is settled (runs in background)
+    if (this.sandboxManagers.has('daytona')) {
+      this.initDaytonaBridgeConnections().catch((err) => {
+        console.warn('[projects] Bridge reconnection failed (non-fatal):', err);
+      });
+    }
   }
 
   registerAutoStartHandler(handler: AutoStartHandler) {
@@ -182,9 +188,7 @@ class ProjectsService {
                  console.log(`[projects] 📱 Mobile dashboard: ${proxyInfo.projectsApiUrl}/app`);
                }
 
-               this.syncExistingDaytonaProjects().then(() => {
-                 this.initDaytonaBridgeConnections().catch(() => {});
-               }).catch((err) => {
+               this.syncExistingDaytonaProjects().catch((err) => {
                  console.warn('[projects] Initial proxy project sync failed (non-fatal):', err);
                });
              } catch (proxyErr) {
@@ -803,11 +807,32 @@ class ProjectsService {
     const running = allProjects.filter((p) => p.status === 'running' && p.sandboxId);
     if (running.length === 0) return;
     console.log(`[projects] Reconnecting to ${running.length} Daytona sandbox bridge(s) for mobile prompt support`);
+    const proxyInfo = proxySandboxService.getCachedInfo();
     for (const p of running) {
       try {
         mgr.registerProjectId(p.sandboxId!, p.id);
+
+        // Update proxy env vars in the sandbox's .profile so new processes pick them up
+        if (proxyInfo?.proxyBaseUrl && proxyInfo?.authToken) {
+          try {
+            const sandbox = await (mgr as any).ensureSandbox(p.sandboxId);
+            const envCmd = [
+              `export APEX_PROXY_BASE_URL="${proxyInfo.proxyBaseUrl}"`,
+              `export ANTHROPIC_BASE_URL="${proxyInfo.proxyBaseUrl}/llm-proxy/anthropic/v1"`,
+              `export OPENAI_BASE_URL="${proxyInfo.proxyBaseUrl}/llm-proxy/openai/v1"`,
+              `export ANTHROPIC_API_KEY="${proxyInfo.authToken}"`,
+              `export OPENAI_API_KEY="${proxyInfo.authToken}"`,
+            ].join('\n');
+            await sandbox.process.executeCommand(`echo '${envCmd}' > /tmp/proxy-env.sh`);
+            // Also write directly to the sandbox's env for the bridge to pick up
+            for (const line of envCmd.split('\n')) {
+              const [, key, val] = line.match(/export (.+?)="(.+)"/) || [];
+              if (key) await sandbox.process.executeCommand(`export ${key}="${val}"`).catch(() => {});
+            }
+          } catch { /* best-effort */ }
+        }
+
         await mgr.reconnectSandbox(p.sandboxId!, p.name);
-        // Re-sync project with fresh bridge URL
         const payload = await this.toSyncPayload(p as Project);
         if (payload.bridgeUrl) {
           await proxyProjectsService.syncProject(payload);

@@ -246,36 +246,41 @@ function connectBridgeWs(url, headers, onMessage, onClose) {
 
     var buf = Buffer.alloc(0);
     socket.on("data", function (chunk) {
-      buf = Buffer.concat([buf, chunk]);
-      while (buf.length >= 2) {
-        var fin = (buf[0] & 0x80) !== 0;
-        var opcode = buf[0] & 0x0f;
-        var masked = (buf[1] & 0x80) !== 0;
-        var payloadLen = buf[1] & 0x7f;
-        var offset = 2;
-        if (payloadLen === 126) {
-          if (buf.length < 4) return;
-          payloadLen = buf.readUInt16BE(2); offset = 4;
-        } else if (payloadLen === 127) {
-          if (buf.length < 10) return;
-          payloadLen = Number(buf.readBigUInt64BE(2)); offset = 10;
+      try {
+        buf = Buffer.concat([buf, chunk]);
+        while (buf.length >= 2) {
+          var opcode = buf[0] & 0x0f;
+          var masked = (buf[1] & 0x80) !== 0;
+          var payloadLen = buf[1] & 0x7f;
+          var offset = 2;
+          if (payloadLen === 126) {
+            if (buf.length < 4) return;
+            payloadLen = buf.readUInt16BE(2); offset = 4;
+          } else if (payloadLen === 127) {
+            if (buf.length < 10) return;
+            payloadLen = Number(buf.readBigUInt64BE(2)); offset = 10;
+          }
+          if (payloadLen > 10 * 1024 * 1024) { buf = Buffer.alloc(0); return; }
+          var maskOffset = masked ? 4 : 0;
+          if (buf.length < offset + maskOffset + payloadLen) return;
+          var payload = buf.slice(offset + maskOffset, offset + maskOffset + payloadLen);
+          if (masked) {
+            var maskKey = buf.slice(offset, offset + 4);
+            for (var i = 0; i < payload.length; i++) payload[i] ^= maskKey[i % 4];
+          }
+          buf = buf.slice(offset + maskOffset + payloadLen);
+          if (opcode === 0x1) {
+            try { onMessage(JSON.parse(payload.toString("utf8"))); } catch {}
+          } else if (opcode === 0x8) {
+            socket.end(); return;
+          } else if (opcode === 0x9) {
+            var pong = Buffer.alloc(2); pong[0] = 0x8a; pong[1] = 0;
+            socket.write(pong);
+          }
         }
-        var maskOffset = masked ? 4 : 0;
-        if (buf.length < offset + maskOffset + payloadLen) return;
-        var payload = buf.slice(offset + maskOffset, offset + maskOffset + payloadLen);
-        if (masked) {
-          var maskKey = buf.slice(offset, offset + 4);
-          for (var i = 0; i < payload.length; i++) payload[i] ^= maskKey[i % 4];
-        }
-        buf = buf.slice(offset + maskOffset + payloadLen);
-        if (opcode === 0x1 && fin) {
-          try { onMessage(JSON.parse(payload.toString("utf8"))); } catch {}
-        } else if (opcode === 0x8) {
-          socket.end(); return;
-        } else if (opcode === 0x9) {
-          var pong = Buffer.alloc(2); pong[0] = 0x8a; pong[1] = 0;
-          socket.write(pong);
-        }
+      } catch (frameErr) {
+        console.error("[projects-api] WS frame error:", frameErr.message);
+        buf = Buffer.alloc(0);
       }
     });
     socket.on("close", function () { if (onClose) onClose(); });
