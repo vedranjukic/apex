@@ -44,9 +44,10 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
       try {
         const msgs = await api.threadMessages(threadId);
         setMessages(msgs);
-        // Stop polling when a system/result message appears after the prompt was sent
+        // Stop polling when a result message (system with cost metadata) appears
         const hasNewResult = msgs.length > msgCountBeforeSend.current &&
-          msgs.slice(msgCountBeforeSend.current).some((m) => m.role === 'system');
+          msgs.slice(msgCountBeforeSend.current).some((m) =>
+            m.role === 'system' && m.metadata && (m.metadata.costUsd != null || m.metadata.numTurns != null || m.metadata.error));
         if (hasNewResult) {
           if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
           setPolling(false);
