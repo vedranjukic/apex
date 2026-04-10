@@ -812,23 +812,14 @@ class ProjectsService {
       try {
         mgr.registerProjectId(p.sandboxId!, p.id);
 
-        // Update proxy env vars in the sandbox's .profile so new processes pick them up
-        if (proxyInfo?.proxyBaseUrl && proxyInfo?.authToken) {
+        // Clear OpenCode's persisted state so it picks up fresh proxy config on restart
+        if (proxyInfo?.proxyBaseUrl) {
           try {
             const sandbox = await (mgr as any).ensureSandbox(p.sandboxId);
-            const envCmd = [
-              `export APEX_PROXY_BASE_URL="${proxyInfo.proxyBaseUrl}"`,
-              `export ANTHROPIC_BASE_URL="${proxyInfo.proxyBaseUrl}/llm-proxy/anthropic/v1"`,
-              `export OPENAI_BASE_URL="${proxyInfo.proxyBaseUrl}/llm-proxy/openai/v1"`,
-              `export ANTHROPIC_API_KEY="${proxyInfo.authToken}"`,
-              `export OPENAI_API_KEY="${proxyInfo.authToken}"`,
-            ].join('\n');
-            await sandbox.process.executeCommand(`echo '${envCmd}' > /tmp/proxy-env.sh`);
-            // Also write directly to the sandbox's env for the bridge to pick up
-            for (const line of envCmd.split('\n')) {
-              const [, key, val] = line.match(/export (.+?)="(.+)"/) || [];
-              if (key) await sandbox.process.executeCommand(`export ${key}="${val}"`).catch(() => {});
-            }
+            await sandbox.process.executeCommand(
+              'rm -rf /home/daytona/.config/opencode/sessions 2>/dev/null; ' +
+              'pkill -f "opencode serve" 2>/dev/null; sleep 0.5',
+            );
           } catch { /* best-effort */ }
         }
 
