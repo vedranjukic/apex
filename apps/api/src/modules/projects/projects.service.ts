@@ -41,7 +41,7 @@ class ProjectsService {
   private autoStartHandler: AutoStartHandler | null = null;
   async init() {
     await this.initSandboxManagers();
-    // Reconnect bridges after everything is settled (runs in background)
+    // Pre-warm bridge connections (non-destructive -- no session clearing)
     if (this.sandboxManagers.has('daytona')) {
       this.initDaytonaBridgeConnections().catch((err) => {
         console.warn('[projects] Bridge reconnection failed (non-fatal):', err);
@@ -794,9 +794,9 @@ class ProjectsService {
   }
 
   /**
-   * Reconnect to all running Daytona sandbox bridges on startup.
-   * This re-uploads the bridge script, restarts OpenCode with fresh config,
-   * and ensures bridge URLs are cached for mobile prompt execution.
+   * Pre-warm bridge connections for all running Daytona sandboxes.
+   * Non-destructive: does NOT clear OpenCode sessions or kill processes.
+   * Just reconnects the bridge WebSocket and syncs bridge URLs to the proxy.
    */
   private async initDaytonaBridgeConnections(): Promise<void> {
     const mgr = this.sandboxManagers.get('daytona');
@@ -806,33 +806,20 @@ class ProjectsService {
     });
     const running = allProjects.filter((p) => p.status === 'running' && p.sandboxId);
     if (running.length === 0) return;
-    console.log(`[projects] Reconnecting to ${running.length} Daytona sandbox bridge(s) for mobile prompt support`);
-    const proxyInfo = proxySandboxService.getCachedInfo();
+    console.log(`[projects] Pre-warming ${running.length} Daytona bridge connection(s)`);
     for (const p of running) {
       try {
         mgr.registerProjectId(p.sandboxId!, p.id);
-
-        // Clear OpenCode's persisted state so it picks up fresh proxy config on restart
-        if (proxyInfo?.proxyBaseUrl) {
-          try {
-            const sandbox = await (mgr as any).ensureSandbox(p.sandboxId);
-            await sandbox.process.executeCommand(
-              'rm -rf /home/daytona/.config/opencode/sessions 2>/dev/null; ' +
-              'pkill -f "opencode serve" 2>/dev/null; sleep 0.5',
-            );
-          } catch { /* best-effort */ }
-        }
-
         await mgr.reconnectSandbox(p.sandboxId!, p.name);
         const payload = await this.toSyncPayload(p as Project);
         if (payload.bridgeUrl) {
           await proxyProjectsService.syncProject(payload);
         }
       } catch (err) {
-        console.warn(`[projects] Bridge reconnect failed for ${p.sandboxId?.slice(0, 8)} (non-fatal):`, (err as Error).message);
+        console.warn(`[projects] Bridge connect failed for ${p.sandboxId?.slice(0, 8)} (non-fatal):`, (err as Error).message);
       }
     }
-    console.log(`[projects] Bridge reconnection complete`);
+    console.log(`[projects] Bridge pre-warm complete`);
   }
 
   private proxyEnvUpdated = new Set<string>();
