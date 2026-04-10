@@ -80,18 +80,33 @@ function persistFile(file, data) {
   }
 }
 
+var persistTimers = {};
+function debouncedPersist(name, fn, delayMs) {
+  if (persistTimers[name]) clearTimeout(persistTimers[name]);
+  persistTimers[name] = setTimeout(function () {
+    persistTimers[name] = null;
+    try { fn(); } catch (err) { console.error("[projects-api] persist " + name + " error:", err.message); }
+  }, delayMs || 2000);
+}
+
 function persistProjects() {
-  persistFile(PROJECTS_FILE, JSON.stringify(Array.from(projects.values()), null, 2));
+  debouncedPersist("projects", function () {
+    persistFile(PROJECTS_FILE, JSON.stringify(Array.from(projects.values()), null, 2));
+  }, 1000);
 }
 
 function persistThreads() {
-  persistFile(THREADS_FILE, JSON.stringify(Array.from(threads.values()), null, 2));
+  debouncedPersist("threads", function () {
+    persistFile(THREADS_FILE, JSON.stringify(Array.from(threads.values()), null, 2));
+  }, 1000);
 }
 
 function persistMessages() {
-  var obj = {};
-  messagesMap.forEach(function (msgs, key) { obj[key] = msgs; });
-  persistFile(MESSAGES_FILE, JSON.stringify(obj));
+  debouncedPersist("messages", function () {
+    var obj = {};
+    messagesMap.forEach(function (msgs, key) { obj[key] = msgs; });
+    persistFile(MESSAGES_FILE, JSON.stringify(obj));
+  }, 3000);
 }
 
 // ── Helpers ──────────────────────────────────────────
@@ -456,7 +471,9 @@ var server = http.createServer(function (req, res) {
 
   if (urlPath === "/projects" || urlPath === "/projects/") {
     if (method === "GET") {
-      return sendJson(res, 200, Array.from(projects.values()));
+      var list = Array.from(projects.values());
+      list.sort(function (a, b) { return (b.createdAt || "").localeCompare(a.createdAt || ""); });
+      return sendJson(res, 200, list);
     }
     if (method === "POST") {
       return readBody(req).then(function (body) {
