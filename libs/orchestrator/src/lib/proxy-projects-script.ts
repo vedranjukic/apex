@@ -215,6 +215,31 @@ function connectBridgeWs(url, headers, onMessage, onClose) {
   var req = mod.request(opts);
   req.on("upgrade", function (_res, socket) {
     console.log("[projects-api] WS connected (manual upgrade)");
+
+    function wsSend(text) {
+      var data = Buffer.from(text, "utf8");
+      var mask = crypto.randomBytes(4);
+      var hdrLen = data.length < 126 ? 6 : (data.length < 65536 ? 8 : 14);
+      var frame = Buffer.alloc(hdrLen + data.length);
+      frame[0] = 0x81;
+      if (data.length < 126) {
+        frame[1] = 0x80 | data.length;
+        mask.copy(frame, 2);
+      } else if (data.length < 65536) {
+        frame[1] = 0x80 | 126;
+        frame.writeUInt16BE(data.length, 2);
+        mask.copy(frame, 4);
+      } else {
+        frame[1] = 0x80 | 127;
+        frame.writeBigUInt64BE(BigInt(data.length), 2);
+        mask.copy(frame, 10);
+      }
+      for (var i = 0; i < data.length; i++) frame[hdrLen + i] = data[i] ^ mask[i % 4];
+      socket.write(frame);
+    }
+    onMessage._send = function (obj) { wsSend(JSON.stringify(obj)); };
+    onMessage._close = function () { socket.end(); };
+
     var buf = Buffer.alloc(0);
     socket.on("data", function (chunk) {
       buf = Buffer.concat([buf, chunk]);
@@ -254,30 +279,6 @@ function connectBridgeWs(url, headers, onMessage, onClose) {
       console.error("[projects-api] WS socket error:", err.message);
       if (onClose) onClose();
     });
-
-    function wsSend(text) {
-      var data = Buffer.from(text, "utf8");
-      var mask = crypto.randomBytes(4);
-      var hdrLen = data.length < 126 ? 6 : (data.length < 65536 ? 8 : 14);
-      var frame = Buffer.alloc(hdrLen + data.length);
-      frame[0] = 0x81;
-      if (data.length < 126) {
-        frame[1] = 0x80 | data.length;
-        mask.copy(frame, 2);
-      } else if (data.length < 65536) {
-        frame[1] = 0x80 | 126;
-        frame.writeUInt16BE(data.length, 2);
-        mask.copy(frame, 4);
-      } else {
-        frame[1] = 0x80 | 127;
-        frame.writeBigUInt64BE(BigInt(data.length), 2);
-        mask.copy(frame, 10);
-      }
-      for (var i = 0; i < data.length; i++) frame[hdrLen + i] = data[i] ^ mask[i % 4];
-      socket.write(frame);
-    }
-    onMessage._send = function (obj) { wsSend(JSON.stringify(obj)); };
-    onMessage._close = function () { socket.end(); };
   });
   req.on("response", function (res) {
     console.error("[projects-api] WS upgrade rejected: HTTP " + res.statusCode);
