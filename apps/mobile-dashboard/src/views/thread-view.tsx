@@ -15,6 +15,7 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
   const [prompt, setPrompt] = useState('');
   const [sending, setSending] = useState(false);
   const [polling, setPolling] = useState(false);
+  const [agentStatus, setAgentStatus] = useState<'idle' | 'sending' | 'running' | 'completed' | 'error'>('idle');
   const [error, setError] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -40,17 +41,28 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
   const startPolling = useCallback(() => {
     if (pollRef.current) return;
     setPolling(true);
+    setAgentStatus('running');
     pollRef.current = setInterval(async () => {
       try {
         const msgs = await api.threadMessages(threadId);
         setMessages(msgs);
-        // Stop polling when a result message (system with cost metadata) appears
-        const hasNewResult = msgs.length > msgCountBeforeSend.current &&
-          msgs.slice(msgCountBeforeSend.current).some((m) =>
-            m.role === 'system' && m.metadata && (m.metadata.costUsd != null || m.metadata.numTurns != null || m.metadata.error));
-        if (hasNewResult) {
+
+        const newMsgs = msgs.slice(msgCountBeforeSend.current);
+        const hasAssistant = newMsgs.some((m) => m.role === 'assistant');
+        const hasResult = newMsgs.some((m) =>
+          m.role === 'system' && m.metadata && (m.metadata.costUsd != null || m.metadata.numTurns != null));
+        const hasError = newMsgs.some((m) =>
+          m.role === 'system' && m.metadata && m.metadata.error);
+
+        if (hasAssistant && !hasResult && !hasError) {
+          setAgentStatus('running');
+        }
+
+        if (hasResult || hasError) {
           if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
           setPolling(false);
+          setAgentStatus(hasError ? 'error' : 'completed');
+          setTimeout(() => setAgentStatus('idle'), 4000);
         }
       } catch { /* retry */ }
     }, 2000);
@@ -70,6 +82,7 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
     if (!prompt.trim() || sending) return;
     const text = prompt.trim();
     setSending(true);
+    setAgentStatus('sending');
 
     // Optimistic: show user message immediately
     const optimisticMsg: Message = {
@@ -90,8 +103,9 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
     } catch (err: any) {
       setMessages((prev) => prev.filter((m) => m.id !== optimisticMsg.id));
       setPrompt(text);
+      setAgentStatus('error');
       setError(err?.message || 'Failed to send prompt');
-      setTimeout(() => setError(''), 5000);
+      setTimeout(() => { setError(''); setAgentStatus('idle'); }, 5000);
     } finally {
       setSending(false);
     }
@@ -108,10 +122,7 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
           <div className="truncate text-xs text-text-muted">{projectName}</div>
         </div>
         <div className="flex items-center gap-2">
-          {polling && (
-            <span className="h-2 w-2 animate-pulse rounded-full bg-accent" title="Waiting for response" />
-          )}
-          <button onClick={() => { load(); stopPolling(); }} className="text-sm text-text-secondary active:text-text">Refresh</button>
+          <button onClick={() => { load(); stopPolling(); setAgentStatus('idle'); }} className="text-sm text-text-secondary active:text-text">Refresh</button>
         </div>
       </header>
 
@@ -131,6 +142,35 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
         )}
         <div ref={endRef} />
       </div>
+
+      {agentStatus !== 'idle' && (
+        <div className="flex items-center justify-center gap-2 border-t border-border/50 bg-surface px-4 py-2">
+          {agentStatus === 'sending' && (
+            <>
+              <span className="h-2 w-2 animate-pulse rounded-full bg-warning" />
+              <span className="text-xs text-text-secondary">Sending prompt...</span>
+            </>
+          )}
+          {agentStatus === 'running' && (
+            <>
+              <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
+              <span className="text-xs text-text-secondary">Agent is working...</span>
+            </>
+          )}
+          {agentStatus === 'completed' && (
+            <>
+              <span className="h-2 w-2 rounded-full bg-accent" />
+              <span className="text-xs text-text-secondary">Done</span>
+            </>
+          )}
+          {agentStatus === 'error' && (
+            <>
+              <span className="h-2 w-2 rounded-full bg-danger" />
+              <span className="text-xs text-danger">Failed</span>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="border-t border-border bg-surface p-3">
         {error && <p className="mb-2 text-center text-xs text-danger">{error}</p>}
