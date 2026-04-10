@@ -1126,6 +1126,17 @@ export class SandboxManager extends EventEmitter {
     return { previewUrl: session.previewUrl, previewToken: session.previewToken ?? null };
   }
 
+  /** Fetch bridge preview URL from the Daytona SDK (works even without an active session). */
+  async fetchBridgePreviewUrl(sandboxId: string): Promise<{ url: string; token: string | null } | null> {
+    try {
+      const sandbox = await this.ensureSandbox(sandboxId);
+      const info = await sandbox.getPreviewLink(BRIDGE_PORT);
+      return { url: info.url, token: info.token ?? null };
+    } catch {
+      return null;
+    }
+  }
+
   /** Create an SSH access token for the sandbox (default 24 hours). */
   async createSshAccess(
     sandboxId: string,

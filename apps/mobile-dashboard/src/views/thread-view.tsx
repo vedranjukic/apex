@@ -15,6 +15,7 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
   const [prompt, setPrompt] = useState('');
   const [sending, setSending] = useState(false);
   const [polling, setPolling] = useState(false);
+  const [error, setError] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -85,9 +86,11 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
       msgCountBeforeSend.current = messages.length + 1; // +1 for the optimistic user msg
       await api.submitPrompt(projectId, threadId, text);
       startPolling();
-    } catch {
-      // Remove optimistic message on failure
+    } catch (err: any) {
       setMessages((prev) => prev.filter((m) => m.id !== optimisticMsg.id));
+      setPrompt(text);
+      setError(err?.message || 'Failed to send prompt');
+      setTimeout(() => setError(''), 5000);
     } finally {
       setSending(false);
     }
@@ -129,6 +132,7 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
       </div>
 
       <div className="border-t border-border bg-surface p-3">
+        {error && <p className="mb-2 text-center text-xs text-danger">{error}</p>}
         <div className="flex items-end gap-2">
           <textarea
             value={prompt}

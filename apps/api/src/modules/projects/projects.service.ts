@@ -743,16 +743,25 @@ class ProjectsService {
     }
   }
 
-  private toSyncPayload(project: Project): ProjectSyncPayload {
+  private async toSyncPayload(project: Project): Promise<ProjectSyncPayload> {
     let bridgeUrl: string | null = null;
     let bridgeToken: string | null = null;
     if (project.sandboxId && project.provider === 'daytona') {
       const mgr = this.sandboxManagers.get('daytona');
       if (mgr) {
-        const info = mgr.getBridgeInfo(project.sandboxId);
-        if (info) {
-          bridgeUrl = info.previewUrl;
-          bridgeToken = info.previewToken;
+        // Try cached session first, fall back to SDK call
+        const cached = mgr.getBridgeInfo(project.sandboxId);
+        if (cached) {
+          bridgeUrl = cached.previewUrl;
+          bridgeToken = cached.previewToken;
+        } else if (project.status === 'running') {
+          try {
+            const fetched = await mgr.fetchBridgePreviewUrl(project.sandboxId);
+            if (fetched) {
+              bridgeUrl = fetched.url;
+              bridgeToken = fetched.token;
+            }
+          } catch { /* non-fatal */ }
         }
       }
     }
@@ -772,7 +781,9 @@ class ProjectsService {
 
   private syncToProxy(project: Project): void {
     if (project.provider !== 'daytona') return;
-    proxyProjectsService.syncProject(this.toSyncPayload(project)).catch(() => {});
+    this.toSyncPayload(project).then((payload) => {
+      proxyProjectsService.syncProject(payload).catch(() => {});
+    }).catch(() => {});
   }
 
   /**
@@ -787,7 +798,8 @@ class ProjectsService {
     if (allProjects.length === 0) return;
     console.log(`[projects] Syncing ${allProjects.length} existing Daytona project(s) to proxy registry`);
     for (const p of allProjects) {
-      await proxyProjectsService.syncProject(this.toSyncPayload(p as Project));
+      const payload = await this.toSyncPayload(p as Project);
+      await proxyProjectsService.syncProject(payload);
     }
 
     const projectIds = allProjects.map((p) => p.id);
