@@ -14,6 +14,10 @@
  */
 export function getProxyProjectsScript(port = 3001): string {
   return `"use strict";
+process.on("uncaughtException", function (err) {
+  try { require("fs").appendFileSync("/tmp/projects-api-errors.log", new Date().toISOString() + " UNCAUGHT: " + err.stack + "\\n"); } catch {}
+  console.error("UNCAUGHT:", err.stack || err);
+});
 var http = require("http");
 var fs = require("fs");
 var pathMod = require("path");
@@ -306,12 +310,22 @@ function executePrompt(projectId, threadId, prompt) {
   runningAgents.set(threadId, { status: "connecting", startedAt: new Date().toISOString() });
 
   var onMessage = function (msg) {
-    console.log("[projects-api] Bridge msg: " + msg.type + (msg.data ? " data.type=" + msg.data.type : ""));
+    var logExtra = msg.data ? " data.type=" + msg.data.type : "";
+    if (msg.type === "agent_error" || msg.type === "start_agent_ack") logExtra += " " + JSON.stringify(msg.data || msg).slice(0, 300);
+    console.log("[projects-api] Bridge msg: " + msg.type + logExtra);
 
     if (msg.type === "bridge_ready") {
       console.log("[projects-api] Bridge ready, sending prompt for thread " + threadId.slice(0, 8));
       runningAgents.set(threadId, { status: "running", startedAt: new Date().toISOString() });
       if (onMessage._send) {
+        if (proj.proxyBaseUrl) {
+          onMessage._send({
+            type: "update_proxy_url",
+            proxyBaseUrl: proj.proxyBaseUrl,
+            authToken: proj.proxyAuthToken || AUTH_TOKEN,
+            restart: true,
+          });
+        }
         onMessage._send({
           type: "start_agent",
           prompt: prompt,
@@ -357,6 +371,23 @@ function executePrompt(projectId, threadId, prompt) {
       }
     }
 
+    if (msg.type === "agent_error") {
+      console.error("[projects-api] Agent error for thread " + threadId.slice(0, 8) + ": " + JSON.stringify(msg.data || msg.error || msg));
+      runningAgents.delete(threadId);
+      var thread = threads.get(threadId);
+      if (thread) { thread.status = "error"; thread.updatedAt = new Date().toISOString(); threads.set(threadId, thread); persistThreads(); }
+      var existing = messagesMap.get(threadId) || [];
+      existing.push({
+        id: crypto.randomBytes(16).toString("hex"),
+        taskId: threadId, role: "system",
+        content: [{ type: "text", text: "Agent error: " + (msg.error || msg.data?.error || JSON.stringify(msg.data || "unknown")) }],
+        metadata: { error: true }, createdAt: new Date().toISOString(),
+      });
+      messagesMap.set(threadId, existing);
+      persistMessages();
+      if (onMessage._close) try { onMessage._close(); } catch {}
+    }
+
     if (msg.type === "agent_exit") {
       runningAgents.delete(threadId);
       if (onMessage._close) try { onMessage._close(); } catch {}
@@ -397,6 +428,18 @@ var server = http.createServer(function (req, res) {
     return sendJson(res, 200, { status: "ok", projects: projects.size, threads: threads.size });
   }
 
+  if (urlPath === "/debug/log") {
+    try {
+      var log = fs.readFileSync("/tmp/projects-api.log", "utf8");
+      var lines = log.split("\\n").slice(-80).join("\\n");
+      res.writeHead(200, { "content-type": "text/plain" });
+      return res.end(lines);
+    } catch (e) {
+      res.writeHead(200, { "content-type": "text/plain" });
+      return res.end("No log file");
+    }
+  }
+
   // All API routes below require auth
   if (!checkAuth(req)) {
     return sendJson(res, 401, { error: "Unauthorized" });
@@ -424,6 +467,8 @@ var server = http.createServer(function (req, res) {
           sandboxId: body.sandboxId || (existing && existing.sandboxId) || null,
           bridgeUrl: body.bridgeUrl || (existing && existing.bridgeUrl) || null,
           bridgeToken: body.bridgeToken !== undefined ? body.bridgeToken : (existing && existing.bridgeToken) || null,
+          proxyBaseUrl: body.proxyBaseUrl || (existing && existing.proxyBaseUrl) || null,
+          proxyAuthToken: body.proxyAuthToken || (existing && existing.proxyAuthToken) || null,
           createdAt: (existing && existing.createdAt) || body.createdAt || now,
           updatedAt: now,
         };

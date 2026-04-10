@@ -15,6 +15,8 @@ export interface ProjectSyncPayload {
   sandboxId: string | null;
   bridgeUrl?: string | null;
   bridgeToken?: string | null;
+  proxyBaseUrl?: string | null;
+  proxyAuthToken?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }

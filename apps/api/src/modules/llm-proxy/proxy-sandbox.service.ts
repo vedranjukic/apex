@@ -42,7 +42,7 @@ export interface ProxySandboxInfo {
 }
 
 // Bump this when the combined proxy service script changes to force recreation
-const PROXY_SCRIPT_VERSION = '19';
+const PROXY_SCRIPT_VERSION = '26';
 
 function hashKeys(anthropicKey: string, openaiKey: string): string {
   return crypto
@@ -315,6 +315,12 @@ class ProxySandboxService {
       console.log('[proxy-sandbox] Projects API started on port ' + PROJECTS_API_PORT);
     } catch (err) {
       console.warn('[proxy-sandbox] Failed to start projects API (non-fatal):', err);
+      try {
+        const logResult = await sandbox.process.executeCommand('cat /tmp/projects-api.log 2>/dev/null | tail -20');
+        console.warn('[proxy-sandbox] Projects API log:', logResult.result);
+        const errResult = await sandbox.process.executeCommand('cat /tmp/projects-api-errors.log 2>/dev/null | tail -20');
+        if (errResult.result) console.warn('[proxy-sandbox] Projects API errors:', errResult.result);
+      } catch { /* best-effort */ }
     }
   }
 

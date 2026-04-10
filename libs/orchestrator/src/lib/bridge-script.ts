@@ -1727,6 +1727,36 @@ wss.on("connection", (ws) => {
           process.env.ANTHROPIC_API_KEY = msg.authToken;
           process.env.OPENAI_API_KEY = msg.authToken;
         }
+        // Update .env file so restarted OpenCode picks up the new URLs
+        try {
+          var envPath = PROJECT_DIR + "/.env";
+          var envContent = "";
+          try { envContent = require("fs").readFileSync(envPath, "utf8"); } catch {}
+          var updates = {
+            ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
+            OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+            APEX_PROXY_BASE_URL: process.env.APEX_PROXY_BASE_URL,
+            TUNNEL_ENDPOINT_URL: process.env.TUNNEL_ENDPOINT_URL,
+          };
+          if (msg.authToken) {
+            updates.ANTHROPIC_API_KEY = msg.authToken;
+            updates.OPENAI_API_KEY = msg.authToken;
+          }
+          for (var k in updates) {
+            var re = new RegExp("^" + k + "=.*$", "m");
+            if (re.test(envContent)) {
+              envContent = envContent.replace(re, k + "=" + updates[k]);
+            } else {
+              envContent += "\\n" + k + "=" + updates[k];
+            }
+          }
+          require("fs").writeFileSync(envPath, envContent);
+          log("\\u{1F504}", "Updated .env with new proxy URLs");
+        } catch (envErr) { log("\\u{26A0}", ".env update failed: " + envErr); }
+        if (msg.restart) {
+          log("\\u{1F504}", "Restarting OpenCode serve after proxy URL update");
+          restartOpenCodeServe();
+        }
       }
       else if (msg.type === "update_secret_domains") {
         secretDomains = new Set((msg.domains || []).filter(Boolean));

@@ -182,7 +182,9 @@ class ProjectsService {
                  console.log(`[projects] 📱 Mobile dashboard: ${proxyInfo.projectsApiUrl}/app`);
                }
 
-               this.syncExistingDaytonaProjects().catch((err) => {
+               this.syncExistingDaytonaProjects().then(() => {
+                 this.initDaytonaBridgeConnections().catch(() => {});
+               }).catch((err) => {
                  console.warn('[projects] Initial proxy project sync failed (non-fatal):', err);
                });
              } catch (proxyErr) {
@@ -749,7 +751,6 @@ class ProjectsService {
     if (project.sandboxId && project.provider === 'daytona') {
       const mgr = this.sandboxManagers.get('daytona');
       if (mgr) {
-        // Try cached session first, fall back to SDK call
         const cached = mgr.getBridgeInfo(project.sandboxId);
         if (cached) {
           bridgeUrl = cached.previewUrl;
@@ -765,6 +766,13 @@ class ProjectsService {
         }
       }
     }
+
+    // Ensure the sandbox .env has the current proxy URL so OpenCode can reach the LLM proxy
+    const proxyInfo = proxySandboxService.getCachedInfo();
+    if (project.sandboxId && project.provider === 'daytona' && project.status === 'running' && proxyInfo?.proxyBaseUrl) {
+      this.ensureSandboxProxyEnv(project.sandboxId, proxyInfo.proxyBaseUrl, proxyInfo.authToken).catch(() => {});
+    }
+
     return {
       id: project.id,
       name: project.name,
@@ -774,9 +782,68 @@ class ProjectsService {
       sandboxId: project.sandboxId,
       bridgeUrl,
       bridgeToken,
+      proxyBaseUrl: proxyInfo?.proxyBaseUrl || null,
+      proxyAuthToken: proxyInfo?.authToken || null,
       createdAt: project.createdAt,
       updatedAt: project.updatedAt,
     };
+  }
+
+  /**
+   * Reconnect to all running Daytona sandbox bridges on startup.
+   * This re-uploads the bridge script, restarts OpenCode with fresh config,
+   * and ensures bridge URLs are cached for mobile prompt execution.
+   */
+  private async initDaytonaBridgeConnections(): Promise<void> {
+    const mgr = this.sandboxManagers.get('daytona');
+    if (!mgr) return;
+    const allProjects = await db.query.projects.findMany({
+      where: and(eq(projects.provider, 'daytona'), isNull(projects.deletedAt)),
+    });
+    const running = allProjects.filter((p) => p.status === 'running' && p.sandboxId);
+    if (running.length === 0) return;
+    console.log(`[projects] Reconnecting to ${running.length} Daytona sandbox bridge(s) for mobile prompt support`);
+    for (const p of running) {
+      try {
+        mgr.registerProjectId(p.sandboxId!, p.id);
+        await mgr.reconnectSandbox(p.sandboxId!, p.name);
+        // Re-sync project with fresh bridge URL
+        const payload = await this.toSyncPayload(p as Project);
+        if (payload.bridgeUrl) {
+          await proxyProjectsService.syncProject(payload);
+        }
+      } catch (err) {
+        console.warn(`[projects] Bridge reconnect failed for ${p.sandboxId?.slice(0, 8)} (non-fatal):`, (err as Error).message);
+      }
+    }
+    console.log(`[projects] Bridge reconnection complete`);
+  }
+
+  private proxyEnvUpdated = new Set<string>();
+
+  private async ensureSandboxProxyEnv(sandboxId: string, proxyBaseUrl: string, authToken: string): Promise<void> {
+    if (this.proxyEnvUpdated.has(sandboxId)) return;
+    const mgr = this.sandboxManagers.get('daytona');
+    if (!mgr) return;
+    try {
+      const envUpdates = [
+        `ANTHROPIC_BASE_URL=${proxyBaseUrl}/llm-proxy/anthropic/v1`,
+        `OPENAI_BASE_URL=${proxyBaseUrl}/llm-proxy/openai/v1`,
+        `APEX_PROXY_BASE_URL=${proxyBaseUrl}`,
+        `ANTHROPIC_API_KEY=${authToken}`,
+        `OPENAI_API_KEY=${authToken}`,
+      ];
+      const cmd = envUpdates.map((line) => {
+        const [key] = line.split('=');
+        return `grep -q "^${key}=" /home/daytona/project/.env 2>/dev/null && sed -i "s|^${key}=.*|${line}|" /home/daytona/project/.env || echo "${line}" >> /home/daytona/project/.env`;
+      }).join(' && ');
+      const sandbox = await (mgr as any).ensureSandbox(sandboxId);
+      await sandbox.process.executeCommand(cmd);
+      this.proxyEnvUpdated.add(sandboxId);
+      console.log(`[projects] Updated .env proxy URLs in sandbox ${sandboxId.slice(0, 8)}`);
+    } catch (err) {
+      // Non-fatal -- the bridge update_proxy_url will handle it for new bridges
+    }
   }
 
   private syncToProxy(project: Project): void {
