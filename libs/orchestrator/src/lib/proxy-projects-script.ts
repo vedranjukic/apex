@@ -26,10 +26,12 @@ var THREADS_FILE = DATA_DIR + "/threads.json";
 var MESSAGES_FILE = DATA_DIR + "/messages.json";
 var DASHBOARD_DIR = DATA_DIR + "/mobile-dashboard";
 
+var crypto = require("crypto");
+
 var projects = new Map();
 var threads = new Map();
 var messagesMap = new Map();
-var pendingPrompts = [];
+var runningAgents = new Map();
 
 // ── Persistence ──────────────────────────────────────
 
@@ -164,6 +166,208 @@ function serveStatic(res, urlPath) {
   }
 }
 
+// ── WebSocket client (uses Node built-in or manual fallback) ──────
+
+function connectBridgeWs(url, headers, onMessage, onClose) {
+  var wsUrl = url.replace("https://", "wss://").replace("http://", "ws://");
+  console.log("[projects-api] Connecting WS to " + wsUrl.slice(0, 60) + "...");
+
+  // Try Node built-in WebSocket first (Node 22+, experimental in 18-21)
+  if (typeof globalThis.WebSocket === "function") {
+    try {
+      var ws = new globalThis.WebSocket(wsUrl, { headers: headers });
+      ws.onopen = function () {
+        console.log("[projects-api] WS connected (built-in)");
+      };
+      ws.onmessage = function (ev) {
+        try { onMessage(JSON.parse(ev.data)); } catch {}
+      };
+      ws.onclose = function () { if (onClose) onClose(); };
+      ws.onerror = function (err) {
+        console.error("[projects-api] WS error (built-in):", err.message || err);
+        if (onClose) onClose();
+      };
+      onMessage._send = function (obj) { ws.send(JSON.stringify(obj)); };
+      onMessage._close = function () { ws.close(); };
+      return;
+    } catch (e) {
+      console.log("[projects-api] Built-in WebSocket failed, trying manual:", e.message);
+    }
+  }
+
+  // Manual WebSocket via https upgrade
+  var mod = wsUrl.startsWith("wss") ? require("https") : require("http");
+  var parsed = new (require("url").URL)(wsUrl.replace("wss://", "https://").replace("ws://", "http://"));
+  var key = crypto.randomBytes(16).toString("base64");
+  var opts = {
+    hostname: parsed.hostname,
+    port: parsed.port || (wsUrl.startsWith("wss") ? 443 : 80),
+    path: parsed.pathname + (parsed.search || ""),
+    method: "GET",
+    headers: Object.assign({
+      "Connection": "Upgrade",
+      "Upgrade": "websocket",
+      "Sec-WebSocket-Version": "13",
+      "Sec-WebSocket-Key": key,
+    }, headers || {}),
+    rejectUnauthorized: false,
+  };
+  var req = mod.request(opts);
+  req.on("upgrade", function (_res, socket) {
+    console.log("[projects-api] WS connected (manual upgrade)");
+    var buf = Buffer.alloc(0);
+    socket.on("data", function (chunk) {
+      buf = Buffer.concat([buf, chunk]);
+      while (buf.length >= 2) {
+        var fin = (buf[0] & 0x80) !== 0;
+        var opcode = buf[0] & 0x0f;
+        var masked = (buf[1] & 0x80) !== 0;
+        var payloadLen = buf[1] & 0x7f;
+        var offset = 2;
+        if (payloadLen === 126) {
+          if (buf.length < 4) return;
+          payloadLen = buf.readUInt16BE(2); offset = 4;
+        } else if (payloadLen === 127) {
+          if (buf.length < 10) return;
+          payloadLen = Number(buf.readBigUInt64BE(2)); offset = 10;
+        }
+        var maskOffset = masked ? 4 : 0;
+        if (buf.length < offset + maskOffset + payloadLen) return;
+        var payload = buf.slice(offset + maskOffset, offset + maskOffset + payloadLen);
+        if (masked) {
+          var maskKey = buf.slice(offset, offset + 4);
+          for (var i = 0; i < payload.length; i++) payload[i] ^= maskKey[i % 4];
+        }
+        buf = buf.slice(offset + maskOffset + payloadLen);
+        if (opcode === 0x1 && fin) {
+          try { onMessage(JSON.parse(payload.toString("utf8"))); } catch {}
+        } else if (opcode === 0x8) {
+          socket.end(); return;
+        } else if (opcode === 0x9) {
+          var pong = Buffer.alloc(2); pong[0] = 0x8a; pong[1] = 0;
+          socket.write(pong);
+        }
+      }
+    });
+    socket.on("close", function () { if (onClose) onClose(); });
+    socket.on("error", function (err) {
+      console.error("[projects-api] WS socket error:", err.message);
+      if (onClose) onClose();
+    });
+
+    function wsSend(text) {
+      var data = Buffer.from(text, "utf8");
+      var mask = crypto.randomBytes(4);
+      var hdrLen = data.length < 126 ? 6 : (data.length < 65536 ? 8 : 14);
+      var frame = Buffer.alloc(hdrLen + data.length);
+      frame[0] = 0x81;
+      if (data.length < 126) {
+        frame[1] = 0x80 | data.length;
+        mask.copy(frame, 2);
+      } else if (data.length < 65536) {
+        frame[1] = 0x80 | 126;
+        frame.writeUInt16BE(data.length, 2);
+        mask.copy(frame, 4);
+      } else {
+        frame[1] = 0x80 | 127;
+        frame.writeBigUInt64BE(BigInt(data.length), 2);
+        mask.copy(frame, 10);
+      }
+      for (var i = 0; i < data.length; i++) frame[hdrLen + i] = data[i] ^ mask[i % 4];
+      socket.write(frame);
+    }
+    onMessage._send = function (obj) { wsSend(JSON.stringify(obj)); };
+    onMessage._close = function () { socket.end(); };
+  });
+  req.on("response", function (res) {
+    console.error("[projects-api] WS upgrade rejected: HTTP " + res.statusCode);
+    if (onClose) onClose();
+  });
+  req.on("error", function (err) {
+    console.error("[projects-api] WS connect error:", err.message);
+    if (onClose) onClose();
+  });
+  req.end();
+}
+
+// ── Agent execution ──────────────────────────────────
+
+function executePrompt(projectId, threadId, prompt) {
+  var proj = projects.get(projectId);
+  if (!proj || !proj.bridgeUrl) {
+    console.error("[projects-api] No bridge URL for project " + projectId);
+    return;
+  }
+
+  var headers = { "X-Daytona-Skip-Preview-Warning": "true" };
+  if (proj.bridgeToken) headers["x-daytona-preview-token"] = proj.bridgeToken;
+
+  runningAgents.set(threadId, { status: "connecting", startedAt: new Date().toISOString() });
+
+  var onMessage = function (msg) {
+    console.log("[projects-api] Bridge msg: " + msg.type + (msg.data ? " data.type=" + msg.data.type : ""));
+
+    if (msg.type === "bridge_ready") {
+      console.log("[projects-api] Bridge ready, sending prompt for thread " + threadId.slice(0, 8));
+      runningAgents.set(threadId, { status: "running", startedAt: new Date().toISOString() });
+      if (onMessage._send) {
+        onMessage._send({
+          type: "start_agent",
+          prompt: prompt,
+          threadId: threadId,
+          agent: "build",
+        });
+      }
+    }
+
+    if (msg.type === "agent_message" && msg.data) {
+      var role = msg.data.type;
+      if (role === "assistant" || role === "system" || role === "result") {
+        var existing = messagesMap.get(threadId) || [];
+        existing.push({
+          id: crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString("hex"),
+          taskId: threadId,
+          role: role === "result" ? "system" : role,
+          content: msg.data.message ? msg.data.message.content || [] : [],
+          metadata: role === "result" ? {
+            costUsd: msg.data.total_cost_usd,
+            numTurns: msg.data.num_turns,
+            durationMs: msg.data.duration_ms,
+          } : msg.data.message ? {
+            model: msg.data.message.model,
+            stopReason: msg.data.message.stop_reason,
+          } : null,
+          createdAt: new Date().toISOString(),
+        });
+        messagesMap.set(threadId, existing);
+        persistMessages();
+      }
+
+      if (role === "result") {
+        runningAgents.delete(threadId);
+        if (onMessage._close) try { onMessage._close(); } catch {}
+        var thread = threads.get(threadId);
+        if (thread) {
+          thread.status = msg.data.is_error ? "error" : "completed";
+          thread.updatedAt = new Date().toISOString();
+          threads.set(threadId, thread);
+          persistThreads();
+        }
+      }
+    }
+
+    if (msg.type === "agent_exit") {
+      runningAgents.delete(threadId);
+      if (onMessage._close) try { onMessage._close(); } catch {}
+    }
+  };
+
+  connectBridgeWs(proj.bridgeUrl, headers, onMessage, function () {
+    console.log("[projects-api] WS closed for thread " + threadId.slice(0, 8));
+    runningAgents.delete(threadId);
+  });
+}
+
 // ── Request handler ──────────────────────────────────
 
 var server = http.createServer(function (req, res) {
@@ -217,6 +421,8 @@ var server = http.createServer(function (req, res) {
           status: body.status || (existing && existing.status) || "unknown",
           gitRepo: body.gitRepo || (existing && existing.gitRepo) || null,
           sandboxId: body.sandboxId || (existing && existing.sandboxId) || null,
+          bridgeUrl: body.bridgeUrl || (existing && existing.bridgeUrl) || null,
+          bridgeToken: body.bridgeToken !== undefined ? body.bridgeToken : (existing && existing.bridgeToken) || null,
           createdAt: (existing && existing.createdAt) || body.createdAt || now,
           updatedAt: now,
         };
@@ -335,25 +541,48 @@ var server = http.createServer(function (req, res) {
     return sendJson(res, 405, { error: "Method not allowed" });
   }
 
-  // ── Prompt queue ──────────────────────────
+  // ── Prompt execution ─────────────────────
 
   if (urlPath === "/prompts" || urlPath === "/prompts/") {
     if (method === "POST") {
       return readBody(req).then(function (body) {
-        if (!body.threadId || !body.projectId || !body.prompt) {
-          return sendJson(res, 400, { error: "Missing threadId, projectId, or prompt" });
+        if (!body.projectId || !body.prompt) {
+          return sendJson(res, 400, { error: "Missing projectId or prompt" });
         }
-        var entry = {
-          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-          threadId: body.threadId,
-          projectId: body.projectId,
-          prompt: body.prompt,
-          status: "pending",
-          createdAt: new Date().toISOString(),
-        };
-        pendingPrompts.push(entry);
-        console.log("[projects-api] Prompt queued for thread " + body.threadId.slice(0, 8));
-        return sendJson(res, 201, entry);
+        var proj = projects.get(body.projectId);
+        if (!proj || !proj.bridgeUrl) {
+          return sendJson(res, 400, { error: "Project not found or no bridge connection" });
+        }
+        var tid = body.threadId;
+        if (!tid) {
+          tid = crypto.randomBytes(16).toString("hex");
+          var now = new Date().toISOString();
+          threads.set(tid, {
+            id: tid, projectId: body.projectId,
+            title: body.prompt.slice(0, 100), status: "running",
+            agentType: "build", model: null,
+            createdAt: now, updatedAt: now,
+          });
+          persistThreads();
+        }
+        // Store user message
+        var existing = messagesMap.get(tid) || [];
+        existing.push({
+          id: crypto.randomBytes(16).toString("hex"),
+          taskId: tid, role: "user",
+          content: [{ type: "text", text: body.prompt }],
+          metadata: null, createdAt: new Date().toISOString(),
+        });
+        messagesMap.set(tid, existing);
+        persistMessages();
+
+        // Update thread status
+        var thread = threads.get(tid);
+        if (thread) { thread.status = "running"; thread.updatedAt = new Date().toISOString(); threads.set(tid, thread); persistThreads(); }
+
+        console.log("[projects-api] Executing prompt on thread " + tid.slice(0, 8) + " via bridge");
+        executePrompt(body.projectId, tid, body.prompt);
+        return sendJson(res, 201, { ok: true, threadId: tid });
       }).catch(function (err) {
         return sendJson(res, 400, { error: "Invalid JSON: " + err.message });
       });
@@ -361,29 +590,11 @@ var server = http.createServer(function (req, res) {
     return sendJson(res, 405, { error: "Method not allowed" });
   }
 
-  if (urlPath === "/prompts/pending" || urlPath === "/prompts/pending/") {
-    if (method === "GET") {
-      var pending = pendingPrompts.filter(function (p) { return p.status === "pending"; });
-      return sendJson(res, 200, pending);
-    }
-    return sendJson(res, 405, { error: "Method not allowed" });
-  }
-
-  var promptAckMatch = urlPath.match(/^\\/prompts\\/([^\\/]+)\\/ack\\/?$/);
-  if (promptAckMatch && method === "POST") {
-    var pid = promptAckMatch[1];
-    var found = false;
-    for (var i = 0; i < pendingPrompts.length; i++) {
-      if (pendingPrompts[i].id === pid) {
-        pendingPrompts[i].status = "acknowledged";
-        found = true;
-        break;
-      }
-    }
-    // Clean up old acknowledged prompts (keep last 100)
-    pendingPrompts = pendingPrompts.filter(function (p) { return p.status === "pending"; })
-      .concat(pendingPrompts.filter(function (p) { return p.status !== "pending"; }).slice(-100));
-    return sendJson(res, 200, { ok: true, found: found });
+  var promptStatusMatch = urlPath.match(/^\\/prompts\\/status\\/([^\\/]+)\\/?$/);
+  if (promptStatusMatch && method === "GET") {
+    var tid = promptStatusMatch[1];
+    var agent = runningAgents.get(tid);
+    return sendJson(res, 200, { running: !!agent, status: agent ? agent.status : "idle" });
   }
 
   sendJson(res, 404, { error: "Not found" });

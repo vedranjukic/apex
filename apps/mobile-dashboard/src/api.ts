@@ -81,9 +81,11 @@ export const api = {
   projects: () => request<Project[]>('/projects'),
   projectThreads: (projectId: string) => request<Thread[]>(`/projects/${projectId}/threads`),
   threadMessages: (threadId: string) => request<Message[]>(`/threads/${threadId}/messages`),
-  submitPrompt: (projectId: string, threadId: string, prompt: string) =>
-    request<{ id: string }>('/prompts', {
+  submitPrompt: (projectId: string, threadId: string | null, prompt: string) =>
+    request<{ ok: boolean; threadId: string }>('/prompts', {
       method: 'POST',
       body: JSON.stringify({ projectId, threadId, prompt }),
     }),
+  promptStatus: (threadId: string) =>
+    request<{ running: boolean; status: string }>(`/prompts/status/${threadId}`),
 };

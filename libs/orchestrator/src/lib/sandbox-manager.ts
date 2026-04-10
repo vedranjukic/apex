@@ -1119,6 +1119,13 @@ export class SandboxManager extends EventEmitter {
     return { url: signedInfo.url, token: signedInfo.token ?? "" };
   }
 
+  /** Get bridge connection info (preview URL + token) for a sandbox if connected. */
+  getBridgeInfo(sandboxId: string): { previewUrl: string; previewToken: string | null } | null {
+    const session = this.sessions.get(sandboxId);
+    if (!session?.previewUrl) return null;
+    return { previewUrl: session.previewUrl, previewToken: session.previewToken ?? null };
+  }
+
   /** Create an SSH access token for the sandbox (default 24 hours). */
   async createSshAccess(
     sandboxId: string,

@@ -393,6 +393,83 @@ describeE2e('Proxy Projects Registry — Daytona', () => {
     }, 60_000);
   });
 
+  // ── Mobile prompt execution ───────────────────
+
+  describe('Mobile prompt execution', () => {
+    let projectId: string;
+
+    it('should execute a prompt submitted via proxy POST /prompts', async () => {
+      // Create a Daytona project and wait for sandbox to be running
+      projectId = await createProject('E2E Mobile Prompt Test', 'build', 'daytona');
+      createdProjectIds.push(projectId);
+      await waitForSandbox(projectId, 5 * 60 * 1000);
+
+      // Wait for the project to appear on the proxy with bridge info
+      await waitForProxyProject(proxyBaseUrl, authToken, projectId);
+
+      // Create a thread via the local API
+      const threadRes = await axios.post(`/api/projects/${projectId}/threads`, {
+        prompt: 'What is 2+2? Reply with just the number.',
+      });
+      expect(threadRes.status).toBe(200);
+      const threadId = threadRes.data.id;
+
+      // Give the thread metadata time to sync to proxy
+      await new Promise((r) => setTimeout(r, 5000));
+
+      // Verify bridge info was synced with the project
+      const projOnProxy = await fetchProxyProject(proxyBaseUrl, authToken, projectId);
+      console.log('[e2e] Project on proxy:', JSON.stringify({
+        id: projOnProxy.id,
+        status: projOnProxy.status,
+        sandboxId: projOnProxy.sandboxId,
+        bridgeUrl: (projOnProxy as any).bridgeUrl,
+        bridgeToken: (projOnProxy as any).bridgeToken ? 'set' : 'null',
+      }));
+
+      // Submit the prompt directly to the proxy (simulating mobile)
+      const promptResp = await fetch(`${proxyBaseUrl}/prompts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          projectId,
+          threadId,
+          prompt: 'What is 2+2? Reply with just the number.',
+        }),
+      });
+      const promptBody = await promptResp.json();
+      console.log('[e2e] Prompt response:', promptResp.status, JSON.stringify(promptBody));
+      expect(promptResp.status).toBe(201);
+
+      // Poll proxy for messages — expect assistant response within 3 minutes
+      const deadline = Date.now() + 3 * 60 * 1000;
+      let messages: any[] = [];
+      let hasAssistant = false;
+      let hasResult = false;
+      while (Date.now() < deadline) {
+        try {
+          const resp = await fetch(
+            `${proxyBaseUrl}/threads/${threadId}/messages`,
+            { headers: { Authorization: `Bearer ${authToken}` } },
+          );
+          if (resp.ok) {
+            messages = await resp.json();
+            hasAssistant = messages.some((m: any) => m.role === 'assistant');
+            hasResult = messages.some((m: any) => m.role === 'system');
+            if (hasAssistant && hasResult) break;
+          }
+        } catch { /* retry */ }
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+
+      expect(hasAssistant).toBe(true);
+      expect(hasResult).toBe(true);
+    }, 8 * 60 * 1000);
+  });
+
   // ── Non-Daytona projects should NOT sync ─────
 
   describe('Non-Daytona project isolation', () => {

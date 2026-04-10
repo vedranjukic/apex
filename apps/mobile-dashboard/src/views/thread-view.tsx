@@ -14,13 +14,15 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
   const [loading, setLoading] = useState(true);
   const [prompt, setPrompt] = useState('');
   const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
+  const [polling, setPolling] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      setMessages(await api.threadMessages(threadId));
+      const msgs = await api.threadMessages(threadId);
+      setMessages(msgs);
     } catch {
       // handled silently
     } finally {
@@ -31,17 +33,61 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
   useEffect(() => { load(); }, [load]);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
+  const msgCountBeforeSend = useRef(0);
+
+  // Auto-poll for new messages while waiting for agent response
+  const startPolling = useCallback(() => {
+    if (pollRef.current) return;
+    setPolling(true);
+    pollRef.current = setInterval(async () => {
+      try {
+        const msgs = await api.threadMessages(threadId);
+        setMessages(msgs);
+        // Stop polling when a system/result message appears after the prompt was sent
+        const hasNewResult = msgs.length > msgCountBeforeSend.current &&
+          msgs.slice(msgCountBeforeSend.current).some((m) => m.role === 'system');
+        if (hasNewResult) {
+          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+          setPolling(false);
+        }
+      } catch { /* retry */ }
+    }, 2000);
+  }, [threadId]);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    setPolling(false);
+  }, []);
+
+  useEffect(() => () => stopPolling(), [stopPolling]);
+
   const handleSend = async () => {
     if (!prompt.trim() || sending) return;
+    const text = prompt.trim();
     setSending(true);
-    setSent(false);
+
+    // Optimistic: show user message immediately
+    const optimisticMsg: Message = {
+      id: `_pending_${Date.now()}`,
+      taskId: threadId,
+      role: 'user',
+      content: [{ type: 'text', text }],
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, optimisticMsg]);
+    setPrompt('');
+
     try {
-      await api.submitPrompt(projectId, threadId, prompt.trim());
-      setPrompt('');
-      setSent(true);
-      setTimeout(() => setSent(false), 3000);
+      msgCountBeforeSend.current = messages.length + 1; // +1 for the optimistic user msg
+      await api.submitPrompt(projectId, threadId, text);
+      startPolling();
     } catch {
-      // error handled silently
+      // Remove optimistic message on failure
+      setMessages((prev) => prev.filter((m) => m.id !== optimisticMsg.id));
     } finally {
       setSending(false);
     }
@@ -57,7 +103,12 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
           <div className="truncate font-medium">{threadTitle || 'Thread'}</div>
           <div className="truncate text-xs text-text-muted">{projectName}</div>
         </div>
-        <button onClick={load} className="text-sm text-text-secondary active:text-text">Refresh</button>
+        <div className="flex items-center gap-2">
+          {polling && (
+            <span className="h-2 w-2 animate-pulse rounded-full bg-accent" title="Waiting for response" />
+          )}
+          <button onClick={() => { load(); stopPolling(); }} className="text-sm text-text-secondary active:text-text">Refresh</button>
+        </div>
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-4">
@@ -78,9 +129,6 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
       </div>
 
       <div className="border-t border-border bg-surface p-3">
-        {sent && (
-          <p className="mb-2 text-center text-xs text-accent">Prompt queued -- will execute when desktop picks it up</p>
-        )}
         <div className="flex items-end gap-2">
           <textarea
             value={prompt}
