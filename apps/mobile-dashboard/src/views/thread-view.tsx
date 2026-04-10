@@ -35,6 +35,17 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
   useEffect(() => { load(); }, [load]);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
+  // Check if agent is running when entering the thread view
+  useEffect(() => {
+    api.promptStatus(threadId).then((s) => {
+      if (s.running) {
+        setAgentStatus('running');
+        msgCountBeforeSend.current = messages.length;
+        startPolling();
+      }
+    }).catch(() => {});
+  }, [threadId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const msgCountBeforeSend = useRef(0);
 
   // Auto-poll for new messages while waiting for agent response

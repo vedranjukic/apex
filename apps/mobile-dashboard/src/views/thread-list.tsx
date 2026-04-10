@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { api, type Thread } from '../api';
 import { StatusDot, timeAgo, BackButton } from '../components';
 
@@ -10,6 +10,7 @@ interface Props {
 export function ThreadList({ projectId, projectName }: Props) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(true);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -23,6 +24,27 @@ export function ThreadList({ projectId, projectName }: Props) {
   }, [projectId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Auto-refresh when any thread is running
+  useEffect(() => {
+    const hasRunning = threads.some((t) => t.status === 'running');
+    if (hasRunning && !pollRef.current) {
+      pollRef.current = setInterval(async () => {
+        try {
+          const updated = await api.projectThreads(projectId);
+          setThreads(updated);
+          if (!updated.some((t) => t.status === 'running')) {
+            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+          }
+        } catch { /* retry */ }
+      }, 3000);
+    }
+    if (!hasRunning && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  }, [threads, projectId]);
 
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
@@ -53,7 +75,14 @@ export function ThreadList({ projectId, projectName }: Props) {
               </div>
             </div>
             <div className="mt-2 flex items-center gap-3 text-xs text-text-muted">
-              <span className="capitalize">{t.status}</span>
+              {t.status === 'running' ? (
+                <span className="flex items-center gap-1.5 text-primary">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+                  Running
+                </span>
+              ) : (
+                <span className="capitalize">{t.status}</span>
+              )}
               {t.agentType && <span>{t.agentType}</span>}
               <span className="ml-auto">{timeAgo(t.updatedAt)}</span>
             </div>
