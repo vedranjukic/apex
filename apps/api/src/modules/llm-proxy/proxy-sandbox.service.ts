@@ -42,7 +42,7 @@ export interface ProxySandboxInfo {
 }
 
 // Bump this when the combined proxy service script changes to force recreation
-const PROXY_SCRIPT_VERSION = '34';
+const PROXY_SCRIPT_VERSION = '35';
 
 function hashKeys(anthropicKey: string, openaiKey: string): string {
   return crypto
@@ -252,6 +252,8 @@ class ProxySandboxService {
         GITHUB_TOKEN: githubToken,
         CA_CERT_PEM: caCertPem,
         CA_KEY_PEM: caKeyPem,
+        DAYTONA_API_KEY: process.env['DAYTONA_API_KEY'] || '',
+        DAYTONA_API_URL: process.env['DAYTONA_API_URL'] || 'https://app.daytona.io/api',
       },
       labels: { 'apex.proxy': 'true' },
     });

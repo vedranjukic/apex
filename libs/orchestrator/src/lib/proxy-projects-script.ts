@@ -24,6 +24,8 @@ var pathMod = require("path");
 
 var PORT = Number(process.env.PROJECTS_API_PORT || ${port});
 var AUTH_TOKEN = process.env.PROXY_AUTH_TOKEN || "";
+var DAYTONA_KEY = process.env.DAYTONA_API_KEY || "";
+var DAYTONA_URL = (process.env.DAYTONA_API_URL || "https://app.daytona.io/api").replace(/\\/$/, "");
 var DATA_DIR = "/home/daytona";
 var PROJECTS_FILE = DATA_DIR + "/projects.json";
 var THREADS_FILE = DATA_DIR + "/threads.json";
@@ -183,6 +185,66 @@ function serveStatic(res, urlPath) {
   } catch (err) {
     res.writeHead(404); res.end("Not found");
   }
+}
+
+// ── Daytona API helper ───────────────────────────────
+
+function daytonaExec(sandboxId, command, callback) {
+  if (!DAYTONA_KEY) {
+    console.error("[projects-api] No DAYTONA_API_KEY, cannot exec on sandbox");
+    if (callback) callback(new Error("No API key"));
+    return;
+  }
+  // Step 1: GET sandbox info to find toolboxProxyUrl
+  var infoUrl = new (require("url").URL)(DAYTONA_URL + "/sandbox/" + sandboxId);
+  var infoMod = infoUrl.protocol === "https:" ? require("https") : require("http");
+  var infoReq = infoMod.get(infoUrl.href, {
+    headers: { "Authorization": "Bearer " + DAYTONA_KEY },
+  }, function (res) {
+    var chunks = [];
+    res.on("data", function (c) { chunks.push(c); });
+    res.on("end", function () {
+      try {
+        var info = JSON.parse(Buffer.concat(chunks).toString());
+        var tbUrl = info.toolboxProxyUrl;
+        if (!tbUrl) { if (callback) callback(new Error("No toolboxProxyUrl")); return; }
+        // Step 2: POST to toolbox process/execute
+        var execUrl = tbUrl.replace(/\\/$/, "") + "/" + sandboxId + "/process/execute";
+        var parsed = new (require("url").URL)(execUrl);
+        var execMod = parsed.protocol === "https:" ? require("https") : require("http");
+        var body = JSON.stringify({ command: command, timeout: 30 });
+        var execReq = execMod.request(parsed.href, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(body),
+            "Authorization": "Bearer " + DAYTONA_KEY,
+          },
+        }, function (res2) {
+          var out = [];
+          res2.on("data", function (c) { out.push(c); });
+          res2.on("end", function () {
+            var result = Buffer.concat(out).toString();
+            console.log("[projects-api] daytonaExec result (" + res2.statusCode + "): " + result.slice(0, 200));
+            if (callback) callback(null, result);
+          });
+        });
+        execReq.on("error", function (err) {
+          console.error("[projects-api] daytonaExec POST error:", err.message);
+          if (callback) callback(err);
+        });
+        execReq.write(body);
+        execReq.end();
+      } catch (e) {
+        console.error("[projects-api] daytonaExec parse error:", e.message);
+        if (callback) callback(e);
+      }
+    });
+  });
+  infoReq.on("error", function (err) {
+    console.error("[projects-api] daytonaExec GET error:", err.message);
+    if (callback) callback(err);
+  });
 }
 
 // ── WebSocket client (uses Node built-in or manual fallback) ──────
@@ -395,21 +457,34 @@ function executePrompt(projectId, threadId, prompt) {
       var errMsg = msg.error || msg.data?.error || JSON.stringify(msg.data || "unknown");
       console.error("[projects-api] Agent error for thread " + threadId.slice(0, 8) + ": " + errMsg);
 
-      // Retry once on stale proxy sandbox errors -- the bridge restarts OpenCode
-      // with updated env from update_proxy_url, second attempt should succeed
+      // On stale proxy sandbox errors: update .env, kill OpenCode, clear sessions, retry
       if (!onMessage._retried && errMsg.indexOf("not found") !== -1 && errMsg.indexOf("Sandbox with ID") !== -1) {
-        console.log("[projects-api] Stale proxy detected, retrying in 5s...");
         onMessage._retried = true;
-        setTimeout(function () {
-          if (onMessage._send) {
-            onMessage._send({
-              type: "start_agent",
-              prompt: prompt,
-              threadId: threadId,
-              agent: "build",
-            });
-          }
-        }, 5000);
+        var sbId = proj.sandboxId;
+        if (sbId && proj.proxyBaseUrl) {
+          console.log("[projects-api] Stale proxy detected, fixing .env and restarting OpenCode in sandbox " + sbId.slice(0, 8));
+          var fixCmd = 'cd /home/daytona/*/; ' +
+            'sed -i "s|APEX_PROXY_BASE_URL=.*|APEX_PROXY_BASE_URL=' + proj.proxyBaseUrl + '|" .env 2>/dev/null; ' +
+            'sed -i "s|ANTHROPIC_BASE_URL=.*|ANTHROPIC_BASE_URL=' + proj.proxyBaseUrl + '/llm-proxy/anthropic/v1|" .env 2>/dev/null; ' +
+            'sed -i "s|OPENAI_BASE_URL=.*|OPENAI_BASE_URL=' + proj.proxyBaseUrl + '/llm-proxy/openai/v1|" .env 2>/dev/null; ' +
+            'rm -rf /home/daytona/.config/opencode/sessions 2>/dev/null; ' +
+            'pkill -f "opencode serve" 2>/dev/null; true';
+          daytonaExec(sbId, fixCmd, function () {
+            console.log("[projects-api] Retrying prompt after fix, waiting 8s for OpenCode restart...");
+            setTimeout(function () {
+              if (onMessage._send) {
+                onMessage._send({
+                  type: "start_agent",
+                  prompt: prompt,
+                  threadId: threadId,
+                  agent: "build",
+                });
+              }
+            }, 8000);
+          });
+        } else {
+          console.log("[projects-api] Cannot fix: no sandboxId or proxyBaseUrl");
+        }
         return;
       }
 
