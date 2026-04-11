@@ -20,33 +20,35 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
   const endRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const msgCountBeforeSend = useRef(0);
+
   const load = useCallback(async () => {
     try {
       setLoading(true);
       const msgs = await api.threadMessages(threadId);
       setMessages(msgs);
+      return msgs;
     } catch {
-      // handled silently
+      return [];
     } finally {
       setLoading(false);
     }
   }, [threadId]);
 
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
-
-  // Check if agent is running when entering the thread view
+  // Load messages, then check if agent is running
   useEffect(() => {
-    api.promptStatus(threadId).then((s) => {
-      if (s.running) {
-        setAgentStatus('running');
-        msgCountBeforeSend.current = messages.length;
-        startPolling();
-      }
-    }).catch(() => {});
+    load().then((msgs) => {
+      api.promptStatus(threadId).then((s) => {
+        if (s.running) {
+          msgCountBeforeSend.current = msgs.length;
+          setAgentStatus('running');
+          startPolling();
+        }
+      }).catch(() => {});
+    });
   }, [threadId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const msgCountBeforeSend = useRef(0);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   // Auto-poll for new messages while waiting for agent response
   const startPolling = useCallback(() => {
@@ -73,7 +75,6 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
           if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
           setPolling(false);
           setAgentStatus(hasError ? 'error' : 'completed');
-          setTimeout(() => setAgentStatus('idle'), 4000);
         }
       } catch { /* retry */ }
     }, 2000);
