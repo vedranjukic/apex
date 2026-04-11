@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api, clearToken, type Project, type Thread } from '../api';
-import { StatusDot, timeAgo } from '../components';
+import { StatusDot, ThreadStatusIcon, timeAgo } from '../components';
 
 export function ProjectList() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -101,7 +101,7 @@ function ThreadPreviewList({ threads }: { threads?: Thread[] }) {
     <div className="mt-2.5 space-y-1 border-t border-border/50 pt-2">
       {threads.slice(0, 5).map((t) => (
         <div key={t.id} className="flex items-center gap-2 text-xs">
-          <StatusDot status={t.status} />
+          <ThreadStatusIcon status={t.status} />
           <span className="min-w-0 flex-1 truncate text-text-secondary">{t.title}</span>
           {t.agentType && (
             <span className="shrink-0 text-text-muted">{t.agentType}</span>

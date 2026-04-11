@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api, type Thread } from '../api';
-import { StatusDot, timeAgo, BackButton } from '../components';
+import { ThreadStatusIcon, timeAgo, BackButton } from '../components';
 
 interface Props {
   projectId: string;
@@ -69,20 +69,13 @@ export function ThreadList({ projectId, projectName }: Props) {
             className="block rounded-xl border border-border bg-surface-card p-4 active:bg-surface-elevated"
           >
             <div className="flex items-center gap-3">
-              <StatusDot status={t.status} />
+              <ThreadStatusIcon status={t.status} />
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{t.title}</div>
               </div>
             </div>
             <div className="mt-2 flex items-center gap-3 text-xs text-text-muted">
-              {t.status === 'running' ? (
-                <span className="flex items-center gap-1.5 text-primary">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
-                  Running
-                </span>
-              ) : (
-                <span className="capitalize">{t.status}</span>
-              )}
+              <span className="capitalize">{t.status.replace(/_/g, ' ')}</span>
               {t.agentType && <span>{t.agentType}</span>}
               <span className="ml-auto">{timeAgo(t.updatedAt)}</span>
             </div>
