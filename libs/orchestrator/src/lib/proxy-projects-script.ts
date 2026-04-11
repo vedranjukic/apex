@@ -392,7 +392,27 @@ function executePrompt(projectId, threadId, prompt) {
     }
 
     if (msg.type === "agent_error") {
-      console.error("[projects-api] Agent error for thread " + threadId.slice(0, 8) + ": " + JSON.stringify(msg.data || msg.error || msg));
+      var errMsg = msg.error || msg.data?.error || JSON.stringify(msg.data || "unknown");
+      console.error("[projects-api] Agent error for thread " + threadId.slice(0, 8) + ": " + errMsg);
+
+      // Retry once on stale proxy sandbox errors -- the bridge restarts OpenCode
+      // with updated env from update_proxy_url, second attempt should succeed
+      if (!onMessage._retried && errMsg.indexOf("not found") !== -1 && errMsg.indexOf("Sandbox with ID") !== -1) {
+        console.log("[projects-api] Stale proxy detected, retrying in 5s...");
+        onMessage._retried = true;
+        setTimeout(function () {
+          if (onMessage._send) {
+            onMessage._send({
+              type: "start_agent",
+              prompt: prompt,
+              threadId: threadId,
+              agent: "build",
+            });
+          }
+        }, 5000);
+        return;
+      }
+
       runningAgents.delete(threadId);
       var thread = threads.get(threadId);
       if (thread) { thread.status = "error"; thread.updatedAt = new Date().toISOString(); threads.set(threadId, thread); persistThreads(); }
@@ -400,7 +420,7 @@ function executePrompt(projectId, threadId, prompt) {
       existing.push({
         id: crypto.randomBytes(16).toString("hex"),
         taskId: threadId, role: "system",
-        content: [{ type: "text", text: "Agent error: " + (msg.error || msg.data?.error || JSON.stringify(msg.data || "unknown")) }],
+        content: [{ type: "text", text: "Agent error: " + errMsg }],
         metadata: { error: true }, createdAt: new Date().toISOString(),
       });
       messagesMap.set(threadId, existing);
