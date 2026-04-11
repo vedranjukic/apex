@@ -26,25 +26,21 @@ export function ThreadList({ projectId, projectName }: Props) {
   useEffect(() => { load(); }, [load]);
 
   // Auto-refresh when any thread is running
+  const hasRunningRef = useRef(false);
   useEffect(() => {
-    const hasRunning = threads.some((t) => t.status === 'running');
-    if (hasRunning && !pollRef.current) {
-      pollRef.current = setInterval(async () => {
-        try {
-          const updated = await api.projectThreads(projectId);
-          setThreads(updated);
-          if (!updated.some((t) => t.status === 'running')) {
-            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-          }
-        } catch { /* retry */ }
-      }, 3000);
-    }
-    if (!hasRunning && pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
-  }, [threads, projectId]);
+    hasRunningRef.current = threads.some((t) => t.status === 'running');
+  }, [threads]);
+
+  useEffect(() => {
+    const poll = setInterval(async () => {
+      if (!hasRunningRef.current) return;
+      try {
+        const updated = await api.projectThreads(projectId);
+        setThreads(updated);
+      } catch { /* retry */ }
+    }, 3000);
+    return () => clearInterval(poll);
+  }, [projectId]);
 
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
