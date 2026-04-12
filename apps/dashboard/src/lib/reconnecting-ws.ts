@@ -11,11 +11,13 @@ export class ReconnectingWebSocket {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = 1000;
   private maxReconnectDelay = 30000;
-  private offlineReconnectDelay = 5000; // Longer delay when offline
-  private maxOfflineReconnectDelay = 60000; // Max 1 minute when offline
+  private offlineReconnectDelay = 5000;
+  private maxOfflineReconnectDelay = 60000;
   private destroyed = false;
   private pendingMessages: string[] = [];
   private networkUnsubscribe: (() => void) | null = null;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private pongTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(path: string) {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -70,11 +72,16 @@ export class ReconnectingWebSocket {
         this.ws?.send(msg);
       }
       this.pendingMessages = [];
+      this.startHeartbeat();
     };
 
     this.ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        if (data.type === 'pong') {
+          this.clearPongTimer();
+          return;
+        }
         const typeHandlers = this.handlers.get(data.type);
         if (typeHandlers) {
           for (const handler of typeHandlers) handler(data);
@@ -87,6 +94,7 @@ export class ReconnectingWebSocket {
     };
 
     this.ws.onclose = () => {
+      this.stopHeartbeat();
       const networkStore = useNetworkStore.getState();
       this.notifyStatus('disconnected');
       networkStore.setSocketConnected(false);
@@ -131,6 +139,27 @@ export class ReconnectingWebSocket {
     }
   }
 
+  private startHeartbeat() {
+    this.stopHeartbeat();
+    this.pingTimer = setInterval(() => {
+      if (this.ws?.readyState !== WebSocket.OPEN) return;
+      this.ws.send(JSON.stringify({ type: 'ping' }));
+      this.pongTimer = setTimeout(() => {
+        // No pong received — connection is dead, force close to trigger reconnect
+        this.ws?.close();
+      }, 10_000);
+    }, 30_000);
+  }
+
+  private stopHeartbeat() {
+    if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
+    this.clearPongTimer();
+  }
+
+  private clearPongTimer() {
+    if (this.pongTimer) { clearTimeout(this.pongTimer); this.pongTimer = null; }
+  }
+
   private notifyStatus(status: 'connecting' | 'connected' | 'disconnected') {
     for (const handler of this.statusHandlers) handler(status);
   }
@@ -168,6 +197,7 @@ export class ReconnectingWebSocket {
   destroy() {
     this.destroyed = true;
     this.cancelReconnect();
+    this.stopHeartbeat();
     this.ws?.close();
     this.ws = null;
     this.handlers.clear();

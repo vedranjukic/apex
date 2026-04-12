@@ -388,6 +388,7 @@ export type SandboxSessionStatus =
   | 'running'
   | 'waiting_for_input'
   | 'completed'
+  | 'disconnected'
   | 'error';
 
 export interface SandboxSession {

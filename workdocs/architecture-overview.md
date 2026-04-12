@@ -55,7 +55,21 @@ The prompt input stays editable while the agent is running. If the user submits 
 2. When the agent finishes (status transitions from `running`), the first queued prompt auto-sends
 3. Clicking Play on a queued prompt stops the current agent, then sends the queued prompt when the stop completes
 
-### Bridge Health Check
+### Bridge Connection Resilience
+
+The bridge connection is designed so that WebSocket disconnections (user inactivity, network blips, laptop sleep) never affect the running agent inside the sandbox. The OpenCode agent process is completely decoupled from client connectivity.
+
+**Keepalive**: Both the API-to-bridge WebSocket (`SandboxManager.connectToBridge`) and the bridge-side WebSocket server send RFC 6455 ping frames every 30s. If no pong is received before the next interval, the connection is terminated and the background monitor triggers a reconnect. The dashboard-to-API WebSocket uses application-level `{ type: "ping" }` / `{ type: "pong" }` messages (browser WebSockets don't support `ws.ping()`).
+
+**Background monitor**: A 15s interval (`startBackgroundMonitor`) runs for every connected sandbox. When `isBridgeConnected()` returns false, it proactively calls `reconnectSandbox()` — the user doesn't need to send a prompt to trigger reconnection.
+
+**Reconnection philosophy**: `connectWithRetry` checks if the bridge HTTP server is alive (`quickBridgeCheck`). If yes, it just reconnects the WebSocket without restarting anything. If the bridge is dead, it restarts the bridge process but **always preserves the OpenCode agent** (`preserveOpenCode = true`). OpenCode is only killed on explicit user-initiated actions (`forceFullRestart`). The `doReconnect` path also skips re-uploading `bridge.cjs` when the bridge is already healthy.
+
+**Session status**: A WebSocket close sets the session status to `disconnected` (not `error`), preventing error-handling cascades. The bridge keeps all active agent sessions alive when the orchestrator disconnects, and resumes polling for them when a new connection arrives (`recoverSessions`).
+
+**Event journal**: The bridge journals all agent events to disk per thread. On reconnect, the API can request a replay of missed events via `request_replay` with the last seen sequence number, ensuring no messages are lost during a disconnection gap.
+
+### Bridge Health Check (Active Agent Turn)
 A 10-second health check interval runs alongside every active agent execution:
 
 1. Every 10s, the gateway checks `manager.isBridgeConnected()` to verify the bridge WebSocket is alive

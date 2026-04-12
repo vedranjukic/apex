@@ -1829,7 +1829,14 @@ wss.on("connection", (ws) => {
     }
   });
 
+  var bridgePingTimer = setInterval(function() {
+    if (ws.readyState === 1) {
+      try { ws.ping(); } catch (e) {}
+    }
+  }, 30000);
+
   ws.on("close", () => {
+    clearInterval(bridgePingTimer);
     log("\\u{1F50C}", "Orchestrator disconnected — keeping " + activeThreads.size + " session(s) alive for recovery");
     state.ws = null;
   });

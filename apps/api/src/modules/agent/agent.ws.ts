@@ -789,6 +789,10 @@ async function handleMessage(client: WsClient, message: unknown) {
 
   try {
     switch (type) {
+      case 'ping': {
+        client.wsSend(JSON.stringify({ type: 'pong' }));
+        return;
+      }
       case 'subscribe_project': {
         let project: Awaited<ReturnType<typeof projectsService.findById>>;
         try { project = await projectsService.findById(payload.projectId); } catch {
