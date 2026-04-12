@@ -86,7 +86,45 @@ class ThreadsService {
   }
 
   async findByProject(projectId: string): Promise<Task[]> {
+    await this.importProxyThreads(projectId);
     return db.select().from(tasks).where(eq(tasks.projectId, projectId)).orderBy(desc(tasks.createdAt));
+  }
+
+  /**
+   * For Daytona projects, pull any threads from the proxy that don't exist
+   * in the host DB (created by mobile-initiated prompts).
+   */
+  private async importProxyThreads(projectId: string): Promise<void> {
+    try {
+      const provider = await this.getProjectProvider(projectId);
+      if (provider !== 'daytona') return;
+
+      const proxyThreads = await proxyProjectsService.fetchProjectThreads(projectId);
+      if (proxyThreads.length === 0) return;
+
+      const existingIds = new Set(
+        (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.projectId, projectId))).map((t) => t.id),
+      );
+
+      const newThreads = proxyThreads.filter((pt) => !existingIds.has(pt.id));
+      if (newThreads.length === 0) return;
+
+      console.log(`[threads] Importing ${newThreads.length} proxy threads for project ${projectId.slice(0, 8)}`);
+      for (const pt of newThreads) {
+        await db.insert(tasks).values({
+          id: pt.id,
+          projectId: pt.projectId,
+          title: pt.title,
+          status: pt.status,
+          agentType: pt.agentType ?? null,
+          model: pt.model ?? null,
+          createdAt: pt.createdAt || new Date().toISOString(),
+          updatedAt: pt.updatedAt || new Date().toISOString(),
+        }).onConflictDoNothing();
+      }
+    } catch (err) {
+      console.warn(`[threads] importProxyThreads error for project ${projectId.slice(0, 8)}:`, (err as Error).message);
+    }
   }
 
   async reconcileStaleThreads(projectId: string, activeThreadIds: Set<string>): Promise<string[]> {
@@ -109,7 +147,31 @@ class ThreadsService {
       with: { messages: { orderBy: [asc(messages.createdAt)] } },
     });
     if (!thread) throw new Error(`Thread ${id} not found`);
+    await this.syncThreadStatusFromProxy(thread);
     return thread;
+  }
+
+  /**
+   * If the proxy has a more recent status for this Daytona thread
+   * (e.g. from a mobile-initiated prompt), update the host DB.
+   */
+  private async syncThreadStatusFromProxy(thread: Task): Promise<void> {
+    try {
+      const provider = await this.getProjectProvider(thread.projectId);
+      if (provider !== 'daytona') return;
+
+      const proxyThread = await proxyProjectsService.fetchThread(thread.id);
+      if (!proxyThread) return;
+
+      if (proxyThread.updatedAt > thread.updatedAt && proxyThread.status !== thread.status) {
+        console.log(`[threads] Syncing thread ${thread.id.slice(0, 8)} status from proxy: ${thread.status} -> ${proxyThread.status}`);
+        await db.update(tasks).set({ status: proxyThread.status, updatedAt: proxyThread.updatedAt }).where(eq(tasks.id, thread.id));
+        thread.status = proxyThread.status;
+        thread.updatedAt = proxyThread.updatedAt;
+      }
+    } catch (err) {
+      console.warn(`[threads] syncThreadStatusFromProxy error for ${thread.id.slice(0, 8)}:`, (err as Error).message);
+    }
   }
 
   async create(projectId: string, data: { prompt: string; agentType?: string }): Promise<Task & { messages?: Message[] }> {
@@ -197,7 +259,46 @@ class ThreadsService {
   }
 
   async getMessages(threadId: string): Promise<Message[]> {
+    await this.importProxyMessages(threadId);
     return db.select().from(messages).where(eq(messages.taskId, threadId)).orderBy(asc(messages.createdAt));
+  }
+
+  /**
+   * For Daytona threads, pull any messages from the proxy that don't exist
+   * in the host DB (e.g. from mobile-initiated prompts). Runs in the
+   * background and doesn't block on failure.
+   */
+  private async importProxyMessages(threadId: string): Promise<void> {
+    try {
+      const thread = await db.query.tasks.findFirst({ where: eq(tasks.id, threadId), columns: { projectId: true } });
+      if (!thread) return;
+      const provider = await this.getProjectProvider(thread.projectId);
+      if (provider !== 'daytona') return;
+
+      const proxyMessages = await proxyProjectsService.fetchThreadMessages(threadId);
+      if (proxyMessages.length === 0) return;
+
+      const existingIds = new Set(
+        (await db.select({ id: messages.id }).from(messages).where(eq(messages.taskId, threadId))).map((m) => m.id),
+      );
+
+      const newMessages = proxyMessages.filter((pm) => !existingIds.has(pm.id));
+      if (newMessages.length === 0) return;
+
+      console.log(`[threads] Importing ${newMessages.length} proxy messages for thread ${threadId.slice(0, 8)}`);
+      for (const pm of newMessages) {
+        await db.insert(messages).values({
+          id: pm.id,
+          taskId: pm.taskId,
+          role: pm.role,
+          content: pm.content as Record<string, unknown>[],
+          metadata: (pm.metadata as Record<string, unknown> | null) || null,
+          createdAt: pm.createdAt,
+        }).onConflictDoNothing();
+      }
+    } catch (err) {
+      console.warn(`[threads] importProxyMessages error for ${threadId.slice(0, 8)}:`, (err as Error).message);
+    }
   }
 
   async getFirstUserMessage(threadId: string): Promise<Message | undefined> {
