@@ -40,7 +40,7 @@ const activeHealthChecks = new Map<string, ReturnType<typeof setInterval>>();
 const stoppedThreads = new Set<string>();
 const lastSeenSeq = new Map<string, number>();
 const proxyPollers = new Map<string, ReturnType<typeof setInterval>>();
-const proxyPollMessageCounts = new Map<string, number>();
+const proxyPollKnownIds = new Map<string, Set<string>>();
 
 let lastAttachedManager: WeakRef<any> | null = null;
 
@@ -106,46 +106,50 @@ function startProxyPoller(projectId: string, sandboxId: string) {
       for (const thread of threads) {
         if (activeHandlers.has(thread.id)) continue;
 
-        const prevCount = proxyPollMessageCounts.get(thread.id) || 0;
         const dbMessages = await threadsService.getMessages(thread.id);
-        const newCount = dbMessages.length;
-
-        if (newCount > prevCount && prevCount > 0) {
-          const newMessages = dbMessages.slice(prevCount);
-          // Only sync messages with renderable content (skip empty system/result
-          // metadata rows and tool_result user messages that render as empty bubbles)
-          const renderableMessages = newMessages.filter((m) => {
-            const content = m.content as Array<{ type?: string; text?: string }>;
-            if (!content || !Array.isArray(content)) return false;
-            if (m.role === 'system') {
-              return content.some((b) => b.type === 'text' && b.text);
-            }
-            if (m.role === 'user') {
-              return content.some((b) => b.type === 'text' && b.text);
-            }
-            return true;
-          });
-          if (renderableMessages.length > 0) {
-            console.log(`[proxy-poll] ${renderableMessages.length} renderable messages for thread ${thread.id.slice(0, 8)}`);
-            emitToSubscribers(sandboxId, 'proxy_sync', {
-              threadId: thread.id,
-              messages: renderableMessages.map((m) => ({
-                id: m.id,
-                taskId: m.taskId,
-                role: m.role,
-                content: m.content,
-                metadata: m.metadata,
-                createdAt: m.createdAt,
-              })),
-            });
-          }
-
-          const proxyThread = await proxyProjectsService.fetchThread(thread.id);
-          if (proxyThread && proxyThread.status !== thread.status) {
-            emitToSubscribers(sandboxId, 'agent_status', { threadId: thread.id, status: proxyThread.status });
-          }
+        let knownIds = proxyPollKnownIds.get(thread.id);
+        if (!knownIds) {
+          // First poll: seed known IDs, don't emit
+          knownIds = new Set(dbMessages.map((m) => m.id));
+          proxyPollKnownIds.set(thread.id, knownIds);
+          continue;
         }
-        proxyPollMessageCounts.set(thread.id, newCount);
+
+        const newMessages = dbMessages.filter((m) => !knownIds!.has(m.id));
+        for (const m of dbMessages) knownIds.add(m.id);
+
+        if (newMessages.length === 0) continue;
+
+        const renderableMessages = newMessages.filter((m) => {
+          const content = m.content as Array<{ type?: string; text?: string }>;
+          if (!content || !Array.isArray(content)) return false;
+          if (m.role === 'system') {
+            return content.some((b) => b.type === 'text' && b.text);
+          }
+          if (m.role === 'user') {
+            return content.some((b) => b.type === 'text' && b.text);
+          }
+          return true;
+        });
+        if (renderableMessages.length > 0) {
+          console.log(`[proxy-poll] ${renderableMessages.length} renderable messages for thread ${thread.id.slice(0, 8)}`);
+          emitToSubscribers(sandboxId, 'proxy_sync', {
+            threadId: thread.id,
+            messages: renderableMessages.map((m) => ({
+              id: m.id,
+              taskId: m.taskId,
+              role: m.role,
+              content: m.content,
+              metadata: m.metadata,
+              createdAt: m.createdAt,
+            })),
+          });
+        }
+
+        const proxyThread = await proxyProjectsService.fetchThread(thread.id);
+        if (proxyThread && proxyThread.status !== thread.status) {
+          emitToSubscribers(sandboxId, 'agent_status', { threadId: thread.id, status: proxyThread.status });
+        }
       }
     } catch (err) {
       console.warn(`[proxy-poll] Error for project ${projectId.slice(0, 8)}:`, (err as Error).message);
