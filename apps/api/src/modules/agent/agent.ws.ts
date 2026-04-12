@@ -112,18 +112,33 @@ function startProxyPoller(projectId: string, sandboxId: string) {
 
         if (newCount > prevCount && prevCount > 0) {
           const newMessages = dbMessages.slice(prevCount);
-          console.log(`[proxy-poll] ${newMessages.length} new messages for thread ${thread.id.slice(0, 8)}`);
-          emitToSubscribers(sandboxId, 'proxy_sync', {
-            threadId: thread.id,
-            messages: newMessages.map((m) => ({
-              id: m.id,
-              taskId: m.taskId,
-              role: m.role,
-              content: m.content,
-              metadata: m.metadata,
-              createdAt: m.createdAt,
-            })),
+          // Only sync messages with renderable content (skip empty system/result
+          // metadata rows and tool_result user messages that render as empty bubbles)
+          const renderableMessages = newMessages.filter((m) => {
+            const content = m.content as Array<{ type?: string; text?: string }>;
+            if (!content || !Array.isArray(content)) return false;
+            if (m.role === 'system') {
+              return content.some((b) => b.type === 'text' && b.text);
+            }
+            if (m.role === 'user') {
+              return content.some((b) => b.type === 'text' && b.text);
+            }
+            return true;
           });
+          if (renderableMessages.length > 0) {
+            console.log(`[proxy-poll] ${renderableMessages.length} renderable messages for thread ${thread.id.slice(0, 8)}`);
+            emitToSubscribers(sandboxId, 'proxy_sync', {
+              threadId: thread.id,
+              messages: renderableMessages.map((m) => ({
+                id: m.id,
+                taskId: m.taskId,
+                role: m.role,
+                content: m.content,
+                metadata: m.metadata,
+                createdAt: m.createdAt,
+              })),
+            });
+          }
 
           const proxyThread = await proxyProjectsService.fetchThread(thread.id);
           if (proxyThread && proxyThread.status !== thread.status) {
