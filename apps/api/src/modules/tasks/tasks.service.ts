@@ -255,9 +255,7 @@ class ThreadsService {
       metadata: data.metadata || null,
     });
     const msg = await db.query.messages.findFirst({ where: eq(messages.id, id) });
-    if (data.role === 'user') {
-      this.syncMessagesToProxyForThread(threadId);
-    }
+    this.syncMessagesToProxyForThread(threadId);
     return msg!;
   }
 
