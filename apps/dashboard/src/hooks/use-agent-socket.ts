@@ -233,21 +233,8 @@ export function useAgentSocket(projectId: string | undefined) {
       const { messages: currentMessages, activeThreadId } = useThreadsStore.getState();
       if (threadId !== activeThreadId) return;
       const existingIds = new Set(currentMessages.map((m: { id: string }) => m.id));
-      const existingTexts = new Set(
-        currentMessages
-          .filter((m: { role: string }) => m.role === 'user')
-          .map((m: { content: { type?: string; text?: string }[] }) => {
-            const t = m.content?.find((b: { type?: string }) => b.type === 'text');
-            return t && 'text' in t ? (t as { text: string }).text : null;
-          })
-          .filter(Boolean),
-      );
       for (const msg of syncMessages) {
         if (existingIds.has(msg.id)) continue;
-        if (msg.role === 'user' && msg.content?.length) {
-          const text = msg.content.find((b: { type?: string }) => b.type === 'text')?.text;
-          if (text && existingTexts.has(text)) continue;
-        }
         addMessage(msg);
       }
     });
