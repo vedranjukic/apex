@@ -104,7 +104,6 @@ function startProxyPoller(projectId: string, sandboxId: string) {
     try {
       const threads = await threadsService.findByProject(projectId);
       for (const thread of threads) {
-        // Skip threads being handled by the host bridge path
         if (activeHandlers.has(thread.id)) continue;
 
         const prevCount = proxyPollMessageCounts.get(thread.id) || 0;
@@ -114,14 +113,17 @@ function startProxyPoller(projectId: string, sandboxId: string) {
         if (newCount > prevCount && prevCount > 0) {
           const newMessages = dbMessages.slice(prevCount);
           console.log(`[proxy-poll] ${newMessages.length} new messages for thread ${thread.id.slice(0, 8)}`);
-          for (const msg of newMessages) {
-            const agentMsg = {
-              type: msg.role === 'assistant' ? 'assistant' : msg.role === 'user' ? 'user' : 'result',
-              message: { content: msg.content, model: (msg.metadata as any)?.model },
-              uuid: msg.id,
-            };
-            emitToSubscribers(sandboxId, 'agent_message', { threadId: thread.id, message: agentMsg });
-          }
+          emitToSubscribers(sandboxId, 'proxy_sync', {
+            threadId: thread.id,
+            messages: newMessages.map((m) => ({
+              id: m.id,
+              taskId: m.taskId,
+              role: m.role,
+              content: m.content,
+              metadata: m.metadata,
+              createdAt: m.createdAt,
+            })),
+          });
 
           const proxyThread = await proxyProjectsService.fetchThread(thread.id);
           if (proxyThread && proxyThread.status !== thread.status) {
