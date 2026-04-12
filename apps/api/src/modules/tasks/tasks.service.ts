@@ -255,7 +255,25 @@ class ThreadsService {
       metadata: data.metadata || null,
     });
     const msg = await db.query.messages.findFirst({ where: eq(messages.id, id) });
+    if (data.role === 'user') {
+      this.syncMessagesToProxyForThread(threadId);
+    }
     return msg!;
+  }
+
+  private syncMessagesToProxyForThread(threadId: string): void {
+    db.select().from(messages).where(eq(messages.taskId, threadId)).orderBy(asc(messages.createdAt)).then(async (msgs) => {
+      if (msgs.length === 0) return;
+      const thread = await db.query.tasks.findFirst({ where: eq(tasks.id, threadId), columns: { projectId: true } });
+      if (!thread) return;
+      const provider = await this.getProjectProvider(thread.projectId);
+      if (provider !== 'daytona') return;
+      const payload: MessageSyncPayload[] = msgs.map((m) => ({
+        id: m.id, taskId: m.taskId, role: m.role,
+        content: m.content as unknown[], metadata: m.metadata, createdAt: m.createdAt,
+      }));
+      proxyProjectsService.syncMessages(threadId, payload).catch(() => {});
+    }).catch(() => {});
   }
 
   async getMessages(threadId: string): Promise<Message[]> {

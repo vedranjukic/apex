@@ -894,6 +894,11 @@ async function handleMessage(client: WsClient, message: unknown) {
         const { threadId, prompt } = payload;
         console.log(`[agent-ws] send_prompt: thread=${threadId?.slice(0, 8)} prompt="${prompt?.slice(0, 60)}"`);
         const thread = await threadsService.findById(threadId);
+        await threadsService.addMessage(threadId, {
+          role: 'user',
+          content: [{ type: 'text', text: prompt }],
+          metadata: null,
+        });
         await ensurePortRelayInit(thread.projectId);
         await executeAgainstSandbox(client, threadId, prompt);
         break;
