@@ -163,6 +163,57 @@ class ProxyProjectsService {
     }
   }
 
+  async fetchThreadMessages(threadId: string): Promise<MessageSyncPayload[]> {
+    const conn = this.getConnectionInfo();
+    if (!conn) return [];
+
+    try {
+      const resp = await fetch(`${conn.projectsApiUrl}/threads/${threadId}/messages`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${conn.authToken}` },
+      });
+      if (!resp.ok) return [];
+      return await resp.json() as MessageSyncPayload[];
+    } catch (err) {
+      console.warn('[proxy-projects] fetchThreadMessages error:', (err as Error).message);
+      return [];
+    }
+  }
+
+  async fetchThread(threadId: string): Promise<{ id: string; status: string; title: string; updatedAt: string } | null> {
+    const conn = this.getConnectionInfo();
+    if (!conn) return null;
+
+    try {
+      const resp = await fetch(`${conn.projectsApiUrl}/threads/${threadId}`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${conn.authToken}` },
+      });
+      if (!resp.ok) return null;
+      return await resp.json();
+    } catch (err) {
+      console.warn('[proxy-projects] fetchThread error:', (err as Error).message);
+      return null;
+    }
+  }
+
+  async fetchProjectThreads(projectId: string): Promise<ThreadSyncPayload[]> {
+    const conn = this.getConnectionInfo();
+    if (!conn) return [];
+
+    try {
+      const resp = await fetch(`${conn.projectsApiUrl}/projects/${projectId}/threads`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${conn.authToken}` },
+      });
+      if (!resp.ok) return [];
+      return await resp.json() as ThreadSyncPayload[];
+    } catch (err) {
+      console.warn('[proxy-projects] fetchProjectThreads error:', (err as Error).message);
+      return [];
+    }
+  }
+
   async listProjects(): Promise<RemoteProjectInfo[]> {
     const conn = this.getConnectionInfo();
     if (!conn) return [];

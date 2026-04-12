@@ -35,6 +35,7 @@ const net = require("net");
 const WebSocket = require("ws");
 
 let state = { ws: null };
+var wsClients = new Set();
 const threadToSession = new Map();
 const sessionToThread = new Map();
 const activeThreads = new Set();
@@ -127,23 +128,17 @@ function replayJournal(threadId, afterSeq) {
     for (var i = 0; i < lines.length; i++) {
       var entry = JSON.parse(lines[i]);
       if (entry.seq > afterSeq && entry.msg) {
-        if (state.ws && state.ws.readyState === 1) {
-          entry.msg._seq = entry.seq;
-          entry.msg._replay = true;
-          state.ws.send(JSON.stringify(entry.msg));
-          sent++;
-        }
+        entry.msg._seq = entry.seq;
+        entry.msg._replay = true;
+        broadcastWs(entry.msg);
+        sent++;
       }
     }
     log("\\u{1F504}", "Replayed " + sent + " events for thread " + threadId + " (afterSeq=" + afterSeq + ")");
-    if (state.ws && state.ws.readyState === 1) {
-      state.ws.send(JSON.stringify({ type: "replay_complete", threadId: threadId, lastSeq: threadSeqCounters.get(threadId) || 0 }));
-    }
+    broadcastWs({ type: "replay_complete", threadId: threadId, lastSeq: threadSeqCounters.get(threadId) || 0 });
   } catch (e) {
     log("\\u{26A0}", "Replay failed for thread " + threadId + ": " + (e.message || e));
-    if (state.ws && state.ws.readyState === 1) {
-      state.ws.send(JSON.stringify({ type: "replay_complete", threadId: threadId, lastSeq: 0, error: e.message }));
-    }
+    broadcastWs({ type: "replay_complete", threadId: threadId, lastSeq: 0, error: e.message });
   }
 }
 
@@ -172,43 +167,43 @@ function log(emoji, msg) {
   console.log(new Date().toISOString() + " " + emoji + " " + msg);
 }
 
-// ── Emit helpers (journal + send) ────────────────────
+// ── Broadcast to all connected WebSocket clients ─────
+function broadcastWs(data) {
+  var json = typeof data === "string" ? data : JSON.stringify(data);
+  wsClients.forEach(function(c) {
+    if (c.readyState === 1) {
+      try { c.send(json); } catch (e) {}
+    }
+  });
+}
+
+// ── Emit helpers (journal + broadcast) ───────────────
 function emitAgentMessage(threadId, data) {
   var msg = { type: "agent_message", threadId: threadId, data: data };
   journalEvent(threadId, msg);
-  if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify(msg));
-  }
+  broadcastWs(msg);
 }
 function emitAgentExit(threadId, code) {
   threadJournalStatus.set(threadId, code === 0 ? "completed" : "error");
   var msg = { type: "agent_exit", threadId: threadId, code: code };
   journalEvent(threadId, msg);
-  if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify(msg));
-  }
+  broadcastWs(msg);
 }
 function emitAgentError(threadId, error) {
   threadJournalStatus.set(threadId, "error");
   var msg = { type: "agent_error", threadId: threadId, error: error };
   journalEvent(threadId, msg);
-  if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify(msg));
-  }
+  broadcastWs(msg);
 }
 function emitAskUserPending(threadId, questionId) {
   var msg = { type: "ask_user_pending", threadId: threadId, questionId: questionId };
   journalEvent(threadId, msg);
-  if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify(msg));
-  }
+  broadcastWs(msg);
 }
 function emitAskUserResolved(threadId, questionId) {
   var msg = { type: "ask_user_resolved", threadId: threadId, questionId: questionId };
   journalEvent(threadId, msg);
-  if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify(msg));
-  }
+  broadcastWs(msg);
 }
 
 // ══════════════════════════════════════════════════════
@@ -617,9 +612,7 @@ async function sendPrompt(threadId, prompt, agent, model, sessionId, images, age
           log("\\u{1F504}", "Emitting " + catchupBlocks.length + " catch-up blocks from last assistant turn");
           var catchupMsg = { type: "agent_catchup", threadId: threadId, blocks: catchupBlocks };
           journalEvent(threadId, catchupMsg);
-          if (state.ws && state.ws.readyState === 1) {
-            state.ws.send(JSON.stringify(catchupMsg));
-          }
+          broadcastWs(catchupMsg);
         }
       }
     } catch (e) {
@@ -985,9 +978,7 @@ function emitStartAck(threadId, status, sessionId, error) {
   if (sessionId) payload.sessionId = sessionId;
   if (error) payload.error = error;
   journalEvent(threadId, payload);
-  if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify(payload));
-  }
+  broadcastWs(payload);
 }
 
 async function handleStartAgent(msg) {
@@ -1104,15 +1095,11 @@ function createTerminalPty(terminalId, name, cols, rows, cwd, command) {
   ptyProcess.onData((data) => {
     entry.scrollback.push(data);
     if (entry.scrollback.length > MAX_SCROLLBACK) entry.scrollback.shift();
-    if (state.ws && state.ws.readyState === 1) {
-      state.ws.send(JSON.stringify({ type: "terminal_output", terminalId, data }));
-    }
+    broadcastWs({ type: "terminal_output", terminalId, data });
   });
   ptyProcess.onExit(({ exitCode }) => {
     terminals.delete(terminalId);
-    if (state.ws && state.ws.readyState === 1) {
-      state.ws.send(JSON.stringify({ type: "terminal_exit", terminalId, exitCode }));
-    }
+    broadcastWs({ type: "terminal_exit", terminalId, exitCode });
   });
   return { terminalId, name: entry.name };
 }
@@ -1166,9 +1153,9 @@ function startFileWatcher() {
 }
 function flushFileChanges() {
   if (changedDirs.size === 0) return;
-  if (state.ws && state.ws.readyState === 1) {
+  if (wsClients.size > 0) {
     const dirs = Array.from(changedDirs); changedDirs.clear();
-    state.ws.send(JSON.stringify({ type: "file_changed", dirs }));
+    broadcastWs({ type: "file_changed", dirs });
   } else {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(flushFileChanges, 1000);
@@ -1241,11 +1228,9 @@ function createLspParser(onMessage) {
 }
 
 function emitLspStatus(language, status, error) {
-  if (state.ws && state.ws.readyState === 1) {
-    const msg = { type: "lsp_status", language, status };
-    if (error) msg.error = error;
-    state.ws.send(JSON.stringify(msg));
-  }
+  const msg = { type: "lsp_status", language, status };
+  if (error) msg.error = error;
+  broadcastWs(msg);
 }
 
 function getOrStartLsp(language) {
@@ -1282,9 +1267,7 @@ function getOrStartLsp(language) {
         entry.pendingRequests.delete(msg.id);
         cb(msg);
       }
-      if (state.ws && state.ws.readyState === 1) {
-        state.ws.send(JSON.stringify({ type: "lsp_response", language, jsonrpc: msg }));
-      }
+      broadcastWs({ type: "lsp_response", language, jsonrpc: msg });
     });
 
     proc.stdout.on("data", parser);
@@ -1407,7 +1390,7 @@ const server = http.createServer((req, res) => {
         const result = createTerminalPty(tid, name, cols || 80, rows || 24, cwd, command);
         if (result.error) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify(result)); }
         else {
-          if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify({ type: "terminal_created", terminalId: tid, name: result.name }));
+          broadcastWs({ type: "terminal_created", terminalId: tid, name: result.name });
           res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(result));
         }
       } catch (e) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: e.message })); }
@@ -1614,7 +1597,8 @@ const server = http.createServer((req, res) => {
 // ── WebSocket server ─────────────────────────────────
 const wss = new WebSocketServer({ server });
 wss.on("connection", (ws) => {
-  log("\\u{1F517}", "Orchestrator connected");
+  log("\\u{1F517}", "Client connected (total: " + (wsClients.size + 1) + ")");
+  wsClients.add(ws);
   state.ws = ws;
   lastPortsKey = "";
   ws.send(JSON.stringify({ type: "bridge_ready", port: PORT, threads: getThreadJournalSummary() }));
@@ -1686,9 +1670,7 @@ wss.on("connection", (ws) => {
 
       if (running.length > 0) {
         saveActiveSessions();
-        if (state.ws && state.ws.readyState === 1) {
-          state.ws.send(JSON.stringify({ type: "running_sessions", sessions: running }));
-        }
+        broadcastWs({ type: "running_sessions", sessions: running });
       }
     } catch (e) {
       log("\\u{26A0}", "Session recovery failed: " + (e.message || e));
@@ -1837,8 +1819,11 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     clearInterval(bridgePingTimer);
-    log("\\u{1F50C}", "Orchestrator disconnected — keeping " + activeThreads.size + " session(s) alive for recovery");
-    state.ws = null;
+    wsClients.delete(ws);
+    log("\\u{1F50C}", "Client disconnected (remaining: " + wsClients.size + ") — keeping " + activeThreads.size + " session(s) alive for recovery");
+    if (state.ws === ws) {
+      state.ws = wsClients.size > 0 ? wsClients.values().next().value : null;
+    }
   });
 });
 
@@ -1925,7 +1910,7 @@ function resolveProcesses(portInodes) {
 }
 
 setInterval(() => {
-  if (!state.ws || state.ws.readyState !== 1) return;
+  if (wsClients.size === 0) return;
   try {
     const portInodes = scanListeningPorts();
     const sortedPorts = Array.from(portInodes.keys()).sort((a, b) => a - b);
@@ -1933,7 +1918,7 @@ setInterval(() => {
     if (portsKey === lastPortsKey) return;
     lastPortsKey = portsKey;
     const ports = resolveProcesses(portInodes);
-    state.ws.send(JSON.stringify({ type: "ports_update", ports }));
+    broadcastWs({ type: "ports_update", ports });
   } catch (e) {}
 }, 1000);
 
@@ -2419,14 +2404,7 @@ function startPortRelay(port) {
       targetPort: port
     });
     
-    // Notify orchestrator about the port relay
-    if (state.ws && state.ws.readyState === 1) {
-      state.ws.send(JSON.stringify({
-        type: "port_relay_started",
-        targetPort: port,
-        localPort: localPort
-      }));
-    }
+    broadcastWs({ type: "port_relay_started", targetPort: port, localPort: localPort });
   });
 }
 
@@ -2445,13 +2423,7 @@ function stopPortRelay(port) {
   
   activePortRelays.delete(port);
   
-  // Notify orchestrator about the port relay stop
-  if (state.ws && state.ws.readyState === 1) {
-    state.ws.send(JSON.stringify({
-      type: "port_relay_stopped", 
-      targetPort: port
-    }));
-  }
+  broadcastWs({ type: "port_relay_stopped", targetPort: port });
 }
 
 server.listen(PORT, "0.0.0.0", () => { log("\\u{2705}", "Bridge ready on port " + PORT); });

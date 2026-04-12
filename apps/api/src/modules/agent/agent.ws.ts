@@ -6,6 +6,7 @@ import { BridgeMessage, LayoutData, FileEntry, SearchResult, SandboxManager } fr
 import { execFile } from 'child_process';
 import { forwardPort, unforwardPort, listForwards } from '../preview/port-forwarder';
 import { portRelayService } from '../preview/port-relay.service';
+import { proxyProjectsService } from '../llm-proxy/proxy-projects.service';
 
 const SANDBOX_HOME = '/home/daytona';
 
@@ -38,6 +39,8 @@ const activeTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 const activeHealthChecks = new Map<string, ReturnType<typeof setInterval>>();
 const stoppedThreads = new Set<string>();
 const lastSeenSeq = new Map<string, number>();
+const proxyPollers = new Map<string, ReturnType<typeof setInterval>>();
+const proxyPollKnownIds = new Map<string, Set<string>>();
 
 let lastAttachedManager: WeakRef<any> | null = null;
 
@@ -89,6 +92,82 @@ function emitToSubscribers(sandboxId: string, type: string, payload: unknown) {
 
 function emitTo(client: WsClient, type: string, payload: unknown) {
   try { client.wsSend(JSON.stringify({ type, payload })); } catch { /* ignore */ }
+}
+
+const PROXY_POLL_INTERVAL_MS = 5_000;
+
+function startProxyPoller(projectId: string, sandboxId: string) {
+  if (proxyPollers.has(projectId)) return;
+  console.log(`[proxy-poll] Starting proxy poller for project ${projectId.slice(0, 8)}`);
+
+  const poll = async () => {
+    try {
+      const threads = await threadsService.findByProject(projectId);
+      for (const thread of threads) {
+        if (activeHandlers.has(thread.id)) continue;
+
+        const dbMessages = await threadsService.getMessages(thread.id);
+        let knownIds = proxyPollKnownIds.get(thread.id);
+        if (!knownIds) {
+          // First poll: seed known IDs, don't emit
+          knownIds = new Set(dbMessages.map((m) => m.id));
+          proxyPollKnownIds.set(thread.id, knownIds);
+          continue;
+        }
+
+        const newMessages = dbMessages.filter((m) => !knownIds!.has(m.id));
+        for (const m of dbMessages) knownIds.add(m.id);
+
+        if (newMessages.length === 0) continue;
+
+        const renderableMessages = newMessages.filter((m) => {
+          const content = m.content as Array<{ type?: string; text?: string }>;
+          if (!content || !Array.isArray(content)) return false;
+          if (m.role === 'system') {
+            return content.some((b) => b.type === 'text' && b.text);
+          }
+          if (m.role === 'user') {
+            return content.some((b) => b.type === 'text' && b.text);
+          }
+          return true;
+        });
+        if (renderableMessages.length > 0) {
+          console.log(`[proxy-poll] ${renderableMessages.length} renderable messages for thread ${thread.id.slice(0, 8)}`);
+          emitToSubscribers(sandboxId, 'proxy_sync', {
+            threadId: thread.id,
+            messages: renderableMessages.map((m) => ({
+              id: m.id,
+              taskId: m.taskId,
+              role: m.role,
+              content: m.content,
+              metadata: m.metadata,
+              createdAt: m.createdAt,
+            })),
+          });
+        }
+
+        const proxyThread = await proxyProjectsService.fetchThread(thread.id);
+        if (proxyThread && proxyThread.status !== thread.status) {
+          emitToSubscribers(sandboxId, 'agent_status', { threadId: thread.id, status: proxyThread.status });
+        }
+      }
+    } catch (err) {
+      console.warn(`[proxy-poll] Error for project ${projectId.slice(0, 8)}:`, (err as Error).message);
+    }
+  };
+
+  poll();
+  const interval = setInterval(poll, PROXY_POLL_INTERVAL_MS);
+  proxyPollers.set(projectId, interval);
+}
+
+function stopProxyPoller(projectId: string) {
+  const interval = proxyPollers.get(projectId);
+  if (interval) {
+    clearInterval(interval);
+    proxyPollers.delete(projectId);
+    console.log(`[proxy-poll] Stopped proxy poller for project ${projectId.slice(0, 8)}`);
+  }
 }
 
 async function updateThreadStatusAndNotify(threadId: string, status: string) {
@@ -825,12 +904,20 @@ async function handleMessage(client: WsClient, message: unknown) {
           }
         } catch { /* ignore reconciliation errors */ }
         emitTo(client, 'subscribed', { projectId: payload.projectId, sandboxId: project.sandboxId });
+        if (project.provider === 'daytona' && project.sandboxId) {
+          startProxyPoller(payload.projectId, project.sandboxId);
+        }
         break;
       }
       case 'send_prompt': {
         const { threadId, prompt } = payload;
         console.log(`[agent-ws] send_prompt: thread=${threadId?.slice(0, 8)} prompt="${prompt?.slice(0, 60)}"`);
         const thread = await threadsService.findById(threadId);
+        await threadsService.addMessage(threadId, {
+          role: 'user',
+          content: [{ type: 'text', text: prompt }],
+          metadata: null,
+        });
         await ensurePortRelayInit(thread.projectId);
         await executeAgainstSandbox(client, threadId, prompt);
         break;
@@ -1581,8 +1668,8 @@ export const agentWs = new Elysia()
         subs.delete(id);
         if (subs.size === 0) {
           sandboxSubscribers.delete(sandboxId);
-          // If no more clients for this sandbox, we could optionally clean up port relays
-          // For now, we'll keep them active as other clients might reconnect
+          const projectId = sandboxToProjectId.get(sandboxId);
+          if (projectId) stopProxyPoller(projectId);
         }
       }
     },

@@ -227,10 +227,21 @@ export function useAgentSocket(projectId: string | undefined) {
       useProjectsStore.getState().setThreadStatus(data.payload.threadId, resolvedStatus, isOnline);
     });
 
+    ws.on('proxy_sync', (data) => {
+      const { threadId, messages: syncMessages } = data.payload || {};
+      if (!threadId || !Array.isArray(syncMessages)) return;
+      const { messages: currentMessages, activeThreadId } = useThreadsStore.getState();
+      if (threadId !== activeThreadId) return;
+      const existingIds = new Set(currentMessages.map((m: { id: string }) => m.id));
+      for (const msg of syncMessages) {
+        if (existingIds.has(msg.id)) continue;
+        addMessage(msg);
+      }
+    });
+
     ws.on('agent_error', (data) => {
       console.error('[ws] agent_error:', data.payload);
       
-      // Handle errors even when offline (they indicate completion)
       if (data.payload.threadId) {
         updateThreadStatus(data.payload.threadId, 'error', isOnline);
         useProjectsStore.getState().setThreadStatus(data.payload.threadId, 'error', isOnline);

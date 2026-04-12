@@ -90,6 +90,26 @@ export function ThreadView({ threadId, projectId, projectName, threadTitle }: Pr
 
   useEffect(() => () => stopPolling(), [stopPolling]);
 
+  // Background sync: periodically check for new messages and agent status from other clients
+  useEffect(() => {
+    const bgPoll = setInterval(async () => {
+      if (pollRef.current) return;
+      try {
+        const [msgs, status] = await Promise.all([
+          api.threadMessages(threadId),
+          api.promptStatus(threadId),
+        ]);
+        setMessages((prev) => msgs.length !== prev.length ? msgs : prev);
+        if (status.running && agentStatus !== 'running') {
+          msgCountBeforeSend.current = msgs.length;
+          setAgentStatus('running');
+          startPolling();
+        }
+      } catch { /* ignore */ }
+    }, 5000);
+    return () => clearInterval(bgPoll);
+  }, [threadId, agentStatus, startPolling]);
+
   const handleSend = async () => {
     if (!prompt.trim() || sending) return;
     const text = prompt.trim();

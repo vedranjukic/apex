@@ -17,23 +17,42 @@ The proxy sandbox runs two processes:
 | 3000 | `apex-proxy` (Rust) | LLM proxy, MITM secrets, tunnel, port relay |
 | 3001 | `projects-api.js` (Node) | Project/thread/message registry + mobile dashboard SPA |
 
-The desktop app syncs data to port 3001 via fire-and-forget HTTP calls on every project and thread lifecycle event. The mobile dashboard is a static React SPA served from `/app` on the same port.
+Sync is **bidirectional**: the desktop pushes data on every lifecycle event and message, while also pulling missing messages/threads from the proxy when loading data. The mobile dashboard is a static React SPA served from `/app` on the same port.
 
 ## Data Flow
 
-1. **Desktop → Proxy**: On project create/update/delete, thread create/status-change/delete, and agent completion (messages), the desktop API pushes data to the proxy registry
-2. **Proxy → Disk**: The Node script persists to JSON files (`projects.json`, `threads.json`, `messages.json`) on the proxy sandbox
-3. **Mobile → Proxy**: The mobile dashboard fetches from the same API endpoints with Bearer token auth
-4. **Startup sync**: On API startup, all existing Daytona projects and threads are bulk-synced to the proxy
+Sync is **bidirectional** — both the desktop and mobile can create prompts, and each sees the other's activity.
+
+### Desktop → Proxy (push)
+
+On project create/update/delete, thread create/status-change/delete, and every `addMessage` call, the desktop API pushes data to the proxy registry via `ProxyProjectsService`. This happens for all message roles (user, assistant, system), so the webapp sees desktop-initiated agent runs in near real-time.
+
+### Proxy → Desktop (pull)
+
+When the desktop loads thread data (`getMessages`, `findByProject`, `findById`), it imports missing messages and threads from the proxy into the host SQLite DB via `importProxyMessages` / `importProxyThreads` / `syncThreadStatusFromProxy`. A **proxy poller** (5s interval, `startProxyPoller` in `agent.ws.ts`) runs for subscribed Daytona projects and emits `proxy_sync` WebSocket events to desktop clients when new messages appear, enabling live updates without page refresh.
+
+### Mobile → Proxy (direct)
+
+The mobile dashboard sends prompts via `POST /prompts` on the proxy, which connects directly to the project sandbox's bridge WebSocket to run the agent. A 5s background poll on the mobile dashboard detects new messages and agent runs from either source.
+
+### Bridge multi-client
+
+The in-sandbox bridge supports multiple concurrent WebSocket clients (`wsClients` Set + `broadcastWs` helper). Both the desktop orchestrator and the proxy can be connected simultaneously without displacing each other.
+
+### Other flows
+
+- **Proxy → Disk**: The Node script persists to JSON files (`projects.json`, `threads.json`, `messages.json`)
+- **Startup sync**: On API startup, all existing Daytona projects and threads are bulk-synced to the proxy
 
 ## Key Files
 
 | File | Role |
 |------|------|
 | `libs/orchestrator/src/lib/proxy-projects-script.ts` | Self-contained Node script (generated as a string, uploaded to sandbox) |
-| `apps/api/src/modules/llm-proxy/proxy-projects.service.ts` | HTTP client for sync (syncProject, syncThread, syncMessages, etc.) |
+| `apps/api/src/modules/llm-proxy/proxy-projects.service.ts` | HTTP client for bidirectional sync (push: syncProject/Thread/Messages, pull: fetchThread/Messages/ProjectThreads) |
 | `apps/api/src/modules/llm-proxy/proxy-sandbox.service.ts` | Proxy sandbox lifecycle, dashboard upload, URL management |
-| `apps/api/src/modules/tasks/tasks.service.ts` | Thread sync hooks (create, updateStatus, updateTitle, remove) |
+| `apps/api/src/modules/tasks/tasks.service.ts` | Thread sync hooks, proxy import (importProxyMessages, importProxyThreads, syncThreadStatusFromProxy) |
+| `apps/api/src/modules/agent/agent.ws.ts` | Proxy poller (startProxyPoller) emits proxy_sync events to desktop clients |
 | `apps/api/src/modules/projects/projects.service.ts` | Project sync hooks + initial bulk sync |
 | `apps/mobile-dashboard/` | React + Vite + Tailwind mobile SPA |
 | `apps/desktop/src/bun/index.ts` | Passes `MOBILE_DASHBOARD_DIR` env to the API |
