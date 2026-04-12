@@ -64,6 +64,16 @@ Agents are defined in the `AgentType` enum (`libs/shared/src/lib/enums.ts`) and 
 | `apps/cli/internal/sandbox/bridge.go` | Go CLI `sendPrompt()` includes `agent` field |
 | `apps/cli/internal/sandbox/scripts.go` | `GenerateBridgeScript()` accepts `agentType` parameter |
 
+## Connection Resilience
+
+The bridge WebSocket connection between the API (`SandboxManager`) and the in-sandbox bridge is designed to be transparent to the running agent. Key mechanisms:
+
+- **Ping/pong keepalive**: Both sides send RFC 6455 ping frames every 30s; missing pong triggers socket termination and reconnect. The dashboard-to-API link uses app-level `{ type: "ping" }` / `{ type: "pong" }` JSON messages.
+- **Background monitor**: A 15s interval in `SandboxManager` detects disconnections and proactively calls `reconnectSandbox()` without waiting for user activity.
+- **Agent preservation**: Reconnection **never** kills the OpenCode process. `connectWithRetry` checks if the bridge is alive first and only reconnects the WebSocket. If the bridge died, it restarts the bridge Node process with `preserveOpenCode = true`. OpenCode is only killed on explicit `forceFullRestart`.
+- **Session recovery**: The bridge keeps active agent sessions alive when the orchestrator disconnects (`ws.on("close")` clears `state.ws` but doesn't stop polling). On new connection, `recoverSessions()` finds busy OpenCode sessions and resumes `pollSession()`.
+- **Event journal**: All agent events are journaled to disk per thread. The API can `request_replay` with `afterSeq` to backfill missed events after reconnection.
+
 ## Bridge Core Functions
 
 | Function | Role |

@@ -247,6 +247,7 @@ export class SandboxManager extends EventEmitter {
   >();
   private startedAt = new Map<string, number>();
   private reconnectPromises = new Map<string, Promise<void>>();
+  private backgroundMonitors = new Map<string, ReturnType<typeof setInterval>>();
   private projectNames = new Map<string, string>();
   private projectIds = new Map<string, string>();
   private localDirs = new Map<string, string>();
@@ -636,20 +637,32 @@ export class SandboxManager extends EventEmitter {
       await this.ensureSandboxStarted(sandbox);
       log("sandbox started");
 
-      const [previewInfo] = await Promise.all([
-        sandbox.getPreviewLink(BRIDGE_PORT),
-        sandbox.fs
-          .uploadFile(
-            Buffer.from(getBridgeScript(BRIDGE_PORT, session.projectDir, undefined)),
-            `${session.bridgeDir}/bridge.cjs`,
-          )
-          .catch(() => {
-            /* best-effort */
-          }),
-      ]);
-      session.previewUrl = previewInfo.url;
-      session.previewToken = previewInfo.token ?? null;
-      log("got preview URL");
+      // Check if the bridge is already alive before deciding to re-upload.
+      // If it's healthy, skip the upload to avoid unnecessary bridge restarts
+      // and keep the running agent undisturbed.
+      const bridgeAlreadyAlive = await this.quickBridgeCheck(sandbox);
+
+      if (bridgeAlreadyAlive) {
+        const previewInfo = await sandbox.getPreviewLink(BRIDGE_PORT);
+        session.previewUrl = previewInfo.url;
+        session.previewToken = previewInfo.token ?? null;
+        log("bridge alive, skipping re-upload");
+      } else {
+        const [previewInfo] = await Promise.all([
+          sandbox.getPreviewLink(BRIDGE_PORT),
+          sandbox.fs
+            .uploadFile(
+              Buffer.from(getBridgeScript(BRIDGE_PORT, session.projectDir, undefined)),
+              `${session.bridgeDir}/bridge.cjs`,
+            )
+            .catch(() => {
+              /* best-effort */
+            }),
+        ]);
+        session.previewUrl = previewInfo.url;
+        session.previewToken = previewInfo.token ?? null;
+        log("bridge dead, re-uploaded bridge.cjs");
+      }
 
       await this.connectWithRetry(session);
       log("connected");
@@ -833,6 +846,44 @@ export class SandboxManager extends EventEmitter {
     return !!session?.ws && session.ws.readyState === WebSocket.OPEN;
   }
 
+  private static readonly BG_MONITOR_INTERVAL_MS = 15_000;
+  private static readonly BG_MONITOR_RETRY_DELAY_MS = 30_000;
+
+  /**
+   * Start a background monitor that proactively reconnects when the bridge
+   * WebSocket drops, rather than waiting for the next user prompt.
+   */
+  private startBackgroundMonitor(sandboxId: string): void {
+    this.stopBackgroundMonitor(sandboxId);
+    const interval = setInterval(async () => {
+      if (this.isBridgeConnected(sandboxId)) return;
+      const session = this.sessions.get(sandboxId);
+      if (!session || session.status === "completed" || session.status === "error") {
+        this.stopBackgroundMonitor(sandboxId);
+        return;
+      }
+      console.log(`[bg-monitor:${sandboxId.slice(0, 8)}] Bridge disconnected, initiating proactive reconnect`);
+      this.stopBackgroundMonitor(sandboxId);
+      const name = this.projectNames.get(sandboxId);
+      const localDir = this.localDirs.get(sandboxId);
+      try {
+        await this.reconnectSandbox(sandboxId, name, localDir);
+      } catch (err) {
+        console.error(`[bg-monitor:${sandboxId.slice(0, 8)}] Proactive reconnect failed:`, err instanceof Error ? err.message : err);
+        setTimeout(() => this.startBackgroundMonitor(sandboxId), SandboxManager.BG_MONITOR_RETRY_DELAY_MS);
+      }
+    }, SandboxManager.BG_MONITOR_INTERVAL_MS);
+    this.backgroundMonitors.set(sandboxId, interval);
+  }
+
+  private stopBackgroundMonitor(sandboxId: string): void {
+    const timer = this.backgroundMonitors.get(sandboxId);
+    if (timer) {
+      clearInterval(timer);
+      this.backgroundMonitors.delete(sandboxId);
+    }
+  }
+
   /** Request the bridge to replay journaled events for a thread from a given sequence number */
   requestReplay(sandboxId: string, threadId: string, afterSeq = 0): void {
     const session = this.sessions.get(sandboxId);
@@ -850,6 +901,7 @@ export class SandboxManager extends EventEmitter {
    * preserve the old opencode serve (which has stale env vars like proxy URLs).
    */
   forceDisconnect(sandboxId: string): void {
+    this.stopBackgroundMonitor(sandboxId);
     const session = this.sessions.get(sandboxId);
     if (session) {
       session.ws?.close();
@@ -940,6 +992,7 @@ export class SandboxManager extends EventEmitter {
    */
   async deleteSandbox(sandboxId: string): Promise<void> {
     const label = sandboxId.slice(0, 8);
+    this.stopBackgroundMonitor(sandboxId);
     this.sandboxCache.delete(sandboxId);
     this.startedAt.delete(sandboxId);
     this.projectNames.delete(sandboxId);
@@ -978,6 +1031,7 @@ export class SandboxManager extends EventEmitter {
    */
   async stopSandbox(sandboxId: string): Promise<void> {
     const label = sandboxId.slice(0, 8);
+    this.stopBackgroundMonitor(sandboxId);
     this.sandboxCache.delete(sandboxId);
     this.startedAt.delete(sandboxId);
     this.projectNames.delete(sandboxId);
@@ -2107,80 +2161,62 @@ export class SandboxManager extends EventEmitter {
   private async connectWithRetry(session: InternalSession): Promise<void> {
     const sid = session.sandboxId.slice(0, 8);
     const bridgeAlive = await this.quickBridgeCheck(session.sandbox);
-    const isFirstConnect = !session.bridgeSessionId;
+    const flaggedForRestart = this.forceFullRestart.delete(session.sandboxId);
     console.log(
-      `[bridge:${sid}] alive=${bridgeAlive} firstConnect=${isFirstConnect}`,
+      `[bridge:${sid}] alive=${bridgeAlive} forceRestart=${flaggedForRestart}`,
     );
 
-    if (isFirstConnect) {
-      const flaggedForRestart = this.forceFullRestart.delete(session.sandboxId);
-      const isDaytona = this.config.provider === "daytona";
-      const needsFullRestart = flaggedForRestart || isDaytona;
-      const preserveOpenCode = !needsFullRestart;
-      const restartMode = needsFullRestart
-        ? isDaytona && !flaggedForRestart ? 'full restart (daytona — fresh env vars)' : 'full restart (proxy recovery)'
-        : bridgeAlive ? 'soft restart' : 'restart (bridge dead, preserving opencode)';
-      console.log(
-        `[bridge:${sid}] ${restartMode} — first connect${preserveOpenCode ? ', preserving opencode serve' : ''}`,
-      );
-      await this.restartBridge(session, preserveOpenCode);
-      console.log(`[bridge:${sid}] ${restartMode} done, connecting WS`);
-      await this.connectToBridge(session);
-      console.log(`[bridge:${sid}] WS connected after ${restartMode}`);
-      return;
-    }
-
-    if (!bridgeAlive) {
-      console.log(
-        `[bridge:${sid}] restarting bridge (dead)`,
-      );
-      await this.restartBridge(session);
-      console.log(`[bridge:${sid}] bridge restarted, connecting WS`);
-      await this.connectToBridge(session);
-      console.log(`[bridge:${sid}] WS connected after restart`);
-      return;
-    }
-
-    let lastError: Error | null = null;
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        console.log(`[bridge:${sid}] WS connect attempt ${attempt}`);
-        await this.connectToBridge(session);
-        console.log(`[bridge:${sid}] WS connected on attempt ${attempt}`);
-        return;
-      } catch (err) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-        console.log(
-          `[bridge:${sid}] WS attempt ${attempt} failed: ${lastError.message}`,
-        );
-        if (attempt < 2) {
-          try {
-            const previewInfo =
-              await session.sandbox.getPreviewLink(BRIDGE_PORT);
-            session.previewUrl = previewInfo.url;
-            session.previewToken = previewInfo.token ?? null;
-          } catch {
-            /* keep existing */
+    // If bridge is alive and no forced restart, just reconnect the WebSocket.
+    // The agent inside the sandbox is unaffected — we only lost the WS link.
+    if (bridgeAlive && !flaggedForRestart) {
+      let lastError: Error | null = null;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          console.log(`[bridge:${sid}] WS connect attempt ${attempt} (bridge alive)`);
+          await this.connectToBridge(session);
+          console.log(`[bridge:${sid}] WS connected on attempt ${attempt}`);
+          return;
+        } catch (err) {
+          lastError = err instanceof Error ? err : new Error(String(err));
+          console.log(
+            `[bridge:${sid}] WS attempt ${attempt} failed: ${lastError.message}`,
+          );
+          if (attempt < 2) {
+            try {
+              const previewInfo =
+                await session.sandbox.getPreviewLink(BRIDGE_PORT);
+              session.previewUrl = previewInfo.url;
+              session.previewToken = previewInfo.token ?? null;
+            } catch {
+              /* keep existing */
+            }
+            await new Promise((r) => setTimeout(r, 500));
           }
-          await new Promise((r) => setTimeout(r, 500));
         }
       }
+      // WS connect failed despite bridge being alive — restart bridge only,
+      // always preserving the OpenCode agent process.
+      try {
+        console.log(`[bridge:${sid}] WS failed, restarting bridge (preserving opencode)`);
+        await this.restartBridge(session, /* preserveOpenCode */ true);
+        await this.connectToBridge(session);
+        console.log(`[bridge:${sid}] WS connected after bridge-only restart`);
+        return;
+      } catch (err) {
+        console.log(`[bridge:${sid}] final connect failed: ${err}`);
+      }
+      throw lastError || new Error("Failed to connect to bridge");
     }
 
-    try {
-      console.log(
-        `[bridge:${sid}] WS failed, restarting bridge as last resort`,
-      );
-      await this.restartBridge(session);
-      console.log(`[bridge:${sid}] bridge restarted, final WS connect`);
-      await this.connectToBridge(session);
-      console.log(`[bridge:${sid}] WS connected after restart`);
-      return;
-    } catch (err) {
-      console.log(`[bridge:${sid}] final connect failed: ${err}`);
-    }
-
-    throw lastError || new Error("Failed to connect to bridge");
+    // Bridge is dead or forced restart requested.
+    // Only kill OpenCode when explicitly flagged (user-initiated hard restart).
+    const preserveOpenCode = !flaggedForRestart;
+    const restartMode = flaggedForRestart ? 'full restart (forced)' : 'restart (bridge dead, preserving opencode)';
+    console.log(`[bridge:${sid}] ${restartMode}`);
+    await this.restartBridge(session, preserveOpenCode);
+    console.log(`[bridge:${sid}] ${restartMode} done, connecting WS`);
+    await this.connectToBridge(session);
+    console.log(`[bridge:${sid}] WS connected after ${restartMode}`);
   }
 
   /** Quick (non-blocking) check if the bridge HTTP server is responding inside the sandbox */
@@ -2904,11 +2940,28 @@ export class SandboxManager extends EventEmitter {
         reject(new Error("Connection timeout (5s)"));
       }, 5000);
 
+      const PING_INTERVAL_MS = 30_000;
+      const PONG_TIMEOUT_MS = 10_000;
+      let pingTimer: ReturnType<typeof setInterval> | null = null;
+      let pongReceived = true;
+
       ws.on("open", () => {
         clearTimeout(connectTimeout);
         session.status = "connecting";
         this.emit("status", session.sandboxId, "connecting");
+
+        pingTimer = setInterval(() => {
+          if (!pongReceived) {
+            console.log(`[bridge:${session.sandboxId.slice(0, 8)}] No pong received within ${PONG_TIMEOUT_MS / 1000}s, terminating WS`);
+            ws.terminate();
+            return;
+          }
+          pongReceived = false;
+          try { ws.ping(); } catch { /* socket may be closing */ }
+        }, PING_INTERVAL_MS);
       });
+
+      ws.on("pong", () => { pongReceived = true; });
 
       ws.on("message", (data) => {
         try {
@@ -2921,6 +2974,7 @@ export class SandboxManager extends EventEmitter {
             if ((msg as any).threads && typeof (msg as any).threads === "object") {
               this.emit("bridge_threads", session.sandboxId, (msg as any).threads);
             }
+            this.startBackgroundMonitor(session.sandboxId);
             resolve();
           } else if (msg.type === "agent_message") {
             this.handleAgentMessage(session, msg.data);
@@ -2977,11 +3031,11 @@ export class SandboxManager extends EventEmitter {
       });
 
       ws.on("close", (code) => {
+        if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
         if (session.status !== "completed" && session.status !== "error") {
-          session.status = "error";
-          session.error = `Disconnected (code: ${code})`;
-          session.endTime = Date.now();
-          this.emit("status", session.sandboxId, "error", session.error);
+          session.status = "disconnected";
+          session.error = `WS closed (code: ${code})`;
+          this.emit("status", session.sandboxId, "disconnected", session.error);
         }
       });
 
