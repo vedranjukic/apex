@@ -42,7 +42,7 @@ export interface ProxySandboxInfo {
 }
 
 // Bump this when the combined proxy service script changes to force recreation
-const PROXY_SCRIPT_VERSION = '38';
+const PROXY_SCRIPT_VERSION = '39';
 
 function hashKeys(anthropicKey: string, openaiKey: string): string {
   return crypto
