@@ -11,7 +11,9 @@
           "command": "npx vite build",
           "cwd": "apps/mobile-dashboard"
         },
-        "outputs": ["{projectRoot}/dist"]
+        "outputs": [
+          "{projectRoot}/dist"
+        ]
       }
     }
   },

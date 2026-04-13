@@ -1,5 +1,5 @@
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
-import { relations } from 'drizzle-orm';
+import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { relations, sql } from 'drizzle-orm';
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
@@ -104,14 +104,29 @@ export const secrets = sqliteTable('secrets', {
   id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   projectId: text('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+  repositoryId: text('repository_id'), // GitHub repository in "owner/repo" format
   name: text('name').notNull(),
   value: text('value').notNull(),
   domain: text('domain').notNull(),
   authType: text('auth_type').notNull().default('bearer'),
+  isSecret: integer('is_secret', { mode: 'boolean' }).notNull().default(true), // true for secrets, false for env vars
   description: text('description'),
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()).$onUpdateFn(() => new Date().toISOString()),
-});
+}, (table) => ({
+  // Index for efficient lookup by user and repository
+  userRepositoryIdx: index('secrets_user_repository_idx').on(table.userId, table.repositoryId),
+  // Index for efficient lookup by user and project (backward compatibility)
+  userProjectIdx: index('secrets_user_project_idx').on(table.userId, table.projectId),
+  // Index for efficient lookup by repository
+  repositoryIdx: index('secrets_repository_idx').on(table.repositoryId),
+  // Index for efficient filtering by secret type
+  isSecretIdx: index('secrets_is_secret_idx').on(table.isSecret),
+  // Unique constraints for different scopes
+  uniqueGlobal: uniqueIndex('secrets_unique_global').on(table.userId, table.name).where(sql`project_id IS NULL AND repository_id IS NULL`),
+  uniqueProject: uniqueIndex('secrets_unique_project').on(table.userId, table.projectId, table.name).where(sql`project_id IS NOT NULL AND repository_id IS NULL`),
+  uniqueRepository: uniqueIndex('secrets_unique_repository').on(table.userId, table.repositoryId, table.name).where(sql`repository_id IS NOT NULL`),
+}));
 
 export const secretsRelations = relations(secrets, ({ one }) => ({
   user: one(users, { fields: [secrets.userId], references: [users.id] }),

@@ -2,9 +2,12 @@ import { useState, useEffect, useRef, useCallback, FormEvent } from 'react';
 import { X, Cloud, Container, Laptop, FolderOpen, FolderSearch, GitBranch, CircleDot, GitPullRequest, Loader2, Settings } from 'lucide-react';
 import { useProjectsStore } from '../../stores/projects-store';
 import { configApi, githubApi, type ProviderStatus, type GitHubResolveResult, type GitHubContextData } from '../../api/client';
+import { parseGitHubUrl } from '@apex/shared';
 import { cn } from '../../lib/cn';
 import { FolderBrowser } from './folder-browser';
 import { AdvancedSettingsPanel, type AdvancedSettings, DEFAULT_SETTINGS } from './advanced-settings-panel';
+import { RepositorySettingsPreview } from './repository-settings-preview';
+import { useRepositorySecrets } from '../../hooks/use-repository-secrets';
 
 interface Props {
   open: boolean;
@@ -103,6 +106,10 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [advancedSettings, setAdvancedSettings] = useState<AdvancedSettings>(DEFAULT_SETTINGS);
 
+  // Repository secrets state
+  const [repositoryId, setRepositoryId] = useState<string | null>(null);
+  const repositorySecrets = useRepositorySecrets(repositoryId);
+
   useEffect(() => {
     if (!open) return;
     nameManuallyEdited.current = false;
@@ -127,11 +134,21 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
       setResolved(null);
       setResolveError(null);
       setResolving(false);
+      setRepositoryId(null);
       lastResolvedUrl.current = '';
       return;
     }
 
     if (trimmed === lastResolvedUrl.current) return;
+
+    // Parse the GitHub URL to extract repository ID for secrets lookup
+    const parsed = parseGitHubUrl(trimmed);
+    if (parsed) {
+      const repoId = `${parsed.owner}/${parsed.repo}`;
+      setRepositoryId(repoId);
+    } else {
+      setRepositoryId(null);
+    }
 
     setResolving(true);
     setResolveError(null);
@@ -248,6 +265,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
       setAutoStart(true);
       setResolved(null);
       setResolveError(null);
+      setRepositoryId(null);
       lastResolvedUrl.current = '';
       nameManuallyEdited.current = false;
       setShowAdvanced(false);
@@ -388,6 +406,18 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
 
             {resolved && !resolving && (
               <GitHubResolvePreview result={resolved} />
+            )}
+
+            {/* Repository Settings Preview */}
+            {repositoryId && (
+              <RepositorySettingsPreview
+                repositoryId={repositoryId}
+                secrets={repositorySecrets.secrets}
+                environmentVariables={repositorySecrets.environmentVariables}
+                isLoading={repositorySecrets.isLoading}
+                error={repositorySecrets.error}
+                className="mt-2"
+              />
             )}
 
             {!resolved && !resolving && !resolveError && (

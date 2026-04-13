@@ -100,3 +100,43 @@ export interface IMergeStatusData {
   last_checked: string;
   pr_state: 'open' | 'closed' | 'merged';
 }
+
+// ── Secrets ──────────────────────────────────────────
+export interface ISecret {
+  id: string;
+  userId: string;
+  projectId: string | null;
+  repositoryId: string | null; // GitHub repository in "owner/repo" format
+  name: string;
+  value: string;
+  domain: string;
+  authType: string;
+  isSecret: boolean; // true for secrets, false for environment variables
+  description: string | null;
+  createdAt: string; // ISO-8601
+  updatedAt: string; // ISO-8601
+}
+
+export interface ISecretListItem {
+  id: string;
+  name: string;
+  domain: string;
+  authType: string;
+  isSecret: boolean;
+  description: string | null;
+  projectId: string | null;
+  repositoryId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ICreateSecretInput {
+  name: string;
+  value: string;
+  domain: string;
+  authType?: string;
+  isSecret?: boolean;
+  description?: string;
+  projectId?: string | null;
+  repositoryId?: string | null;
+}

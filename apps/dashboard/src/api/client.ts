@@ -186,8 +186,10 @@ export interface Secret {
   name: string;
   domain: string;
   authType: string;
+  isSecret: boolean; // true for secrets, false for environment variables
   description: string | null;
   projectId: string | null;
+  repositoryId: string | null; // GitHub repository in "owner/repo" format
   createdAt: string;
   updatedAt: string;
 }
@@ -197,13 +199,20 @@ export interface CreateSecretInput {
   value: string;
   domain: string;
   authType?: string;
+  isSecret?: boolean;
   description?: string;
   projectId?: string | null;
+  repositoryId?: string | null;
 }
 
 export const secretsApi = {
-  list: (projectId?: string) =>
-    request<Secret[]>(`/secrets${projectId ? `?projectId=${projectId}` : ''}`),
+  list: (projectId?: string, repositoryId?: string) => {
+    const params = new URLSearchParams();
+    if (projectId) params.append('projectId', projectId);
+    if (repositoryId) params.append('repositoryId', repositoryId);
+    const query = params.toString();
+    return request<Secret[]>(`/secrets${query ? `?${query}` : ''}`);
+  },
   create: (data: CreateSecretInput) =>
     request<Secret>('/secrets', {
       method: 'POST',
@@ -277,4 +286,20 @@ export const threadsApi = {
     }),
   fork: (id: string) =>
     request<Thread>(`/threads/${id}/fork`, { method: 'POST' }),
+};
+
+// ── Repositories ─────────────────────────────────────────
+export interface RepositoryInfo {
+  repositoryId: string;
+  secretCount: number;
+  envVarCount: number;
+  totalCount: number;
+  projectCount: number;
+  lastModified: string;
+}
+
+export const repositoriesApi = {
+  list: () => request<RepositoryInfo[]>('/repositories'),
+  delete: (repositoryId: string) =>
+    request<{ ok: boolean }>(`/repositories/${encodeURIComponent(repositoryId)}`, { method: 'DELETE' }),
 };

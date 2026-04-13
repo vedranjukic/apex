@@ -289,6 +289,11 @@ export class SandboxManager extends EventEmitter {
         config.secretsProxyBaseUrl ||
         process.env["API_BASE_URL"] ||
         `http://localhost:${process.env["PORT"] || "3000"}`,
+      getContextSecrets: config.getContextSecrets || (() => {
+        // Default implementation: treat all secretPlaceholders as secrets
+        const secrets = Object.keys(config.secretPlaceholders || {});
+        return { envVars: {}, secrets };
+      }),
     };
   }
 
@@ -356,11 +361,58 @@ export class SandboxManager extends EventEmitter {
   }
 
   /**
+   * Hot-update secrets configuration for a specific project/repository context.
+   * This allows updating secrets without restarting sandboxes.
+   */
+  updateContextSecrets(projectId?: string, repositoryId?: string): void {
+    if (!this.config.getContextSecrets) return;
+
+    try {
+      const contextSecrets = this.config.getContextSecrets(projectId, repositoryId);
+      
+      for (const [sid, session] of this.sessions) {
+        // Check if this session matches the context
+        const sessionProjectId = this.projectIds.get(sid);
+        const sessionRepositoryId = this.getSessionRepositoryId(sid);
+        
+        const matchesContext = 
+          (!projectId && !repositoryId) || // global update
+          (projectId && sessionProjectId === projectId) ||
+          (repositoryId && sessionRepositoryId === repositoryId);
+          
+        if (matchesContext && session.ws?.readyState === WebSocket.OPEN) {
+          try {
+            session.ws.send(JSON.stringify({
+              type: "update_context_secrets",
+              projectId,
+              repositoryId,
+              envVars: contextSecrets.envVars,
+              secretNames: contextSecrets.secrets,
+            }));
+            console.log(`[sandbox-mgr] Sent context secrets update to bridge ${sid.slice(0, 8)} (${contextSecrets.secrets.length} secrets, ${Object.keys(contextSecrets.envVars).length} env vars)`);
+          } catch { /* best-effort */ }
+        }
+      }
+    } catch (error) {
+      console.warn('[sandbox-mgr] Failed to update context secrets:', error);
+    }
+  }
+
+  /**
+   * Get repository ID for a session based on project's git repo URL.
+   */
+  private getSessionRepositoryId(sandboxId: string): string | undefined {
+    // This would need to be enhanced to store and retrieve repository context
+    // For now, return undefined as we don't have this information readily available
+    return undefined;
+  }
+
+  /**
    * Build env vars to inject into the container/sandbox at creation time.
    * Used for Docker, Apple Container, and Daytona providers.
    * Local provider ignores env vars (user manages their own environment).
    */
-  private buildContainerEnvVars(): Record<string, string> {
+  private buildContainerEnvVars(projectId?: string, repositoryId?: string): Record<string, string> {
     const proxyBase = resolveProxyBaseUrl(this.config.proxyBaseUrl, this.config.provider);
     const useProxy = !!proxyBase;
     const envVars: Record<string, string> = {};
@@ -390,9 +442,18 @@ export class SandboxManager extends EventEmitter {
     const secretsProxyUrl = resolveSecretsProxyUrl(
       this.config.secretsProxyBaseUrl, this.config.provider, this.config.secretsProxyPort,
     );
+
+    // Get context-specific secrets (environment variables + secrets)
+    const contextSpecificSecrets = this.config.getContextSecrets ? 
+      this.config.getContextSecrets(projectId, repositoryId) : 
+      { envVars: {}, secrets: Object.keys(this.config.secretPlaceholders || {}) };
+
+    // Apply environment variables directly to container env
+    Object.assign(envVars, contextSpecificSecrets.envVars);
+
     // Only enable the secrets proxy when there are secrets or a GitHub token
     // to intercept. Without any secrets, HTTPS_PROXY adds overhead for no benefit.
-    const hasSecretsToProxy = Object.keys(this.config.secretPlaceholders).length > 0 || !!this.config.githubToken;
+    const hasSecretsToProxy = contextSpecificSecrets.secrets.length > 0 || !!this.config.githubToken;
     const secretsProxyReachable = isDaytona ? useProxy : !!secretsProxyUrl;
     const secretsProxyAvailable = hasSecretsToProxy && secretsProxyReachable;
 
@@ -437,8 +498,12 @@ export class SandboxManager extends EventEmitter {
       envVars["GH_TOKEN"] = "ghp_proxy0placeholder0000000000000000000";
     }
 
-    for (const [name, placeholder] of Object.entries(this.config.secretPlaceholders)) {
-      envVars[name] = placeholder;
+    // Add placeholders for secrets that need MITM proxy interception
+    for (const secretName of contextSpecificSecrets.secrets) {
+      const placeholder = this.config.secretPlaceholders?.[secretName];
+      if (placeholder) {
+        envVars[secretName] = placeholder;
+      }
     }
 
     return envVars;
@@ -456,12 +521,13 @@ export class SandboxManager extends EventEmitter {
     gitBranch?: string,
     createBranch?: string,
     advancedSettings?: { customImage?: string; environmentVariables?: Record<string, string>; memoryMB?: number; cpus?: number; diskGB?: number; } | null,
+    repositoryId?: string,
   ): Promise<string> {
     if (!this.provider) throw new Error("SandboxManager not initialized");
 
     let envVars: Record<string, string> | undefined;
     if (this.config.provider !== "local") {
-      envVars = this.buildContainerEnvVars();
+      envVars = this.buildContainerEnvVars(projectId, repositoryId);
       // Merge custom environment variables, but never allow overriding LLM key
       // placeholders — real keys must never enter sandbox environments.
       if (advancedSettings?.environmentVariables) {

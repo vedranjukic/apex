@@ -63,6 +63,8 @@ async fn run_proxy_mode() {
         proxy_port = config.proxy_port,
         port_relay_port = config.port_relay_port,
         secrets_count = config.secrets_count(),
+        env_vars_count = config.env_vars_count(),
+        total_items = config.total_items_count(),
         "starting apex-proxy"
     );
 

@@ -446,6 +446,14 @@ export interface OrchestratorConfig {
   /** Domains that have secrets configured. The bridge's selective proxy will
    *  route only these domains through the upstream MITM proxy. */
   secretDomains?: string[];
+  /** Callback to get context-specific secrets and environment variables.
+   *  Returns { envVars: Record<string, string>, secrets: string[] } where:
+   *  - envVars: Environment variables to inject directly into container
+   *  - secrets: Secret names that need MITM proxy interception */
+  getContextSecrets?: (projectId?: string, repositoryId?: string) => {
+    envVars: Record<string, string>;
+    secrets: string[];
+  };
   /** Memory allocation in MB for container sandboxes. Defaults to 4096 (4 GB). */
   memoryMB?: number;
   /** Number of CPU cores for container sandboxes. */

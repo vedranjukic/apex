@@ -79,15 +79,25 @@ sqlite.exec(`
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    repository_id TEXT,
     name TEXT NOT NULL,
     value TEXT NOT NULL,
     domain TEXT NOT NULL,
     auth_type TEXT NOT NULL DEFAULT 'bearer',
+    is_secret INTEGER NOT NULL DEFAULT 1,
     description TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(user_id, project_id, name)
+    updated_at TEXT NOT NULL
   );
+  CREATE UNIQUE INDEX IF NOT EXISTS secrets_unique_global 
+    ON secrets(user_id, name) 
+    WHERE project_id IS NULL AND repository_id IS NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS secrets_unique_project 
+    ON secrets(user_id, project_id, name) 
+    WHERE project_id IS NOT NULL AND repository_id IS NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS secrets_unique_repository 
+    ON secrets(user_id, repository_id, name) 
+    WHERE repository_id IS NOT NULL;
 `);
 
 // ── Auto-sync schema ────────────────────────────────────────────────
@@ -134,3 +144,18 @@ for (const table of drizzleTables) {
 }
 
 export const db = drizzle(sqlite, { schema });
+
+// Run migrations on database initialization asynchronously
+// Note: We don't await this to avoid blocking the module initialization
+async function initMigrations() {
+  try {
+    const { runMigrations } = await import('./migrations/migration-runner');
+    await runMigrations(sqlite);
+  } catch (error) {
+    console.error('[db] Migration failed:', error);
+    // Don't crash the application, but log the error
+    // In production, you might want to fail fast instead
+  }
+}
+
+initMigrations();

@@ -1,0 +1,42 @@
+{
+  "passed": 0,
+  "failed": 6,
+  "tests": [
+    {
+      "name": "MIGRATION_EXECUTION",
+      "passed": false,
+      "message": "Database not available (need Bun runtime)",
+      "timestamp": "2026-04-13T20:38:28.245Z"
+    },
+    {
+      "name": "RESOLUTION_TESTS",
+      "passed": false,
+      "message": "Database not available (need Bun runtime)",
+      "timestamp": "2026-04-13T20:38:28.246Z"
+    },
+    {
+      "name": "API_TESTS",
+      "passed": false,
+      "message": "API server not available: connect ECONNREFUSED 127.0.0.1:6000",
+      "timestamp": "2026-04-13T20:38:28.262Z"
+    },
+    {
+      "name": "PROXY_INTEGRATION",
+      "passed": false,
+      "message": "Proxy tests failed: Cannot find module '/home/daytona/feature-per-repository-secrets-and-envir-2/apps/api/src/database/db' imported from /home/daytona/feature-per-repository-secrets-and-envir-2/apps/api/src/modules/secrets/secrets.service.ts",
+      "timestamp": "2026-04-13T20:38:28.467Z"
+    },
+    {
+      "name": "EDGE_CASE_TESTS",
+      "passed": false,
+      "message": "Database not available (need Bun runtime)",
+      "timestamp": "2026-04-13T20:38:28.467Z"
+    },
+    {
+      "name": "VALIDATION_SCENARIOS",
+      "passed": false,
+      "message": "Validation failed: Cannot find module '/home/daytona/feature-per-repository-secrets-and-envir-2/apps/api/src/database/db' imported from /home/daytona/feature-per-repository-secrets-and-envir-2/apps/api/src/modules/secrets/secrets.service.ts",
+      "timestamp": "2026-04-13T20:38:28.469Z"
+    }
+  ]
+}
