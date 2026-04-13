@@ -46,6 +46,8 @@ export interface RepositoryInfo {
   secretCount: number;
   envVarCount: number;
   totalCount: number;
+  projectCount: number;
+  lastModified?: string;
 }
 
 class SecretsService {
@@ -98,12 +100,41 @@ class SecretsService {
    * Returns repository IDs with counts of secrets and environment variables
    */
   async listRepositories(userId: string): Promise<RepositoryInfo[]> {
-    const rows = await db
+    // Get all repositories from projects
+    const { projects } = await import('../../database/schema');
+    const { parseGitHubUrl } = await import('@apex/shared');
+    
+    const userProjects = await db.select().from(projects).where(eq(projects.userId, userId));
+    
+    // Extract unique repository IDs from projects
+    const projectRepositories = new Map<string, { repositoryId: string; projectCount: number }>();
+    
+    for (const project of userProjects) {
+      if (project.gitRepo) {
+        try {
+          const parsed = parseGitHubUrl(project.gitRepo);
+          if (parsed?.owner && parsed?.repo) {
+            const repositoryId = `${parsed.owner}/${parsed.repo}`;
+            const existing = projectRepositories.get(repositoryId);
+            projectRepositories.set(repositoryId, {
+              repositoryId,
+              projectCount: (existing?.projectCount || 0) + 1,
+            });
+          }
+        } catch {
+          // Ignore invalid git URLs
+        }
+      }
+    }
+
+    // Get secret counts and last modified for repositories that have secrets
+    const secretCounts = await db
       .select({
         repositoryId: secrets.repositoryId,
         secretCount: sql<number>`count(case when ${secrets.isSecret} = true then 1 end)`,
         envVarCount: sql<number>`count(case when ${secrets.isSecret} = false then 1 end)`,
         totalCount: count(),
+        lastModified: sql<string>`max(${secrets.updatedAt})`,
       })
       .from(secrets)
       .where(and(
@@ -112,12 +143,45 @@ class SecretsService {
       ))
       .groupBy(secrets.repositoryId);
 
-    return rows.map(row => ({
-      repositoryId: row.repositoryId!,
-      secretCount: Number(row.secretCount) || 0,
-      envVarCount: Number(row.envVarCount) || 0,
-      totalCount: Number(row.totalCount) || 0,
-    }));
+    const secretMap = new Map(
+      secretCounts.map(row => [row.repositoryId!, {
+        secretCount: Number(row.secretCount) || 0,
+        envVarCount: Number(row.envVarCount) || 0,
+        totalCount: Number(row.totalCount) || 0,
+        lastModified: row.lastModified,
+      }])
+    );
+
+    // Combine project repositories with secret counts
+    const result: RepositoryInfo[] = [];
+    
+    for (const [repositoryId, info] of projectRepositories) {
+      const secretInfo = secretMap.get(repositoryId) || { secretCount: 0, envVarCount: 0, totalCount: 0, lastModified: undefined };
+      result.push({
+        repositoryId,
+        secretCount: secretInfo.secretCount,
+        envVarCount: secretInfo.envVarCount,
+        totalCount: secretInfo.totalCount,
+        projectCount: info.projectCount,
+        lastModified: secretInfo.lastModified,
+      });
+    }
+
+    // Also include repositories that have secrets but no active projects
+    for (const [repositoryId, secretInfo] of secretMap) {
+      if (!projectRepositories.has(repositoryId)) {
+        result.push({
+          repositoryId,
+          secretCount: secretInfo.secretCount,
+          envVarCount: secretInfo.envVarCount,
+          totalCount: secretInfo.totalCount,
+          projectCount: 0,
+          lastModified: secretInfo.lastModified,
+        });
+      }
+    }
+
+    return result.sort((a, b) => a.repositoryId.localeCompare(b.repositoryId));
   }
 
   /**

@@ -295,7 +295,7 @@ export interface RepositoryInfo {
   envVarCount: number;
   totalCount: number;
   projectCount: number;
-  lastModified: string;
+  lastModified?: string;
 }
 
 export const repositoriesApi = {

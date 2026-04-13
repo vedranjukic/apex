@@ -88,6 +88,9 @@ export function RepositoriesPage() {
                 Manage repository-scoped secrets and environment variables.
                 These are available to all projects that use the same GitHub repository.
               </p>
+              <p className="text-xs text-text-muted mt-1">
+                Repositories are automatically discovered from your projects' Git URLs.
+              </p>
             </div>
           </div>
 
@@ -95,10 +98,10 @@ export function RepositoriesPage() {
             {repositories.length === 0 ? (
               <div className="text-center py-12 text-text-muted">
                 <Package className="w-10 h-10 mx-auto mb-3 opacity-40" />
-                <p className="text-sm">No repositories with secrets configured yet.</p>
+                <p className="text-sm">No repositories found.</p>
                 <p className="text-xs mt-1">
-                  Secrets will appear here when you configure repository-scoped secrets
-                  from individual project pages.
+                  Create projects from GitHub repositories to see them here,
+                  then you can configure repository-scoped secrets.
                 </p>
               </div>
             ) : (
@@ -151,7 +154,7 @@ export function RepositoriesPage() {
                       className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-primary text-on-primary hover:bg-primary-hover transition-colors"
                     >
                       <Settings className="w-4 h-4" />
-                      Manage
+                      {repository.totalCount > 0 ? 'Manage' : 'Add Secrets'}
                     </button>
                     <button
                       onClick={() => handleDeleteRepository(repository.repositoryId)}
