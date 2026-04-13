@@ -385,6 +385,13 @@ export function ProjectList({ onOpenProject, onSelectThread, onNewThread, active
                   <Shield className="w-4 h-4" />
                 </button>
                 <button
+                  onClick={() => navigate('/repositories')}
+                  className="p-2 rounded-lg hover:bg-surface-secondary text-text-secondary hover:text-text-primary transition-colors"
+                  title="Repositories"
+                >
+                  <GitBranch className="w-4 h-4" />
+                </button>
+                <button
                   ref={settingsBtnRef}
                   onClick={() => navigate('/settings')}
                   className="p-2 rounded-lg hover:bg-surface-secondary text-text-secondary hover:text-text-primary transition-colors"

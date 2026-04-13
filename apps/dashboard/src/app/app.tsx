@@ -3,6 +3,7 @@ import { HomePage } from '../pages/home-page';
 import { ProjectPage } from '../pages/project-page';
 import { SettingsPage } from '../pages/settings';
 import { SecretsPage } from '../pages/secrets-page';
+import { RepositoriesPage } from '../pages/repositories-page';
 import { MergeStatusDemoPage } from '../pages/merge-status-demo-page';
 import { useGlobalCommands } from '../hooks/use-global-commands';
 
@@ -21,6 +22,8 @@ export function App() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/:category" element={<SettingsPage />} />
         <Route path="/secrets" element={<SecretsPage />} />
+        <Route path="/repositories" element={<RepositoriesPage />} />
+        <Route path="/repositories/:repositoryId/secrets" element={<SecretsPage />} />
         <Route path="/merge-status-demo" element={<MergeStatusDemoPage />} />
         <Route path="/projects/:projectId" element={<ProjectPageKeyed />} />
       </Routes>
