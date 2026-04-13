@@ -491,6 +491,25 @@ async function executeAgainstSandbox(
     const prev = activeTimeouts.get(threadId);
     if (prev) clearTimeout(prev);
     const timer = setTimeout(async () => {
+      // After laptop sleep, the bridge may have reconnected in the
+      // background. Before erroring, check if the bridge is alive and
+      // the agent is still running — if so, recover via replay.
+      if (!manager.isBridgeConnected(project.sandboxId!)) {
+        try {
+          console.log(`[agent-ws] Timeout fired but bridge disconnected for ${threadId.slice(0, 8)}, attempting reconnect before error`);
+          const dirName = await resolveDirName(project);
+          await manager.reconnectSandbox(project.sandboxId!, dirName, project.localDir || undefined);
+        } catch { /* will fall through to retry/error below */ }
+      }
+      if (manager.isBridgeConnected(project.sandboxId!)) {
+        console.log(`[agent-ws] Bridge alive after timeout for ${threadId.slice(0, 8)}, requesting replay instead of erroring`);
+        const afterSeq = lastSeenSeq.get(threadId) || 0;
+        manager.requestReplay(project.sandboxId!, threadId, afterSeq);
+        startHealthCheck();
+        resetTimeout(AGENT_ACTIVITY_TIMEOUT_MS);
+        return;
+      }
+
       if (retryCount < 1) {
         retryCount++;
         emitToSubscribers(project.sandboxId!, 'agent_status', { threadId, status: 'retrying' });
@@ -560,12 +579,11 @@ async function executeAgainstSandbox(
             startHealthCheck();
             resetTimeout(AGENT_ACTIVITY_TIMEOUT_MS);
           } catch (err) {
-            console.error(`[agent-ws] Reconnect failed for ${threadId.slice(0, 8)} after grace:`, err);
+            // Don't immediately error — the background monitor may still
+            // reconnect. Clean up the handler silently and let
+            // reconcileAndReconnect handle recovery on the next subscribe.
+            console.warn(`[agent-ws] Reconnect failed for ${threadId.slice(0, 8)} after grace, deferring to next subscribe:`, err instanceof Error ? err.message : err);
             cleanupHandler();
-            await updateThreadStatusAndNotify(threadId, 'error');
-            emitToSubscribers(project.sandboxId!, 'agent_error', {
-              threadId, error: 'Lost connection to sandbox and could not reconnect.',
-            });
           }
         }, RECONNECT_GRACE_MS);
         activeTimeouts.set(threadId, graceTimer);
@@ -1538,6 +1556,24 @@ async function reconcileAndReconnect(
   client: WsClient,
 ) {
   try {
+    // Clean up stale active handlers from before sleep/disconnect.
+    // Their timeouts would fire with stale state; recovery will be
+    // handled by bridge_threads / running_sessions after reconnect.
+    const projectThreads = await threadsService.findByProject(projectId);
+    for (const t of projectThreads) {
+      const staleHandler = activeHandlers.get(t.id);
+      if (staleHandler) {
+        const manager = projectsService.getSandboxManager(_project.provider);
+        if (manager) manager.removeListener('message', staleHandler);
+        activeHandlers.delete(t.id);
+        const timer = activeTimeouts.get(t.id);
+        if (timer) { clearTimeout(timer); activeTimeouts.delete(t.id); }
+        const hc = activeHealthChecks.get(t.id);
+        if (hc) { clearInterval(hc); activeHealthChecks.delete(t.id); }
+        console.log(`[agent-ws] Cleaned up stale handler for thread ${t.id.slice(0, 8)} during reconnect`);
+      }
+    }
+
     const reconciled = await projectsService.reconcileSandboxStatus(projectId);
     if (reconciled.status === 'error') {
       emitTo(client, 'project_updated', reconciled);
