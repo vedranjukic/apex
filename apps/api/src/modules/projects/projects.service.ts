@@ -173,9 +173,12 @@ class ProjectsService {
     this.currentEnvironmentVariables = environmentVariables;
     
     // Pre-populate cache for all known repositories to avoid empty values during startup
-    this.prePopulateRepositoryCaches().catch(err => {
-      console.warn('[projects] Failed to pre-populate repository caches:', err);
-    });
+    // Skip during e2e tests to avoid potential async issues
+    if (process.env.APEX_E2E_TEST !== '1') {
+      this.prePopulateRepositoryCaches().catch(err => {
+        console.warn('[projects] Failed to pre-populate repository caches:', err);
+      });
+    }
 
     let gitUserName = '';
     let gitUserEmail = '';
