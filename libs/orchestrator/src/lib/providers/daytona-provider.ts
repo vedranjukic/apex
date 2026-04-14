@@ -265,17 +265,21 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   async create(params: CreateSandboxParams): Promise<SandboxInstance> {
     if (!this.daytona) throw new Error("DaytonaSandboxProvider not initialized");
     const daytona = this.daytona;
+    const CREATION_TIMEOUT_SECS = 120;
     const sandbox = await limiter.run(() =>
-      daytona.create({
-        snapshot: params.snapshot,
-        autoStopInterval: params.autoStopInterval ?? 0,
-        autoDeleteInterval: params.autoDeleteInterval ?? -1,
-        autoArchiveInterval: params.autoArchiveInterval ?? 0,
-        envVars: params.envVars,
-        labels: params.labels,
-        name: params.name,
-        public: params.public,
-      }),
+      daytona.create(
+        {
+          snapshot: params.snapshot,
+          autoStopInterval: params.autoStopInterval ?? 0,
+          autoDeleteInterval: params.autoDeleteInterval ?? -1,
+          autoArchiveInterval: params.autoArchiveInterval ?? 0,
+          envVars: params.envVars,
+          labels: params.labels,
+          name: params.name,
+          public: params.public,
+        },
+        { timeout: CREATION_TIMEOUT_SECS },
+      ),
     );
     return new DaytonaSandboxInstance(sandbox);
   }

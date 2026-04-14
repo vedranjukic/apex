@@ -1,4 +1,4 @@
-import { eq, or, isNull, isNotNull, and, asc, desc, sql } from 'drizzle-orm';
+import { eq, or, isNull, isNotNull, and, asc, desc, sql, inArray } from 'drizzle-orm';
 import { execFile as execFileCb } from 'child_process';
 import { db } from '../../database/db';
 import { projects, tasks } from '../../database/schema';
@@ -40,12 +40,41 @@ class ProjectsService {
   private providerStatuses: ProviderStatus[] = [];
   private autoStartHandler: AutoStartHandler | null = null;
   async init() {
+    await this.recoverStaleCreatingProjects();
     await this.initSandboxManagers();
     // Pre-warm bridge connections (non-destructive -- no session clearing)
     if (this.sandboxManagers.has('daytona')) {
       this.initDaytonaBridgeConnections().catch((err) => {
         console.warn('[projects] Bridge reconnection failed (non-fatal):', err);
       });
+    }
+  }
+
+  /**
+   * On startup, any project stuck in 'creating' or 'starting' has no
+   * in-flight promise to finish the job.  Mark them as errors so the
+   * user can retry instead of staring at a spinner forever.
+   */
+  private async recoverStaleCreatingProjects(): Promise<void> {
+    try {
+      const stale = await db.query.projects.findMany({
+        where: and(
+          isNull(projects.deletedAt),
+          inArray(projects.status, ['creating', 'starting']),
+        ),
+      });
+      if (stale.length === 0) return;
+      console.log(`[projects] Recovering ${stale.length} project(s) stuck in creating/starting`);
+      for (const p of stale) {
+        await db.update(projects).set({
+          status: 'error',
+          statusError: 'Server restarted while sandbox was being provisioned. Click start to retry.',
+        }).where(eq(projects.id, p.id));
+        projectsWsBroadcast('project_updated', await this.findById(p.id));
+        console.log(`[projects]   → ${p.name} (${p.id}): creating → error`);
+      }
+    } catch (err) {
+      console.warn('[projects] Failed to recover stale creating projects:', err);
     }
   }
 
@@ -926,18 +955,18 @@ class ProjectsService {
     localDir?: string, gitBranch?: string, createBranch?: string,
     sandboxConfig?: { customImage?: string; environmentVariables?: Record<string, string>; memoryMB?: number; cpus?: number; diskGB?: number; } | null,
   ): Promise<void> {
-    if (!(await this.ensureSandboxManager(provider))) {
-      await db.update(projects).set({ status: 'stopped' }).where(eq(projects.id, projectId));
-      projectsWsBroadcast('project_updated', await this.findById(projectId));
-      return;
-    }
-    if (provider === 'daytona') await this.ensureDaytonaProxy();
-    const manager = this.sandboxManagers.get(provider)!;
-    const onStatusChange = async (status: string) => {
-      await db.update(projects).set({ status }).where(eq(projects.id, projectId));
-      projectsWsBroadcast('project_updated', await this.findById(projectId));
-    };
     try {
+      if (!(await this.ensureSandboxManager(provider))) {
+        await db.update(projects).set({ status: 'stopped' }).where(eq(projects.id, projectId));
+        projectsWsBroadcast('project_updated', await this.findById(projectId));
+        return;
+      }
+      if (provider === 'daytona') await this.ensureDaytonaProxy();
+      const manager = this.sandboxManagers.get(provider)!;
+      const onStatusChange = async (status: string) => {
+        await db.update(projects).set({ status }).where(eq(projects.id, projectId));
+        projectsWsBroadcast('project_updated', await this.findById(projectId));
+      };
       const sandboxId = await manager.createSandbox(
         snapshot, projectName, gitRepo || undefined, agentType, projectId, onStatusChange, localDir, gitBranch, createBranch, sandboxConfig,
       );
@@ -948,8 +977,13 @@ class ProjectsService {
       await this.triggerAutoStart(readyProject);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await db.update(projects).set({ status: 'error', statusError: message }).where(eq(projects.id, projectId));
-      projectsWsBroadcast('project_updated', await this.findById(projectId));
+      console.error(`[projects] provisionSandbox failed for ${projectId}:`, message);
+      try {
+        await db.update(projects).set({ status: 'error', statusError: message }).where(eq(projects.id, projectId));
+        projectsWsBroadcast('project_updated', await this.findById(projectId));
+      } catch (dbErr) {
+        console.error(`[projects] Failed to persist error status for ${projectId}:`, dbErr);
+      }
       throw err;
     }
   }
@@ -958,21 +992,26 @@ class ProjectsService {
     projectId: string, provider: ProviderType, sourceSandboxId: string,
     branchName: string, projectName?: string,
   ): Promise<void> {
-    if (!(await this.ensureSandboxManager(provider))) {
-      await db.update(projects).set({ status: 'stopped' }).where(eq(projects.id, projectId));
-      projectsWsBroadcast('project_updated', await this.findById(projectId));
-      return;
-    }
-    if (provider === 'daytona') await this.ensureDaytonaProxy();
-    const manager = this.sandboxManagers.get(provider)!;
     try {
+      if (!(await this.ensureSandboxManager(provider))) {
+        await db.update(projects).set({ status: 'stopped' }).where(eq(projects.id, projectId));
+        projectsWsBroadcast('project_updated', await this.findById(projectId));
+        return;
+      }
+      if (provider === 'daytona') await this.ensureDaytonaProxy();
+      const manager = this.sandboxManagers.get(provider)!;
       const sandboxId = await manager.forkSandbox(sourceSandboxId, branchName, projectName);
       await db.update(projects).set({ sandboxId, status: 'running', statusError: null }).where(eq(projects.id, projectId));
       projectsWsBroadcast('project_updated', await this.findById(projectId));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await db.update(projects).set({ status: 'error', statusError: message }).where(eq(projects.id, projectId));
-      projectsWsBroadcast('project_updated', await this.findById(projectId));
+      console.error(`[projects] provisionFork failed for ${projectId}:`, message);
+      try {
+        await db.update(projects).set({ status: 'error', statusError: message }).where(eq(projects.id, projectId));
+        projectsWsBroadcast('project_updated', await this.findById(projectId));
+      } catch (dbErr) {
+        console.error(`[projects] Failed to persist error status for ${projectId}:`, dbErr);
+      }
       throw err;
     }
   }
