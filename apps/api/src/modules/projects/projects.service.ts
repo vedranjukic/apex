@@ -106,9 +106,22 @@ class ProjectsService {
       switch (type) {
         case 'daytona': {
           const hasKey = !!(process.env.DAYTONA_API_KEY);
-          statuses.push(hasKey
-            ? { type, available: true }
-            : { type, available: false, reason: 'DAYTONA_API_KEY not configured' });
+          if (!hasKey) {
+            statuses.push({ type, available: false, reason: 'DAYTONA_API_KEY not configured' });
+          } else {
+            // Quick authentication validation to fail fast on invalid keys
+            try {
+              const daytonaProvider = new DaytonaSandboxProvider();
+              await daytonaProvider.initialize();
+              await daytonaProvider.validateAuthentication();
+              statuses.push({ type, available: true });
+            } catch (err: any) {
+              const errorMessage = err?.message?.includes('authentication failed') 
+                ? 'Invalid DAYTONA_API_KEY'
+                : `Daytona API error: ${err.message || 'Unknown error'}`;
+              statuses.push({ type, available: false, reason: errorMessage });
+            }
+          }
           break;
         }
         case 'docker': {
@@ -218,39 +231,44 @@ class ProjectsService {
       try {
         const providerConfig: Record<string, unknown> = { ...sharedConfig, provider: status.type };
 
-        if (status.type === 'daytona') {
-          const anthropicKey = sharedConfig.anthropicApiKey || '';
-          const openaiKey = sharedConfig.openaiApiKey || '';
-           if (anthropicKey || openaiKey) {
-             try {
-               const daytonaProvider = new DaytonaSandboxProvider();
-               await daytonaProvider.initialize();
-               
-               // Add timeout to prevent hanging during server startup
-               const timeoutPromise = new Promise<never>((_, reject) => {
-                 setTimeout(() => reject(new Error('Proxy sandbox creation timeout (30s)')), 30000);
-               });
-               
-               const proxyInfo = await Promise.race([
-                 proxySandboxService.ensureProxySandbox(daytonaProvider, anthropicKey, openaiKey),
-                 timeoutPromise
-               ]);
-               
-               providerConfig.proxyBaseUrl = proxyInfo.proxyBaseUrl;
-               providerConfig.proxyAuthToken = proxyInfo.authToken;
-               console.log(`[projects] Daytona LLM proxy sandbox ready: ${proxyInfo.proxyBaseUrl}`);
-               if (proxyInfo.projectsApiUrl) {
-                 console.log(`[projects] 📱 Mobile dashboard: ${proxyInfo.projectsApiUrl}/app`);
-               }
+         if (status.type === 'daytona') {
+           const anthropicKey = sharedConfig.anthropicApiKey || '';
+           const openaiKey = sharedConfig.openaiApiKey || '';
+            if (anthropicKey || openaiKey) {
+              try {
+                const daytonaProvider = new DaytonaSandboxProvider();
+                await daytonaProvider.initialize();
+                
+                // Fast validation of Daytona API key before attempting proxy sandbox creation
+                console.log(`[proxy-sandbox] Validating Daytona API key...`);
+                await daytonaProvider.validateAuthentication();
+                console.log(`[proxy-sandbox] Daytona API key validation successful`);
+                
+                // Add timeout to prevent hanging during server startup
+                const timeoutPromise = new Promise<never>((_, reject) => {
+                  setTimeout(() => reject(new Error('Proxy sandbox creation timeout (30s)')), 30000);
+                });
+                
+                const proxyInfo = await Promise.race([
+                  proxySandboxService.ensureProxySandbox(daytonaProvider, anthropicKey, openaiKey),
+                  timeoutPromise
+                ]);
+                
+                providerConfig.proxyBaseUrl = proxyInfo.proxyBaseUrl;
+                providerConfig.proxyAuthToken = proxyInfo.authToken;
+                console.log(`[projects] Daytona LLM proxy sandbox ready: ${proxyInfo.proxyBaseUrl}`);
+                if (proxyInfo.projectsApiUrl) {
+                  console.log(`[projects] 📱 Mobile dashboard: ${proxyInfo.projectsApiUrl}/app`);
+                }
 
-               this.syncExistingDaytonaProjects().catch((err) => {
-                 console.warn('[projects] Initial proxy project sync failed (non-fatal):', err);
-               });
-             } catch (proxyErr) {
-               console.warn(`[projects] Daytona LLM proxy sandbox failed (non-fatal):`, proxyErr);
-             }
-           }
-        }
+                this.syncExistingDaytonaProjects().catch((err) => {
+                  console.warn('[projects] Initial proxy project sync failed (non-fatal):', err);
+                });
+              } catch (proxyErr) {
+                console.warn(`[projects] Daytona LLM proxy sandbox failed (non-fatal):`, proxyErr);
+              }
+            }
+         }
 
         if (status.type === 'daytona') {
           console.log(`[projects] Daytona SandboxManager config: proxyBaseUrl=${providerConfig.proxyBaseUrl} hasAuthToken=${!!providerConfig.proxyAuthToken}`);
@@ -321,6 +339,9 @@ class ProjectsService {
        const oldCached = proxySandboxService.getCachedInfo();
        const daytonaProvider = new DaytonaSandboxProvider();
        await daytonaProvider.initialize();
+       
+       // Fast validation of Daytona API key before attempting proxy sandbox operations
+       await daytonaProvider.validateAuthentication();
        
        // Add timeout to prevent hanging during proxy sandbox updates
        const timeoutPromise = new Promise<never>((_, reject) => {
