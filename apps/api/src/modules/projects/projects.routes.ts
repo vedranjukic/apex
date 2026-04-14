@@ -4,6 +4,18 @@ import { usersService } from '../users/users.service';
 import { proxyProjectsService } from '../llm-proxy/proxy-projects.service';
 
 export const projectsRoutes = new Elysia({ prefix: '/api/projects' })
+  .get('/providers', () => {
+    return projectsService.getProviderStatuses();
+  })
+  .post('/reinit-providers', async ({ set }) => {
+    try {
+      await projectsService.reinitSandboxManager();
+      return { ok: true };
+    } catch (err) {
+      set.status = 500;
+      return { error: `Failed to reinit providers: ${err}` };
+    }
+  })
   .get('/remote', async ({ set }) => {
     try {
       return await proxyProjectsService.listProjects();
