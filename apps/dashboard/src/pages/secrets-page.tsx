@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Plus,
@@ -8,9 +8,13 @@ import {
   Loader2,
   KeyRound,
   Shield,
+  Variable,
+  GitBranch,
+  Globe,
 } from 'lucide-react';
 import { AppShell } from '../components/layout/app-shell';
 import { secretsApi, type Secret, type CreateSecretInput } from '../api/client';
+import { useProjectsStore } from '../stores/projects-store';
 
 const AUTH_TYPES = [
   { value: 'bearer', label: 'Bearer Token', hint: 'Authorization: Bearer <value>' },
@@ -24,20 +28,39 @@ function SecretForm({
   onSave,
   onCancel,
   saving,
+  fixedRepositoryId,
 }: {
   initial?: Partial<CreateSecretInput>;
   onSave: (data: CreateSecretInput) => void;
   onCancel: () => void;
   saving: boolean;
+  fixedRepositoryId?: string;
 }) {
+  const { projects } = useProjectsStore();
   const [name, setName] = useState(initial?.name || '');
   const [value, setValue] = useState(initial?.value || '');
   const [domain, setDomain] = useState(initial?.domain || '');
   const [authType, setAuthType] = useState(initial?.authType || 'bearer');
   const [customHeader, setCustomHeader] = useState('');
   const [description, setDescription] = useState(initial?.description || '');
+  const [isSecret, setIsSecret] = useState(initial?.isSecret ?? true);
+  const [repositoryId, setRepositoryId] = useState(initial?.repositoryId || '');
 
   const isCustom = authType === 'header:X-Custom' || authType.startsWith('header:');
+  
+  // Get repositories from projects that have git repos
+  const repositories = projects
+    .filter(p => p.gitRepo)
+    .map(p => {
+      // Extract repository ID from git URL (e.g., "https://github.com/owner/repo" -> "owner/repo")
+      const match = p.gitRepo?.match(/github\.com\/([^\/]+\/[^\/]+)/);
+      return {
+        id: match?.[1] || p.gitRepo || '',
+        name: match?.[1] || p.name,
+        projectName: p.name
+      };
+    })
+    .filter(r => r.id);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,97 +68,177 @@ function SecretForm({
     onSave({
       name,
       value,
-      domain,
-      authType: finalAuthType,
+      domain: isSecret ? domain : '',
+      authType: isSecret ? finalAuthType : 'bearer',
+      isSecret,
+      repositoryId: fixedRepositoryId || repositoryId || undefined,
       description: description || undefined,
     });
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4 bg-surface-secondary rounded-lg p-4 border border-border">
-      <div className="grid grid-cols-2 gap-4">
+      {/* Repository Selection */}
+      {!fixedRepositoryId && repositories.length > 0 && (
+        <div>
+          <label className="block text-sm font-medium mb-1">Repository Scope (Optional)</label>
+          <select
+            value={repositoryId}
+            onChange={(e) => setRepositoryId(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+          >
+            <option value="">Global (all projects)</option>
+            {repositories.map((repo) => (
+              <option key={repo.id} value={repo.id}>
+                {repo.name} ({repo.projectName})
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-text-muted">
+            Limit this {isSecret ? 'secret' : 'environment variable'} to a specific repository
+          </p>
+        </div>
+      )}
+      
+      {/* Show repository context when fixed */}
+      {fixedRepositoryId && (
+        <div>
+          <label className="block text-sm font-medium mb-1">Repository Scope</label>
+          <div className="px-3 py-2 rounded-lg bg-surface-secondary border border-border text-sm text-text-primary">
+            <div className="flex items-center gap-2">
+              <GitBranch className="w-4 h-4" />
+              {fixedRepositoryId}
+            </div>
+          </div>
+          <p className="mt-1 text-xs text-text-muted">
+            This {isSecret ? 'secret' : 'environment variable'} will be scoped to this repository
+          </p>
+        </div>
+      )}
+
+      {/* Is Secret toggle */}
+      <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-surface">
+        <div className="flex items-center gap-2">
+          <Shield className="w-4 h-4 text-primary" />
+          <span className="text-sm font-medium">Secret (secure)</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsSecret(!isSecret)}
+          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${
+            isSecret ? 'bg-primary' : 'bg-border'
+          }`}
+        >
+          <span className="sr-only">Toggle secret mode</span>
+          <span
+            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+              isSecret ? 'translate-x-6' : 'translate-x-1'
+            }`}
+          />
+        </button>
+      </div>
+      <p className="text-xs text-text-muted -mt-2 ml-3">
+        {isSecret 
+          ? 'Secrets never enter containers and are visible as placeholders. Requires domain and auth type.'
+          : 'Environment variables are injected directly into containers. Domain and auth type not needed.'
+        }
+      </p>
+
+      <div className={isSecret ? "grid grid-cols-2 gap-4" : ""}>
         <div>
           <label className="block text-sm font-medium mb-1">Name</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="STRIPE_KEY"
+            placeholder={isSecret ? "STRIPE_KEY" : "NODE_ENV"}
             required
             className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
           />
-          <p className="mt-1 text-xs text-text-muted">Environment variable name</p>
+          <p className="mt-1 text-xs text-text-muted">
+            {isSecret ? 'Secret name' : 'Environment variable name'}
+          </p>
         </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Domain</label>
-          <input
-            type="text"
-            value={domain}
-            onChange={(e) => setDomain(e.target.value)}
-            placeholder="api.stripe.com"
-            required
-            className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
-          />
-          <p className="mt-1 text-xs text-text-muted">Upstream API domain to intercept</p>
-        </div>
+        {isSecret && (
+          <div>
+            <label className="block text-sm font-medium mb-1">Domain</label>
+            <input
+              type="text"
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              placeholder="api.stripe.com"
+              required={isSecret}
+              className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+            />
+            <p className="mt-1 text-xs text-text-muted">
+              Upstream API domain to intercept
+            </p>
+          </div>
+        )}
       </div>
 
       <div>
-        <label className="block text-sm font-medium mb-1">Secret Value</label>
+        <label className="block text-sm font-medium mb-1">
+          {isSecret ? 'Secret Value' : 'Value'}
+        </label>
         <input
-          type="password"
+          type={isSecret ? "password" : "text"}
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder={initial ? '(unchanged)' : 'sk_live_...'}
+          placeholder={initial ? '(unchanged)' : (isSecret ? 'sk_live_...' : 'production')}
           required={!initial}
           autoComplete="off"
           className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium mb-1">Auth Type</label>
-          <select
-            value={isCustom ? 'header:X-Custom' : authType}
-            onChange={(e) => setAuthType(e.target.value)}
-            className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
-          >
-            {AUTH_TYPES.map((t) => (
-              <option key={t.value} value={t.value}>
-                {t.label}
-              </option>
-            ))}
-          </select>
-          <p className="mt-1 text-xs text-text-muted">
-            {AUTH_TYPES.find((t) => t.value === (isCustom ? 'header:X-Custom' : authType))?.hint}
-          </p>
-        </div>
-        {isCustom && (
+      {isSecret && (
+        <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Header Name</label>
-            <input
-              type="text"
-              value={customHeader}
-              onChange={(e) => setCustomHeader(e.target.value)}
-              placeholder="X-Custom-Key"
-              required
-              className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
-            />
+            <label className="block text-sm font-medium mb-1">Auth Type</label>
+            <select
+              value={isCustom ? 'header:X-Custom' : authType}
+              onChange={(e) => setAuthType(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+            >
+              {AUTH_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-text-muted">
+              {AUTH_TYPES.find((t) => t.value === (isCustom ? 'header:X-Custom' : authType))?.hint}
+            </p>
           </div>
-        )}
-      </div>
+          {isCustom && (
+            <div>
+              <label className="block text-sm font-medium mb-1">Header Name</label>
+              <input
+                type="text"
+                value={customHeader}
+                onChange={(e) => setCustomHeader(e.target.value)}
+                placeholder="X-Custom-Key"
+                required
+                className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+              />
+            </div>
+          )}
+        </div>
+      )}
 
-      <div>
-        <label className="block text-sm font-medium mb-1">Description (optional)</label>
-        <input
-          type="text"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Production Stripe API key"
-          className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
-        />
-      </div>
+      {isSecret && (
+        <div>
+          <label className="block text-sm font-medium mb-1">Description (optional)</label>
+          <input
+            type="text"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Production Stripe API key"
+            className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+          />
+        </div>
+      )}
 
       <div className="flex items-center gap-2 pt-2">
         <button
@@ -144,7 +247,7 @@ function SecretForm({
           className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg text-sm hover:bg-primary-hover transition-colors disabled:opacity-50"
         >
           {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-          {initial ? 'Update' : 'Add Secret'}
+          {initial ? 'Update' : `Add ${isSecret ? 'Secret' : 'Environment Variable'}`}
         </button>
         <button
           type="button"
@@ -160,6 +263,8 @@ function SecretForm({
 
 export function SecretsPage() {
   const navigate = useNavigate();
+  const params = useParams();
+  const { fetchProjects } = useProjectsStore();
   const [secrets, setSecrets] = useState<Secret[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -167,10 +272,17 @@ export function SecretsPage() {
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // Check if this is a repository-specific secrets page
+  const repositoryId = params.repositoryId ? decodeURIComponent(params.repositoryId) : null;
+
   const fetchSecrets = async () => {
     try {
-      const list = await secretsApi.list();
-      setSecrets(list);
+      const list = repositoryId 
+        ? await secretsApi.list(undefined, repositoryId)
+        : await secretsApi.list();
+      // Filter out placeholder secrets from the frontend
+      const filteredSecrets = list.filter(secret => secret.name !== '__APEX_REPO_PLACEHOLDER__');
+      setSecrets(filteredSecrets);
     } catch {
       // API not available yet
     } finally {
@@ -180,7 +292,8 @@ export function SecretsPage() {
 
   useEffect(() => {
     fetchSecrets();
-  }, []);
+    fetchProjects();
+  }, [fetchProjects]);
 
   const handleCreate = async (data: CreateSecretInput) => {
     setSaving(true);
@@ -236,38 +349,42 @@ export function SecretsPage() {
       <div className="flex-1 p-8 overflow-y-auto">
         <div className="max-w-2xl mx-auto">
           <button
-            onClick={() => navigate('/')}
+            onClick={() => navigate(repositoryId ? '/repositories' : '/')}
             className="flex items-center gap-1.5 text-sm text-text-secondary hover:text-text-primary transition-colors mb-6"
           >
             <ArrowLeft className="w-4 h-4" />
-            Back to projects
+            {repositoryId ? 'Back to repositories' : 'Back to projects'}
           </button>
 
-          <div className="flex items-start justify-between mb-2">
-            <div>
+          <div className="mb-2">
+            <div className="flex items-center justify-between gap-4 mb-1">
               <h1 className="text-2xl font-bold flex items-center gap-2">
-                <Shield className="w-6 h-6" />
-                Secrets
+                {repositoryId ? <GitBranch className="w-6 h-6" /> : <Shield className="w-6 h-6" />}
+                {repositoryId ? `${repositoryId} - Secrets` : 'Secrets & Environment Variables'}
               </h1>
-              <p className="text-sm text-text-secondary mt-1">
-                API keys injected transparently into outbound HTTPS requests.
-                Values never enter sandbox containers.
-              </p>
+              {!showForm && !editingId && (
+                <button
+                  onClick={() => setShowForm(true)}
+                  className="flex items-center gap-2 px-3 py-2 bg-primary text-on-primary rounded-lg text-sm hover:bg-primary-hover transition-colors shrink-0"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add
+                </button>
+              )}
             </div>
-            {!showForm && !editingId && (
-              <button
-                onClick={() => setShowForm(true)}
-                className="flex items-center gap-2 px-3 py-2 bg-primary text-on-primary rounded-lg text-sm hover:bg-primary-hover transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Add Secret
-              </button>
-            )}
+            <p className="text-sm text-text-secondary">
+              {repositoryId 
+                ? `Repository-scoped secrets and environment variables for ${repositoryId}.`
+                : 'Secrets never enter containers and appear as placeholders, environment variables are injected directly.'
+              }
+            </p>
           </div>
 
           {showForm && (
             <div className="mt-6">
               <SecretForm
+                initial={repositoryId ? { repositoryId } : undefined}
+                fixedRepositoryId={repositoryId}
                 onSave={handleCreate}
                 onCancel={() => setShowForm(false)}
                 saving={saving}
@@ -278,11 +395,14 @@ export function SecretsPage() {
           <div className="mt-6 space-y-3">
             {secrets.length === 0 && !showForm && (
               <div className="text-center py-12 text-text-muted">
-                <KeyRound className="w-10 h-10 mx-auto mb-3 opacity-40" />
-                <p className="text-sm">No secrets configured yet.</p>
+                <div className="flex items-center justify-center gap-2 mb-3">
+                  <Shield className="w-10 h-10 opacity-40" />
+                  <Variable className="w-10 h-10 opacity-40" />
+                </div>
+                <p className="text-sm">No secrets or environment variables configured yet.</p>
                 <p className="text-xs mt-1">
-                  Add API keys that will be transparently injected into HTTPS requests
-                  from your sandbox containers.
+                  Add secrets (secure, appear as placeholders) or environment variables (direct injection)
+                  for your sandbox containers.
                 </p>
               </div>
             )}
@@ -295,8 +415,11 @@ export function SecretsPage() {
                       name: secret.name,
                       domain: secret.domain,
                       authType: secret.authType,
+                      isSecret: secret.isSecret,
+                      repositoryId: secret.repositoryId || '',
                       description: secret.description || '',
                     }}
+                    fixedRepositoryId={repositoryId}
                     onSave={handleUpdate}
                     onCancel={() => setEditingId(null)}
                     saving={saving}
@@ -309,21 +432,53 @@ export function SecretsPage() {
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
+                      {secret.isSecret ? (
+                        <Shield className="w-3.5 h-3.5 text-primary" />
+                      ) : (
+                        <Variable className="w-3.5 h-3.5 text-text-muted" />
+                      )}
                       <span className="font-mono text-sm font-medium text-text-primary">
                         {secret.name}
                       </span>
-                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-surface text-text-muted border border-border">
-                        {secret.authType}
+                      <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${
+                        secret.isSecret 
+                          ? 'bg-primary/10 text-primary border-primary/20' 
+                          : 'bg-surface text-text-muted border-border'
+                      }`}>
+                        {secret.isSecret ? 'secret' : 'env var'}
                       </span>
-                      {secret.projectId && (
-                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                      {secret.isSecret && (
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-surface text-text-muted border border-border">
+                          {secret.authType}
+                        </span>
+                      )}
+                      {secret.repositoryId && (
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-accent/10 text-accent border border-accent/20 flex items-center gap-1">
+                          <GitBranch className="w-2.5 h-2.5" />
+                          {secret.repositoryId}
+                        </span>
+                      )}
+                      {secret.projectId && !secret.repositoryId && (
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-accent/10 text-accent border border-accent/20">
                           project
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-text-muted mt-1">
-                      {secret.domain}
-                      {secret.description && ` — ${secret.description}`}
+                    <p className="text-xs text-text-muted mt-1 flex items-center gap-1">
+                      {secret.isSecret && secret.domain && (
+                        <>
+                          <Globe className="w-3 h-3" />
+                          {secret.domain}
+                          {secret.description && ` — ${secret.description}`}
+                        </>
+                      )}
+                      {!secret.isSecret && (
+                        <>
+                          <Variable className="w-3 h-3" />
+                          Environment variable
+                          {secret.description && ` — ${secret.description}`}
+                        </>
+                      )}
                     </p>
                   </div>
                   <div className="flex items-center gap-1 ml-3">

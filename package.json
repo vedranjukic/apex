@@ -32,7 +32,8 @@
     "test:agent-interaction-e2e": "DAYTONA_API_KEY=${DAYTONA_API_KEY_E2E:-$DAYTONA_API_KEY} npx nx e2e @apex/api-e2e -- --testPathPatterns=agent-interaction --testPathIgnorePatterns='multi-agent|ask-user|agent-retry|secrets-proxy'",
     "test:bridge-replay-e2e": "DAYTONA_API_KEY=${DAYTONA_API_KEY_E2E:-$DAYTONA_API_KEY} npx nx e2e @apex/api-e2e -- --testPathPatterns=bridge-replay",
     "test:replay-backfill-e2e": "DAYTONA_API_KEY=${DAYTONA_API_KEY_E2E:-$DAYTONA_API_KEY} npx nx e2e @apex/api-e2e -- --testPathPatterns=replay-backfill",
-    "test:e2e": "DAYTONA_API_KEY=${DAYTONA_API_KEY_E2E:-$DAYTONA_API_KEY} APEX_E2E_TEST=1 npx nx e2e @apex/api-e2e"
+    "test:e2e": "DAYTONA_API_KEY=${DAYTONA_API_KEY_E2E:-$DAYTONA_API_KEY} APEX_E2E_TEST=1 npx nx e2e @apex/api-e2e",
+    "migrate": "bun apps/api/src/database/migrations/run-migrations.ts"
   },
   "private": true,
   "dependencies": {

@@ -1,0 +1,14 @@
+{
+  "provider": {
+    "anthropic": {
+      "options": {
+        "baseURL": "https://3000-8gmzqnultg2bk4qf.daytonaproxy01.net/llm-proxy/anthropic/v1"
+      }
+    },
+    "openai": {
+      "options": {
+        "baseURL": "https://3000-8gmzqnultg2bk4qf.daytonaproxy01.net/llm-proxy/openai/v1"
+      }
+    }
+  }
+}

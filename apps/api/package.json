@@ -6,7 +6,9 @@
     "targets": {
       "build": {
         "executor": "nx:run-commands",
-        "dependsOn": ["@apex/mobile-dashboard:build"],
+        "dependsOn": [
+          "@apex/mobile-dashboard:build"
+        ],
         "options": {
           "command": "bun build src/main.ts --target=bun --outdir=dist --sourcemap --external cpu-features --external better-sqlite3 --external ssh2",
           "cwd": "apps/api"

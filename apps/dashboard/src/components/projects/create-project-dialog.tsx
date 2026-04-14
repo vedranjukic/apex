@@ -2,9 +2,12 @@ import { useState, useEffect, useRef, useCallback, FormEvent } from 'react';
 import { X, Cloud, Container, Laptop, FolderOpen, FolderSearch, GitBranch, CircleDot, GitPullRequest, Loader2, Settings } from 'lucide-react';
 import { useProjectsStore } from '../../stores/projects-store';
 import { configApi, githubApi, type ProviderStatus, type GitHubResolveResult, type GitHubContextData } from '../../api/client';
+import { parseGitHubUrl } from '@apex/shared';
 import { cn } from '../../lib/cn';
 import { FolderBrowser } from './folder-browser';
 import { AdvancedSettingsPanel, type AdvancedSettings, DEFAULT_SETTINGS } from './advanced-settings-panel';
+import { RepositorySettingsPreview, RepositorySettingsModal } from './repository-settings-preview';
+import { useRepositorySecrets } from '../../hooks/use-repository-secrets';
 
 interface Props {
   open: boolean;
@@ -103,6 +106,11 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [advancedSettings, setAdvancedSettings] = useState<AdvancedSettings>(DEFAULT_SETTINGS);
 
+  // Repository secrets state
+  const [repositoryId, setRepositoryId] = useState<string | null>(null);
+  const repositorySecrets = useRepositorySecrets(repositoryId);
+  const [showRepositorySettings, setShowRepositorySettings] = useState(false);
+
   useEffect(() => {
     if (!open) return;
     nameManuallyEdited.current = false;
@@ -127,11 +135,21 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
       setResolved(null);
       setResolveError(null);
       setResolving(false);
+      setRepositoryId(null);
       lastResolvedUrl.current = '';
       return;
     }
 
     if (trimmed === lastResolvedUrl.current) return;
+
+    // Parse the GitHub URL to extract repository ID for secrets lookup
+    const parsed = parseGitHubUrl(trimmed);
+    if (parsed) {
+      const repoId = `${parsed.owner}/${parsed.repo}`;
+      setRepositoryId(repoId);
+    } else {
+      setRepositoryId(null);
+    }
 
     setResolving(true);
     setResolveError(null);
@@ -248,6 +266,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
       setAutoStart(true);
       setResolved(null);
       setResolveError(null);
+      setRepositoryId(null);
       lastResolvedUrl.current = '';
       nameManuallyEdited.current = false;
       setShowAdvanced(false);
@@ -387,7 +406,15 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
             )}
 
             {resolved && !resolving && (
-              <GitHubResolvePreview result={resolved} />
+              <GitHubResolvePreview 
+                result={resolved} 
+                repositorySettings={repositoryId ? {
+                  totalCount: repositorySecrets.secrets.length + repositorySecrets.environmentVariables.length,
+                  isLoading: repositorySecrets.isLoading,
+                  error: repositorySecrets.error || undefined
+                } : undefined}
+                onViewSettings={() => setShowRepositorySettings(true)}
+              />
             )}
 
             {!resolved && !resolving && !resolveError && (
@@ -450,11 +477,34 @@ export function CreateProjectDialog({ open, onClose, onCreated }: Props) {
           />
         </form>
       </div>
+
+      {/* Repository Settings Modal */}
+      {repositoryId && (
+        <RepositorySettingsModal
+          repositoryId={repositoryId}
+          secrets={repositorySecrets.secrets}
+          environmentVariables={repositorySecrets.environmentVariables}
+          isOpen={showRepositorySettings}
+          onClose={() => setShowRepositorySettings(false)}
+        />
+      )}
     </div>
   );
 }
 
-function GitHubResolvePreview({ result }: { result: GitHubResolveResult }) {
+function GitHubResolvePreview({ 
+  result, 
+  repositorySettings,
+  onViewSettings
+}: { 
+  result: GitHubResolveResult;
+  repositorySettings?: {
+    totalCount: number;
+    isLoading: boolean;
+    error?: string;
+  };
+  onViewSettings?: () => void;
+}) {
   const { parsed, content } = result;
   const repo = `${parsed.owner}/${parsed.repo}`;
 
@@ -512,6 +562,24 @@ function GitHubResolvePreview({ result }: { result: GitHubResolveResult }) {
           {content.labels?.map((l) => (
             <span key={l} className="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[10px]">{l}</span>
           ))}
+        </div>
+      )}
+      
+      {/* Repository Settings Notification */}
+      {repositorySettings && repositorySettings.totalCount > 0 && (
+        <div className="flex items-center justify-between text-text-muted border-t border-border pt-1 -mb-1">
+          <span>
+            ({repositorySettings.totalCount}) setting{repositorySettings.totalCount !== 1 ? 's' : ''} will be applied
+          </span>
+          {onViewSettings && (
+            <button
+              type="button"
+              onClick={onViewSettings}
+              className="text-primary hover:text-primary-hover text-[11px] underline"
+            >
+              View details
+            </button>
+          )}
         </div>
       )}
     </div>

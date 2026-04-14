@@ -39,6 +39,10 @@ class ProjectsService {
   private sandboxManagers = new Map<string, SandboxManager>();
   private providerStatuses: ProviderStatus[] = [];
   private autoStartHandler: AutoStartHandler | null = null;
+  private currentSecretPlaceholders: Record<string, string> = {};
+  private currentEnvironmentVariables: Record<string, string> = {};
+  private secretsCache = new Map<string, { envVars: Record<string, string>; secrets: string[]; timestamp: number }>();
+  private readonly SECRETS_CACHE_TTL = 60000; // 1 minute cache TTL
   async init() {
     await this.recoverStaleCreatingProjects();
     await this.initSandboxManagers();
@@ -144,19 +148,38 @@ class ProjectsService {
     try { caCert = getCACertPem(); } catch { /* CA not yet initialized */ }
 
     const secretPlaceholders: Record<string, string> = {};
+    const environmentVariables: Record<string, string> = {};
     let secretDomains: string[] = [];
     try {
       const domains = await secretsService.getSecretDomains();
       secretDomains = [...domains];
       if (domains.size > 0) {
-        const allSecrets = await secretsService.list(
-          '00000000-0000-0000-0000-000000000001',
-        );
+        // Get all items and separate secrets from environment variables
+        const allSecrets = await secretsService.findAll();
         for (const s of allSecrets) {
+          // For backward compatibility with existing tests, always add placeholders
+          // but distinguish between secrets and environment variables in storage
           secretPlaceholders[s.name] = 'sk-proxy-placeholder';
+          
+          if (!s.isSecret) {
+            // Store environment variables with their actual values for direct injection
+            environmentVariables[s.name] = s.value;
+          }
         }
       }
     } catch { /* secrets table may not exist yet */ }
+    
+    // Store for use in getContextSecrets
+    this.currentSecretPlaceholders = secretPlaceholders;
+    this.currentEnvironmentVariables = environmentVariables;
+    
+    // Pre-populate cache for all known repositories to avoid empty values during startup
+    // Skip during e2e tests to avoid potential async issues
+    if (process.env.APEX_E2E_TEST !== '1') {
+      this.prePopulateRepositoryCaches().catch(err => {
+        console.warn('[projects] Failed to pre-populate repository caches:', err);
+      });
+    }
 
     let gitUserName = '';
     let gitUserEmail = '';
@@ -185,6 +208,9 @@ class ProjectsService {
       secretsProxyPort: getSecretsProxyPort(),
       secretPlaceholders,
       secretDomains,
+      getContextSecrets: (projectId?: string, repositoryId?: string) => {
+        return this.getContextSecrets(projectId, repositoryId);
+      },
     };
 
     for (const status of this.providerStatuses) {
@@ -256,6 +282,25 @@ class ProjectsService {
       console.log(`[projects] Updated secret domains on managers (${domains.length} domains)`);
     } catch (err) {
       console.error('[projects] Failed to update secret domains:', err);
+    }
+  }
+
+  /**
+   * Update secrets cache and notify sandbox managers of context-specific changes.
+   */
+  async updateContextSecretsOnManagers(projectId?: string, repositoryId?: string) {
+    try {
+      // Clear the cache to force refresh
+      this.clearSecretsCache(projectId, repositoryId);
+      
+      // Update sandbox managers with new context secrets
+      for (const [, mgr] of this.sandboxManagers) {
+        mgr.updateContextSecrets(projectId, repositoryId);
+      }
+      
+      console.log(`[projects] Updated context secrets for project=${projectId} repository=${repositoryId}`);
+    } catch (err) {
+      console.error('[projects] Failed to update context secrets:', err);
     }
   }
 
@@ -401,6 +446,136 @@ class ProjectsService {
     });
 
     return intermediate;
+  }
+
+  /**
+   * Extract repository ID from git repository URL.
+   * Returns owner/repo format for GitHub URLs, null otherwise.
+   */
+  private getRepositoryIdFromGitUrl(gitRepo?: string | null): string | undefined {
+    if (!gitRepo) return undefined;
+    
+    const parsed = parseGitHubUrl(gitRepo);
+    return parsed ? `${parsed.owner}/${parsed.repo}` : undefined;
+  }
+
+  /**
+   * Get context-specific secrets and environment variables for a project/repository.
+   * Separates environment variables (direct injection) from secrets (MITM proxy).
+   * Uses caching to provide synchronous access to async secret resolution.
+   */
+  private getContextSecrets(projectId?: string, repositoryId?: string): {
+    envVars: Record<string, string>;
+    secrets: string[];
+  } {
+    const cacheKey = `${projectId || 'global'}:${repositoryId || 'none'}`;
+    const cached = this.secretsCache.get(cacheKey);
+    
+    // Return cached value if still valid
+    if (cached && (Date.now() - cached.timestamp) < this.SECRETS_CACHE_TTL) {
+      return { envVars: cached.envVars, secrets: cached.secrets };
+    }
+    
+    // Basic implementation with async cache refresh
+    const envVars: Record<string, string> = { ...this.currentEnvironmentVariables };
+    const secrets: string[] = [];
+    
+    // Only placeholders (actual secrets) are treated as secrets
+    for (const secretName of Object.keys(this.currentSecretPlaceholders || {})) {
+      secrets.push(secretName);
+    }
+    
+    const result = { envVars, secrets };
+    
+    // Store in cache
+    this.secretsCache.set(cacheKey, {
+      ...result,
+      timestamp: Date.now()
+    });
+    
+    // Async refresh for next time (fire and forget)
+    this.refreshSecretsCache(projectId, repositoryId, cacheKey).catch(err => {
+      console.warn('[projects] Failed to refresh secrets cache:', err);
+    });
+    
+    return result;
+  }
+
+  /**
+   * Pre-populate cache for all known repositories during initialization.
+   */
+  private async prePopulateRepositoryCaches(): Promise<void> {
+    try {
+      const userId = '00000000-0000-0000-0000-000000000001';
+      
+      // Get all unique repository IDs from secrets
+      const allSecrets = await secretsService.findAll();
+      const repositoryIds = new Set<string>();
+      
+      for (const secret of allSecrets) {
+        if (secret.repositoryId) {
+          repositoryIds.add(secret.repositoryId);
+        }
+      }
+      
+      // Pre-populate cache for each repository
+      for (const repositoryId of repositoryIds) {
+        await this.refreshSecretsCache(undefined, repositoryId, `global:${repositoryId}`);
+      }
+    } catch (error) {
+      console.warn('[projects] Failed to pre-populate repository caches:', error);
+    }
+  }
+
+  /**
+   * Asynchronously refresh secrets cache for a specific context.
+   */
+  private async refreshSecretsCache(projectId?: string, repositoryId?: string, cacheKey?: string): Promise<void> {
+    try {
+      // For now, use a hardcoded user ID. In production, this should be passed through the context
+      const userId = '00000000-0000-0000-0000-000000000001';
+      
+      // Use the new repository-based resolution
+      const resolvedSecrets = await secretsService.resolveForContext(userId, projectId, repositoryId);
+      const envVars: Record<string, string> = {};
+      const secrets: string[] = [];
+      
+      for (const secret of resolvedSecrets) {
+        if (secret.isSecret) {
+          // This is a secret that needs MITM proxy
+          secrets.push(secret.name);
+        } else {
+          // This is an environment variable that gets directly injected
+          envVars[secret.name] = secret.value;
+        }
+      }
+      
+      const result = { envVars, secrets };
+      const key = cacheKey || `${projectId || 'global'}:${repositoryId || 'none'}`;
+      
+      this.secretsCache.set(key, {
+        ...result,
+        timestamp: Date.now()
+      });
+      
+
+    } catch (error) {
+      console.warn('[projects] Failed to refresh secrets cache:', error);
+    }
+  }
+
+  /**
+   * Clear secrets cache for a specific context or all contexts.
+   */
+  public clearSecretsCache(projectId?: string, repositoryId?: string): void {
+    if (projectId || repositoryId) {
+      const cacheKey = `${projectId || 'global'}:${repositoryId || 'none'}`;
+      this.secretsCache.delete(cacheKey);
+      console.log(`[projects] Cleared secrets cache for ${cacheKey}`);
+    } else {
+      this.secretsCache.clear();
+      console.log('[projects] Cleared all secrets cache');
+    }
   }
 
   private async stopProjectAsync(projectId: string, sandboxId: string, manager: SandboxManager): Promise<void> {
@@ -967,8 +1142,9 @@ class ProjectsService {
         await db.update(projects).set({ status }).where(eq(projects.id, projectId));
         projectsWsBroadcast('project_updated', await this.findById(projectId));
       };
+      const repositoryId = this.getRepositoryIdFromGitUrl(gitRepo);
       const sandboxId = await manager.createSandbox(
-        snapshot, projectName, gitRepo || undefined, agentType, projectId, onStatusChange, localDir, gitBranch, createBranch, sandboxConfig,
+        snapshot, projectName, gitRepo || undefined, agentType, projectId, onStatusChange, localDir, gitBranch, createBranch, sandboxConfig, repositoryId,
       );
       await db.update(projects).set({ sandboxId, status: 'running', statusError: null }).where(eq(projects.id, projectId));
       const readyProject = await this.findById(projectId);

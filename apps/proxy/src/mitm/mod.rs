@@ -65,17 +65,30 @@ async fn handle_connection(
 async fn handle_connect(
     client: &mut TcpStream,
     target: &str,
-    _raw: &[u8],
+    raw: &[u8],
     _status: httparse::Status<usize>,
     config: SharedConfig,
     ca: Arc<CertAuthority>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (host, port) = parse_host_port(target)?;
 
-    let secret = config.resolve_secret(&host);
+    // Extract context from CONNECT headers if present
+    let context = RequestContext::from_headers(raw);
+    
+    let secret = config.resolve_secret_with_context(
+        &host, 
+        context.repository_id.as_deref(), 
+        context.project_id.as_deref()
+    );
 
     if let Some(ref secret) = secret {
-        debug!(host = %host, "MITM CONNECT");
+        debug!(
+            host = %host, 
+            context = %context.description(),
+            secret_id = %secret.id,
+            auth_type = %secret.auth_type,
+            "MITM CONNECT - intercepting with secret"
+        );
         client
             .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             .await?;
@@ -104,7 +117,11 @@ async fn handle_connect(
             let _ = tls_stream.shutdown().await;
         }
     } else {
-        debug!(host = %host, "transparent CONNECT");
+        debug!(
+            host = %host, 
+            context = %context.description(),
+            "transparent CONNECT - no secret configured"
+        );
         let mut upstream = TcpStream::connect(format!("{}:{}", host, port)).await?;
         client
             .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -275,15 +292,37 @@ async fn handle_http_proxy(
     };
 
     let hostname = parsed.host_str().unwrap_or("");
-    let secret = config.resolve_secret(hostname);
+    
+    // Extract context from HTTP headers if present
+    let context = RequestContext::from_headers(raw);
+    
+    let secret = config.resolve_secret_with_context(
+        hostname,
+        context.repository_id.as_deref(),
+        context.project_id.as_deref()
+    );
 
     if secret.is_none() {
+        debug!(
+            hostname = %hostname,
+            context = %context.description(),
+            "HTTP proxy - no secret configured"
+        );
         client
             .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
             .await?;
         return Ok(());
     }
     let secret = secret.unwrap();
+    
+    debug!(
+        hostname = %hostname,
+        context = %context.description(),
+        secret_id = %secret.id,
+        auth_type = %secret.auth_type,
+        method = %method,
+        "HTTP proxy - forwarding with secret"
+    );
 
     let header_end = raw
         .windows(4)
@@ -417,30 +456,47 @@ async fn handle_reload_secrets(
         body.extend_from_slice(&buf[..n]);
     }
 
-    // Support both formats: plain array (legacy) and object with optional github_token
+    // Support both formats: plain array (legacy) and object with optional github_token and context
     #[derive(serde::Deserialize)]
     struct ReloadPayload {
         secrets: Vec<crate::config::Secret>,
         github_token: Option<String>,
+        repository_id: Option<String>,
+        project_id: Option<String>,
     }
 
-    let (new_secrets, github_token) =
+    let (new_secrets, github_token, context_updated) =
         if let Ok(payload) = serde_json::from_slice::<ReloadPayload>(&body) {
-            (payload.secrets, payload.github_token)
+            let context_updated = payload.repository_id.is_some() || payload.project_id.is_some();
+            if context_updated {
+                config.update_context(payload.repository_id, payload.project_id);
+            }
+            (payload.secrets, payload.github_token, context_updated)
         } else {
             let secrets: Vec<crate::config::Secret> = serde_json::from_slice(&body)?;
-            (secrets, None)
+            (secrets, None, false)
         };
 
-    let count = new_secrets.len();
+    let total_count = new_secrets.len();
+    let secrets_count = new_secrets.iter().filter(|s| s.is_secret).count();
+    let env_vars_count = new_secrets.iter().filter(|s| !s.is_secret).count();
     let token_updated = github_token.is_some();
+    
     config.reload_secrets(new_secrets, github_token);
-    info!(count = count, token_updated = token_updated, "secrets reloaded");
+    
+    info!(
+        total_items = total_count,
+        secrets_count = secrets_count, 
+        env_vars_count = env_vars_count,
+        token_updated = token_updated, 
+        context_updated = context_updated,
+        "secrets and environment variables reloaded"
+    );
 
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        format!(r#"{{"ok":true,"count":{}}}"#, count).len(),
-        format!(r#"{{"ok":true,"count":{}}}"#, count),
+        format!(r#"{{"ok":true,"total_count":{},"secrets_count":{},"env_vars_count":{}}}"#, total_count, secrets_count, env_vars_count).len(),
+        format!(r#"{{"ok":true,"total_count":{},"secrets_count":{},"env_vars_count":{}}}"#, total_count, secrets_count, env_vars_count),
     );
     client.write_all(resp.as_bytes()).await?;
     Ok(())
@@ -455,3 +511,60 @@ fn parse_host_port(target: &str) -> Result<(String, u16), Box<dyn std::error::Er
         Ok((target.to_string(), 443))
     }
 }
+
+/// Context extracted from HTTP headers for repository-scoped secret resolution.
+#[derive(Debug, Clone)]
+pub struct RequestContext {
+    pub repository_id: Option<String>,
+    pub project_id: Option<String>,
+}
+
+impl RequestContext {
+    pub fn from_headers(raw: &[u8]) -> Self {
+        let header_str = match std::str::from_utf8(raw) {
+            Ok(s) => s,
+            Err(_) => return Self { repository_id: None, project_id: None },
+        };
+        
+        let mut repository_id = None;
+        let mut project_id = None;
+        
+        for line in header_str.lines() {
+            if let Some(colon) = line.find(':') {
+                let name = line[..colon].trim().to_lowercase();
+                let value = line[colon + 1..].trim();
+                
+                match name.as_str() {
+                    "x-proxy-repository-id" => {
+                        if !value.is_empty() {
+                            repository_id = Some(value.to_string());
+                        }
+                    }
+                    "x-proxy-project-id" => {
+                        if !value.is_empty() {
+                            project_id = Some(value.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        Self { repository_id, project_id }
+    }
+    
+    pub fn is_empty(&self) -> bool {
+        self.repository_id.is_none() && self.project_id.is_none()
+    }
+    
+    pub fn description(&self) -> String {
+        match (&self.repository_id, &self.project_id) {
+            (Some(repo), Some(proj)) => format!("repo:{}, project:{}", repo, proj),
+            (Some(repo), None) => format!("repo:{}", repo),
+            (None, Some(proj)) => format!("project:{}", proj),
+            (None, None) => "global".to_string(),
+        }
+    }
+}
+
+

@@ -60,11 +60,31 @@ function resolveProxyBinary(): string {
 }
 
 /** Start the MITM secrets proxy (Rust binary). */
-export async function startSecretsProxy(): Promise<void> {
-  const port = getProxyPort();
-  const binaryPath = resolveProxyBinary();
+export async function startSecretsProxy(repositoryId?: string, projectId?: string): Promise<void> {
+  console.log('[secrets-proxy] starting MITM proxy...');
 
-  const allSecrets = await secretsService.findAll();
+  const binaryPath = resolveProxyBinary();
+  if (!binaryPath) {
+    console.warn('[secrets-proxy] apex-proxy binary not found, MITM interception disabled');
+    return;
+  }
+
+  if (proxyProcess && !proxyProcess.killed) {
+    console.warn('[secrets-proxy] proxy already running');
+    return;
+  }
+
+  const port = getProxyPort();
+  const [allSecrets, githubToken, caCertPem, caKeyPem] = await Promise.all([
+    // Use context-aware secret resolution if context is provided
+    repositoryId || projectId 
+      ? secretsService.resolveForContext('system', projectId, repositoryId)
+      : secretsService.findAll(),
+    settingsService.get('GITHUB_TOKEN'),
+    getCACertPem(),
+    getCAKeyPem(),
+  ]);
+
   const secretsJson = JSON.stringify(
     allSecrets.map((s) => ({
       id: s.id,
@@ -72,19 +92,16 @@ export async function startSecretsProxy(): Promise<void> {
       value: s.value,
       domain: s.domain,
       authType: s.authType || 'bearer',
+      repositoryId: s.repositoryId || null,
+      projectId: s.projectId || null,
+      isSecret: s.isSecret ?? true,
     })),
   );
 
-  let caCertPem = '';
-  let caKeyPem = '';
-  try {
-    caCertPem = getCACertPem();
-    caKeyPem = getCAKeyPem();
-  } catch {
+  // CA certificate already loaded from Promise.all above
+  if (!caCertPem || !caKeyPem) {
     console.warn('[secrets-proxy] CA certificate not available, MITM interception disabled');
   }
-
-  const githubToken = (await settingsService.get('GITHUB_TOKEN')) || '';
 
   console.log(`[secrets-proxy] Starting Rust proxy: ${binaryPath} on port ${port}`);
 
@@ -177,20 +194,42 @@ export function restartSecretsProxy(): Promise<void> {
 }
 
 async function reloadSecrets(): Promise<void> {
+  return reloadSecretsWithContext();
+}
+
+async function reloadSecretsWithContext(repositoryId?: string, projectId?: string): Promise<void> {
   if (!proxyProcess || proxyProcess.killed) return;
 
   try {
-    const allSecrets = await secretsService.findAll();
+    let secretsToSend;
+    
+    if (repositoryId || projectId) {
+      // For context-specific reloads, get secrets resolved for that context
+      // We send both secrets (isSecret=true) and env vars (isSecret=false) so the proxy
+      // knows what to intercept vs ignore based on repository/project context
+      const userId = 'system'; // TODO: Get actual user ID from session context
+      secretsToSend = await secretsService.resolveForContext(userId, projectId, repositoryId);
+    } else {
+      // For global reloads, get all secrets and env vars
+      // The proxy filters based on isSecret flag during resolution
+      secretsToSend = await secretsService.findAll();
+    }
+    
     const githubToken = (await settingsService.get('GITHUB_TOKEN')) || '';
     const payload = JSON.stringify({
-      secrets: allSecrets.map((s) => ({
+      secrets: secretsToSend.map((s) => ({
         id: s.id,
         name: s.name,
         value: s.value,
         domain: s.domain,
         authType: s.authType || 'bearer',
+        repositoryId: s.repositoryId || null,
+        projectId: s.projectId || null,
+        isSecret: s.isSecret ?? true,
       })),
       github_token: githubToken,
+      repository_id: repositoryId || null,
+      project_id: projectId || null,
     });
 
     const port = getProxyPort();
@@ -213,7 +252,10 @@ async function reloadSecrets(): Promise<void> {
       req.write(payload);
       req.end();
     });
-    console.log(`[secrets-proxy] secrets reloaded (${allSecrets.length} secrets, github_token: ${githubToken ? 'present' : 'empty'})`);
+    const contextStr = repositoryId ? `repo:${repositoryId}` : projectId ? `project:${projectId}` : 'global';
+    const secretsCount = secretsToSend.filter(s => s.isSecret).length;
+    const envVarsCount = secretsToSend.filter(s => !s.isSecret).length;
+    console.log(`[secrets-proxy] reloaded ${secretsCount} secrets, ${envVarsCount} env vars (${secretsToSend.length} total), github_token: ${githubToken ? 'present' : 'empty'}, context: ${contextStr}`);
   } catch (err) {
     console.warn(`[secrets-proxy] reload failed: ${(err as Error).message}`);
   }
@@ -221,3 +263,6 @@ async function reloadSecrets(): Promise<void> {
 
 /** Get the port the proxy is running on. */
 export { getProxyPort as getSecretsProxyPort };
+
+/** Hot-reload secrets with repository/project context. */
+export { reloadSecretsWithContext };
