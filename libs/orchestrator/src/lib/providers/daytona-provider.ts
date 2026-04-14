@@ -262,6 +262,31 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     this.daytona = new Daytona();
   }
 
+  /**
+   * Fast validation of Daytona API key by making a lightweight API call.
+   * Throws an error immediately if authentication fails.
+   */
+  async validateAuthentication(): Promise<void> {
+    if (!this.daytona) throw new Error("DaytonaSandboxProvider not initialized");
+    
+    try {
+      // Make a minimal API call to validate authentication
+      // The list() call is lightweight and will fail fast if auth is invalid
+      await limiter.run(() => this.daytona!.list());
+    } catch (err: any) {
+      // Check for authentication-related errors
+      if (err?.statusCode === 401 || err?.statusCode === 403) {
+        throw new Error(`Daytona API authentication failed: Invalid API key`);
+      }
+      // For 400-level errors that aren't auth-related, still fail fast
+      if (err?.statusCode >= 400 && err?.statusCode < 500) {
+        throw new Error(`Daytona API error: ${err.message || 'Client error'}`);
+      }
+      // Re-throw other errors (network issues, etc.) as-is
+      throw err;
+    }
+  }
+
   async create(params: CreateSandboxParams): Promise<SandboxInstance> {
     if (!this.daytona) throw new Error("DaytonaSandboxProvider not initialized");
     const daytona = this.daytona;

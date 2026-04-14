@@ -83,6 +83,11 @@ class ProxySandboxService {
     openaiKey: string,
   ): Promise<ProxySandboxInfo> {
     const currentHash = hashKeys(anthropicKey, openaiKey);
+    
+    // Fast validation of Daytona API key before any proxy sandbox operations
+    if (typeof (daytonaProvider as any).validateAuthentication === 'function') {
+      await (daytonaProvider as any).validateAuthentication();
+    }
 
     const [storedId, storedHash, storedUrl, storedToken, storedProjectsUrl] = await Promise.all([
       settingsService.get(SETTINGS_KEYS.sandboxId),
