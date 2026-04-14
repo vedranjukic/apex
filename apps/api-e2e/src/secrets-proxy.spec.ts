@@ -185,14 +185,23 @@ async function connectAndRequest(
   path: string,
   headers: Record<string, string>,
   body?: string,
+  retries = 2,
 ): Promise<{ statusCode: number; headers: string; body: string; rawBytes: Buffer }> {
-  const socket = await proxyConnect(domain, 443);
-  const tlsSocket = await tlsHandshake(socket, domain, false);
-  try {
-    return await sendHttpRequest(tlsSocket, method, path, { Host: domain, ...headers }, body);
-  } finally {
-    tlsSocket.destroy();
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const socket = await proxyConnect(domain, 443);
+    const tlsSocket = await tlsHandshake(socket, domain, false);
+    try {
+      const result = await sendHttpRequest(tlsSocket, method, path, { Host: domain, ...headers }, body);
+      if (result.statusCode === 502 && attempt < retries) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+      return result;
+    } finally {
+      tlsSocket.destroy();
+    }
   }
+  throw new Error('unreachable');
 }
 
 // ── Tests ────────────────────────────────────────────

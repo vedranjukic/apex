@@ -82,14 +82,6 @@ class ProxySandboxService {
     anthropicKey: string,
     openaiKey: string,
   ): Promise<ProxySandboxInfo> {
-    // Skip proxy sandbox creation during e2e tests
-    if (process.env.APEX_E2E_TEST === '1') {
-      return {
-        proxyBaseUrl: 'http://localhost:9999', // Dummy URL for tests
-        authToken: 'test-token',
-        projectsApiUrl: 'http://localhost:9998'
-      };
-    }
     const currentHash = hashKeys(anthropicKey, openaiKey);
 
     const [storedId, storedHash, storedUrl, storedToken, storedProjectsUrl] = await Promise.all([
