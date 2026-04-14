@@ -181,4 +181,13 @@ export const secretsRoutes = new Elysia({ prefix: '/api/secrets' })
     projectsService.updateContextSecretsOnManagers(undefined, undefined).catch(() => {}); // Global cache clear for delete
     restartSecretsProxy().catch(() => {});
     return { ok: true };
+  })
+  .get('/resolve', async ({ query }) => {
+    // Test endpoint for context resolution
+    const userId = usersService.getDefaultUserId();
+    const projectId = query.projectId as string | undefined;
+    const repositoryId = query.repositoryId as string | undefined;
+    
+    const resolvedSecrets = await secretsService.resolveForContext(userId, projectId, repositoryId);
+    return resolvedSecrets;
   });
