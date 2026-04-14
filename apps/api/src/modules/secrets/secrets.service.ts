@@ -91,7 +91,12 @@ class SecretsService {
       );
     }
 
-    const rows = await db.select().from(secrets).where(whereCondition);
+    const rows = await db.select().from(secrets).where(
+      and(
+        whereCondition,
+        sql`${secrets.name} != '__APEX_REPO_PLACEHOLDER__'`
+      )
+    );
     return rows.map(({ value: _v, ...rest }) => rest);
   }
 
@@ -101,7 +106,7 @@ class SecretsService {
    */
   async listRepositories(userId: string): Promise<RepositoryInfo[]> {
     // Get all repositories from projects
-    const { projects } = await import('../../database/schema');
+    const { projects, repositories } = await import('../../database/schema');
     const { parseGitHubUrl } = await import('@apex/shared');
     
     const userProjects = await db.select().from(projects).where(eq(projects.userId, userId));
@@ -127,14 +132,17 @@ class SecretsService {
       }
     }
 
+
+
     // Get secret counts and last modified for repositories that have secrets
+    // Exclude placeholder secrets from counts but include them for repository discovery
     const secretCounts = await db
       .select({
         repositoryId: secrets.repositoryId,
-        secretCount: sql<number>`count(case when ${secrets.isSecret} = true then 1 end)`,
-        envVarCount: sql<number>`count(case when ${secrets.isSecret} = false then 1 end)`,
-        totalCount: count(),
-        lastModified: sql<string>`max(${secrets.updatedAt})`,
+        secretCount: sql<number>`count(case when ${secrets.isSecret} = true AND ${secrets.name} != '__APEX_REPO_PLACEHOLDER__' then 1 end)`,
+        envVarCount: sql<number>`count(case when ${secrets.isSecret} = false AND ${secrets.name} != '__APEX_REPO_PLACEHOLDER__' then 1 end)`,
+        totalCount: sql<number>`count(case when ${secrets.name} != '__APEX_REPO_PLACEHOLDER__' then 1 end)`,
+        lastModified: sql<string>`max(case when ${secrets.name} != '__APEX_REPO_PLACEHOLDER__' then ${secrets.updatedAt} end)`,
       })
       .from(secrets)
       .where(and(
@@ -191,16 +199,96 @@ class SecretsService {
     const rows = await db.select().from(secrets).where(
       and(
         eq(secrets.userId, userId),
-        eq(secrets.repositoryId, repositoryId)
+        eq(secrets.repositoryId, repositoryId),
+        sql`${secrets.name} != '__APEX_REPO_PLACEHOLDER__'`
       )
     );
     return rows.map(({ value: _v, ...rest }) => rest);
   }
 
   /**
+   * Validate and register a repository for manual addition
+   */
+  async createRepository(userId: string, repositoryUrl: string): Promise<{ repositoryId: string; success: boolean; message: string }> {
+    const { parseGitHubUrl } = await import('@apex/shared');
+    const parsed = parseGitHubUrl(repositoryUrl);
+    
+    if (!parsed) {
+      return { 
+        repositoryId: '', 
+        success: false, 
+        message: 'Invalid GitHub URL. Please enter a valid GitHub repository URL (e.g., https://github.com/owner/repo)' 
+      };
+    }
+    
+    const repositoryId = `${parsed.owner}/${parsed.repo}`;
+    
+    // Check if repository already has secrets or projects
+    const existingSecret = await db.query.secrets.findFirst({
+      where: and(eq(secrets.userId, userId), eq(secrets.repositoryId, repositoryId)),
+    });
+    
+    if (existingSecret) {
+      return { 
+        repositoryId, 
+        success: false, 
+        message: 'Repository already exists in your repositories list' 
+      };
+    }
+    
+    // Check if it exists via projects
+    const { projects } = await import('../../database/schema');
+    const projectWithRepo = await db.query.projects.findFirst({
+      where: and(eq(projects.userId, userId), sql`git_repo LIKE ${'%' + repositoryId + '%'}`),
+    });
+    
+    if (projectWithRepo) {
+      return { 
+        repositoryId, 
+        success: false, 
+        message: 'Repository already exists through your projects' 
+      };
+    }
+    
+    // Create a placeholder secret to make the repository visible in the list
+    // This placeholder will be replaced when the user adds their first real secret
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await db.insert(secrets).values({
+      id,
+      userId,
+      projectId: null,
+      repositoryId,
+      name: '__APEX_REPO_PLACEHOLDER__',
+      value: 'placeholder',
+      domain: 'none',
+      authType: 'none',
+      isSecret: false,
+      description: 'Internal placeholder - repository was manually added',
+      createdAt: now,
+      updatedAt: now,
+    });
+    
+    return { 
+      repositoryId, 
+      success: true, 
+      message: 'Repository added successfully!' 
+    };
+  }
+
+  /**
    * Create a secret for a specific repository
    */
   async createRepositorySecret(userId: string, repositoryId: string, input: Omit<CreateSecretInput, 'repositoryId' | 'projectId'>): Promise<SecretRecord> {
+    // Remove any placeholder secret for this repository when adding the first real secret
+    await db.delete(secrets).where(
+      and(
+        eq(secrets.userId, userId),
+        eq(secrets.repositoryId, repositoryId),
+        eq(secrets.name, '__APEX_REPO_PLACEHOLDER__')
+      )
+    );
+    
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const row = {
@@ -262,6 +350,21 @@ class SecretsService {
     if (!existing) return false;
     await db.delete(secrets).where(eq(secrets.id, id));
     return true;
+  }
+
+  /**
+   * Remove all secrets for a repository
+   */
+  async removeRepository(userId: string, repositoryId: string): Promise<boolean> {
+    // Delete all secrets for this repository (including placeholders)
+    await db.delete(secrets).where(
+      and(
+        eq(secrets.userId, userId),
+        eq(secrets.repositoryId, repositoryId)
+      )
+    );
+    
+    return true; // Always return true since even deleting 0 rows is "successful"
   }
 
   async create(userId: string, input: CreateSecretInput): Promise<SecretRecord> {

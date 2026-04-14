@@ -10,15 +10,18 @@ import {
   KeyRound,
   Shield,
   Database,
+  Plus,
 } from 'lucide-react';
 import { AppShell } from '../components/layout/app-shell';
 import { repositoriesApi, type RepositoryInfo } from '../api/client';
+import { AddRepositoryDialog } from '../components/repositories/add-repository-dialog';
 
 export function RepositoriesPage() {
   const navigate = useNavigate();
   const [repositories, setRepositories] = useState<RepositoryInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [showAddDialog, setShowAddDialog] = useState(false);
 
   const fetchRepositories = async () => {
     try {
@@ -78,20 +81,28 @@ export function RepositoriesPage() {
             Back to projects
           </button>
 
-          <div className="flex items-start justify-between mb-6">
-            <div>
+          <div className="mb-6">
+            <div className="flex items-center justify-between gap-4 mb-1">
               <h1 className="text-2xl font-bold flex items-center gap-2">
                 <GitBranch className="w-6 h-6" />
                 Repositories
               </h1>
-              <p className="text-sm text-text-secondary mt-1">
-                Manage repository-scoped secrets and environment variables.
-                These are available to all projects that use the same GitHub repository.
-              </p>
-              <p className="text-xs text-text-muted mt-1">
-                Repositories are automatically discovered from your projects' Git URLs.
-              </p>
+              <button
+                onClick={() => setShowAddDialog(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg text-sm hover:bg-primary-hover transition-colors shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+                Add
+              </button>
             </div>
+            <p className="text-sm text-text-secondary mt-3">
+              Manage repository-scoped secrets and environment variables.
+              These are available to all projects that use the same GitHub repository.
+            </p>
+            <p className="text-xs text-text-muted mt-2">
+              Repositories are automatically discovered from your projects' Git URLs, or you can add them manually. 
+              Added repositories appear immediately and can be configured with secrets and environment variables.
+            </p>
           </div>
 
           <div className="space-y-3">
@@ -99,10 +110,10 @@ export function RepositoriesPage() {
               <div className="text-center py-12 text-text-muted">
                 <Package className="w-10 h-10 mx-auto mb-3 opacity-40" />
                 <p className="text-sm">No repositories found.</p>
-                <p className="text-xs mt-1">
-                  Create projects from GitHub repositories to see them here,
-                  then you can configure repository-scoped secrets.
-                </p>
+              <p className="text-xs mt-1">
+                Create projects from GitHub repositories or manually add repositories above,
+                then add secrets to see them here.
+              </p>
               </div>
             ) : (
               repositories.map((repository) => (
@@ -151,10 +162,10 @@ export function RepositoriesPage() {
                   <div className="flex items-center gap-2 ml-4">
                     <button
                       onClick={() => handleManageSecrets(repository.repositoryId)}
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-primary text-on-primary hover:bg-primary-hover transition-colors"
+                      className="p-2 rounded-lg text-primary hover:text-primary-hover hover:bg-surface-secondary transition-colors"
+                      title="Manage secrets and environment variables"
                     >
                       <Settings className="w-4 h-4" />
-                      {repository.totalCount > 0 ? 'Manage' : 'Add Secrets'}
                     </button>
                     <button
                       onClick={() => handleDeleteRepository(repository.repositoryId)}
@@ -175,6 +186,14 @@ export function RepositoriesPage() {
           </div>
         </div>
       </div>
+
+      <AddRepositoryDialog
+        open={showAddDialog}
+        onClose={() => setShowAddDialog(false)}
+        onRepositoryAdded={() => {
+          fetchRepositories();
+        }}
+      />
     </AppShell>
   );
 }

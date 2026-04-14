@@ -25,6 +25,30 @@ export const secretsRoutes = new Elysia({ prefix: '/api/secrets' })
     const repositories = await secretsService.listRepositories(userId);
     return repositories;
   })
+  .post('/repositories', async ({ body }) => {
+    console.log('=== Repository creation route called ===');
+    const userId = usersService.getDefaultUserId();
+    const input = body as { repositoryUrl: string };
+    console.log('About to call secretsService.createRepository');
+    const result = await secretsService.createRepository(userId, input.repositoryUrl);
+    if (!result.success) {
+      return new Response(JSON.stringify({ error: result.message }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return result;
+  })
+  .delete('/repositories/:repositoryId', async ({ params }) => {
+    const userId = usersService.getDefaultUserId();
+    const repositoryId = decodeURIComponent(params.repositoryId);
+    const ok = await secretsService.removeRepository(userId, repositoryId);
+    projectsService.reinitSandboxManager().catch(() => {});
+    projectsService.updateSecretDomainsOnManagers().catch(() => {});
+    projectsService.updateContextSecretsOnManagers(undefined, repositoryId).catch(() => {});
+    restartSecretsProxy().catch(() => {});
+    return { ok };
+  })
   .get('/repositories/:repositoryId', async ({ params }) => {
     const userId = usersService.getDefaultUserId();
     const repositoryId = decodeURIComponent(params.repositoryId);

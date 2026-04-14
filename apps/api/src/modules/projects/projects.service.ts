@@ -40,6 +40,7 @@ class ProjectsService {
   private providerStatuses: ProviderStatus[] = [];
   private autoStartHandler: AutoStartHandler | null = null;
   private currentSecretPlaceholders: Record<string, string> = {};
+  private currentEnvironmentVariables: Record<string, string> = {};
   private secretsCache = new Map<string, { envVars: Record<string, string>; secrets: string[]; timestamp: number }>();
   private readonly SECRETS_CACHE_TTL = 60000; // 1 minute cache TTL
   async init() {
@@ -147,21 +148,34 @@ class ProjectsService {
     try { caCert = getCACertPem(); } catch { /* CA not yet initialized */ }
 
     const secretPlaceholders: Record<string, string> = {};
+    const environmentVariables: Record<string, string> = {};
     let secretDomains: string[] = [];
     try {
       const domains = await secretsService.getSecretDomains();
       secretDomains = [...domains];
       if (domains.size > 0) {
-        // Get all secrets to build placeholder mapping
+        // Get all items and separate secrets from environment variables
         const allSecrets = await secretsService.findAll();
         for (const s of allSecrets) {
-          secretPlaceholders[s.name] = 'sk-proxy-placeholder';
+          if (s.isSecret) {
+            // Only apply placeholders to actual secrets, not environment variables
+            secretPlaceholders[s.name] = 'sk-proxy-placeholder';
+          } else {
+            // Store environment variables with their actual values
+            environmentVariables[s.name] = s.value;
+          }
         }
       }
     } catch { /* secrets table may not exist yet */ }
     
     // Store for use in getContextSecrets
     this.currentSecretPlaceholders = secretPlaceholders;
+    this.currentEnvironmentVariables = environmentVariables;
+    
+    // Pre-populate cache for all known repositories to avoid empty values during startup
+    this.prePopulateRepositoryCaches().catch(err => {
+      console.warn('[projects] Failed to pre-populate repository caches:', err);
+    });
 
     let gitUserName = '';
     let gitUserEmail = '';
@@ -458,12 +472,11 @@ class ProjectsService {
       return { envVars: cached.envVars, secrets: cached.secrets };
     }
     
-    // For Phase 4A: Basic implementation with async cache refresh
-    const envVars: Record<string, string> = {};
+    // Basic implementation with async cache refresh
+    const envVars: Record<string, string> = { ...this.currentEnvironmentVariables };
     const secrets: string[] = [];
     
-    // All existing placeholders are treated as secrets for now
-    // This maintains backward compatibility while preparing for the isSecret field
+    // Only placeholders (actual secrets) are treated as secrets
     for (const secretName of Object.keys(this.currentSecretPlaceholders || {})) {
       secrets.push(secretName);
     }
@@ -485,6 +498,32 @@ class ProjectsService {
   }
 
   /**
+   * Pre-populate cache for all known repositories during initialization.
+   */
+  private async prePopulateRepositoryCaches(): Promise<void> {
+    try {
+      const userId = '00000000-0000-0000-0000-000000000001';
+      
+      // Get all unique repository IDs from secrets
+      const allSecrets = await secretsService.findAll();
+      const repositoryIds = new Set<string>();
+      
+      for (const secret of allSecrets) {
+        if (secret.repositoryId) {
+          repositoryIds.add(secret.repositoryId);
+        }
+      }
+      
+      // Pre-populate cache for each repository
+      for (const repositoryId of repositoryIds) {
+        await this.refreshSecretsCache(undefined, repositoryId, `global:${repositoryId}`);
+      }
+    } catch (error) {
+      console.warn('[projects] Failed to pre-populate repository caches:', error);
+    }
+  }
+
+  /**
    * Asynchronously refresh secrets cache for a specific context.
    */
   private async refreshSecretsCache(projectId?: string, repositoryId?: string, cacheKey?: string): Promise<void> {
@@ -494,7 +533,6 @@ class ProjectsService {
       
       // Use the new repository-based resolution
       const resolvedSecrets = await secretsService.resolveForContext(userId, projectId, repositoryId);
-      
       const envVars: Record<string, string> = {};
       const secrets: string[] = [];
       
@@ -516,7 +554,7 @@ class ProjectsService {
         timestamp: Date.now()
       });
       
-      console.log(`[projects] Refreshed secrets cache for ${key}: ${secrets.length} secrets, ${Object.keys(envVars).length} env vars`);
+
     } catch (error) {
       console.warn('[projects] Failed to refresh secrets cache:', error);
     }

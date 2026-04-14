@@ -299,7 +299,12 @@ export interface RepositoryInfo {
 }
 
 export const repositoriesApi = {
-  list: () => request<RepositoryInfo[]>('/repositories'),
+  list: () => request<RepositoryInfo[]>('/secrets/repositories'),
+  create: (repositoryUrl: string) =>
+    request<{ repositoryId: string; success: boolean; message: string }>('/secrets/repositories', {
+      method: 'POST',
+      body: JSON.stringify({ repositoryUrl }),
+    }),
   delete: (repositoryId: string) =>
-    request<{ ok: boolean }>(`/repositories/${encodeURIComponent(repositoryId)}`, { method: 'DELETE' }),
+    request<{ ok: boolean }>(`/secrets/repositories/${encodeURIComponent(repositoryId)}`, { method: 'DELETE' }),
 };
