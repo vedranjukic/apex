@@ -14,6 +14,10 @@ const sqlite = new Database(dbPath, { create: true });
 sqlite.exec('PRAGMA journal_mode = WAL;');
 sqlite.exec('PRAGMA foreign_keys = ON;');
 
+// ── Phase 1: Create tables (no indexes) ─────────────────────────────
+// CREATE TABLE IF NOT EXISTS is a no-op when the table already exists,
+// so new columns added here won't reach existing databases. Phase 2
+// handles that via auto-sync from the drizzle schema.
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -89,22 +93,12 @@ sqlite.exec(`
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
-  CREATE UNIQUE INDEX IF NOT EXISTS secrets_unique_global 
-    ON secrets(user_id, name) 
-    WHERE project_id IS NULL AND repository_id IS NULL;
-  CREATE UNIQUE INDEX IF NOT EXISTS secrets_unique_project 
-    ON secrets(user_id, project_id, name) 
-    WHERE project_id IS NOT NULL AND repository_id IS NULL;
-  CREATE UNIQUE INDEX IF NOT EXISTS secrets_unique_repository 
-    ON secrets(user_id, repository_id, name) 
-    WHERE repository_id IS NOT NULL;
 `);
 
-// ── Auto-sync schema ────────────────────────────────────────────────
-// Compare drizzle schema definitions against actual SQLite tables and
-// add any missing columns. This replaces hand-written ALTER TABLE
-// statements and prevents schema drift.
-
+// ── Phase 2: Auto-sync columns from drizzle schema ──────────────────
+// Compares drizzle schema definitions against actual SQLite columns and
+// adds any missing ones. This is what makes existing databases pick up
+// new columns (e.g. repository_id on secrets) without manual ALTERs.
 const drizzleTables = [
   schema.users, schema.projects, schema.tasks,
   schema.messages, schema.settings, schema.secrets,
@@ -143,18 +137,37 @@ for (const table of drizzleTables) {
   }
 }
 
+// ── Phase 3: Create indexes ─────────────────────────────────────────
+// Runs AFTER column auto-sync so that indexes referencing new columns
+// (e.g. repository_id) are safe. Each statement is independent so one
+// failure doesn't block the rest.
+const indexStatements = [
+  `CREATE UNIQUE INDEX IF NOT EXISTS secrets_unique_global ON secrets(user_id, name) WHERE project_id IS NULL AND repository_id IS NULL`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS secrets_unique_project ON secrets(user_id, project_id, name) WHERE project_id IS NOT NULL AND repository_id IS NULL`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS secrets_unique_repository ON secrets(user_id, repository_id, name) WHERE repository_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS secrets_user_repository_idx ON secrets(user_id, repository_id)`,
+  `CREATE INDEX IF NOT EXISTS secrets_user_project_idx ON secrets(user_id, project_id)`,
+  `CREATE INDEX IF NOT EXISTS secrets_repository_idx ON secrets(repository_id)`,
+  `CREATE INDEX IF NOT EXISTS secrets_is_secret_idx ON secrets(is_secret)`,
+];
+
+for (const stmt of indexStatements) {
+  try {
+    sqlite.exec(stmt);
+  } catch (e) {
+    console.warn(`[db] Failed to create index:`, (e as Error).message);
+  }
+}
+
 export const db = drizzle(sqlite, { schema });
 
-// Run migrations on database initialization asynchronously
-// Note: We don't await this to avoid blocking the module initialization
+// ── Phase 4: Data migrations ────────────────────────────────────────
 async function initMigrations() {
   try {
     const { runMigrations } = await import('./migrations/migration-runner');
     await runMigrations(sqlite);
   } catch (error) {
     console.error('[db] Migration failed:', error);
-    // Don't crash the application, but log the error
-    // In production, you might want to fail fast instead
   }
 }
 
