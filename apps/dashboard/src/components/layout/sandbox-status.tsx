@@ -62,6 +62,11 @@ const statusConfig: Record<
     color: 'text-red-500',
     dotColor: 'bg-red-400',
   },
+  offline: {
+    label: 'Offline',
+    color: 'text-orange-500',
+    dotColor: 'bg-orange-400',
+  },
 };
 
 export function SandboxStatus({ status, sandboxId, statusError, provider, onStop, onStart, onRestart }: Props) {
@@ -77,10 +82,11 @@ export function SandboxStatus({ status, sandboxId, statusError, provider, onStop
   const config = statusConfig[effectiveStatus] || statusConfig.stopped;
 
   const hasError = effectiveStatus === 'error' && !!statusError;
+  const isOffline = effectiveStatus === 'offline';
   const isRunning = isSandboxRunning(effectiveStatus);
   const isStopped = effectiveStatus === 'stopped' || effectiveStatus === 'error';
-  const hasActions = isRunning || isStopped;
-  const showOfflineIndicator = isDaytonaSandbox && isNetworkOffline && effectiveStatus === 'running-offline';
+  const hasActions = isRunning || isStopped || isOffline;
+  const showOfflineIndicator = isOffline || (isDaytonaSandbox && isNetworkOffline && effectiveStatus === 'running-offline');
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -148,6 +154,18 @@ export function SandboxStatus({ status, sandboxId, statusError, provider, onStop
               <div className="px-3 py-2">
                 <p className="text-[11px] text-red-400 break-words whitespace-pre-wrap leading-relaxed line-clamp-4">
                   {statusError}
+                </p>
+              </div>
+              <div className="border-t border-border my-1" />
+            </>
+          )}
+
+          {/* Offline notice */}
+          {isOffline && (
+            <>
+              <div className="px-3 py-2">
+                <p className="text-[11px] text-orange-400 break-words leading-relaxed">
+                  Sandbox is unreachable. Retrying automatically…
                 </p>
               </div>
               <div className="border-t border-border my-1" />

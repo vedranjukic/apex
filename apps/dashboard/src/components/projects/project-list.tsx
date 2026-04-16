@@ -4,7 +4,7 @@ import {
   Plus, FolderOpen, Trash2, ExternalLink, Loader2, CheckCircle2,
   CircleHelp, CirclePause, XCircle, Circle, GitBranch, ChevronDown, ChevronRight, Settings, Shield,
   Play, Square, RotateCw, MoreHorizontal, GitFork, CircleDot, GitPullRequest, Github,
-  Search, SlidersHorizontal, X,
+  Search, SlidersHorizontal, X, WifiOff,
 } from 'lucide-react';
 import { MergeStatusIcon } from './merge-status-icon';
 import { cn } from '../../lib/cn';
@@ -26,6 +26,7 @@ const STATUS_LABELS: Record<string, string> = {
   running: 'running',
   stopped: 'stopped',
   error: 'error',
+  offline: 'offline',
 };
 
 const STATUS_DOT_COLORS: Record<string, string> = {
@@ -37,6 +38,7 @@ const STATUS_DOT_COLORS: Record<string, string> = {
   running: 'bg-green-400',
   stopped: 'bg-text-muted',
   error: 'bg-red-400',
+  offline: 'bg-orange-400',
 };
 
 function ThreadStatusIcon({ status, className }: { status: string; className?: string }) {
@@ -96,6 +98,7 @@ function SandboxControls({ project, className }: { project: Project; className?:
   const iconSize = className ?? 'w-4 h-4';
 
   const isRunning = isSandboxRunning(project.status);
+  const isOffline = project.status === 'offline';
   const isStopped = project.status === 'stopped' || project.status === 'error';
   const isTransitioning = project.status === 'starting' || project.status === 'stopping' || project.status === 'creating' || project.status === 'pulling_image' || project.status === 'deleting';
 
@@ -124,6 +127,14 @@ function SandboxControls({ project, className }: { project: Project; className?:
     return (
       <span className="p-1.5" title={project.status}>
         <Loader2 className={cn(iconSize, 'animate-spin text-text-muted')} />
+      </span>
+    );
+  }
+
+  if (isOffline) {
+    return (
+      <span className="p-1.5" title="Sandbox offline — retrying…">
+        <WifiOff className={cn(iconSize, 'text-orange-400')} />
       </span>
     );
   }

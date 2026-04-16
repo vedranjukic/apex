@@ -282,6 +282,7 @@ class DockerSandboxInstance implements SandboxInstance {
 
 export class DockerSandboxProvider implements SandboxProvider {
   readonly type = "docker" as const;
+  readonly remote = false;
   private docker: Docker;
   private defaultImage: string;
 

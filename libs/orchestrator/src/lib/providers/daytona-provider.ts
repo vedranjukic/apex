@@ -253,6 +253,7 @@ class DaytonaSandboxInstance implements SandboxInstance {
 
 export class DaytonaSandboxProvider implements SandboxProvider {
   readonly type = "daytona" as const;
+  readonly remote = true;
   private daytona: Daytona | null = null;
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars

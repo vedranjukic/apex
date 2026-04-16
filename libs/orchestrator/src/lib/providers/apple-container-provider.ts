@@ -344,6 +344,7 @@ class AppleContainerInstance implements SandboxInstance {
 
 export class AppleContainerProvider implements SandboxProvider {
   readonly type = "apple-container" as const;
+  readonly remote = false;
   private defaultImage: string;
 
   constructor(config: SandboxProviderConfig = {}) {

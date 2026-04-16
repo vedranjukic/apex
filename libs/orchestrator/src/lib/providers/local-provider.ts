@@ -252,6 +252,7 @@ class LocalSandboxInstance implements SandboxInstance {
 
 export class LocalSandboxProvider implements SandboxProvider {
   readonly type = "local" as const;
+  readonly remote = false;
   private baseDir: string;
   private registry: SandboxEntry[] = [];
 

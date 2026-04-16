@@ -6,6 +6,7 @@ export enum ProjectStatus {
   Running = 'running',
   Stopped = 'stopped',
   Error = 'error',
+  Offline = 'offline',
 }
 
 export enum AgentType {

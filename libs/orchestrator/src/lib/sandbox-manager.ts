@@ -906,6 +906,11 @@ export class SandboxManager extends EventEmitter {
   }
 
 
+  /** Whether the underlying provider targets remote (network-accessed) sandboxes. */
+  get isRemote(): boolean {
+    return this.provider?.remote ?? false;
+  }
+
   /** Check if the bridge WebSocket for a sandbox is currently connected */
   isBridgeConnected(sandboxId: string): boolean {
     const session = this.sessions.get(sandboxId);

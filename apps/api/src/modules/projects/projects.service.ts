@@ -35,6 +35,9 @@ function canExec(cmd: string, args: string[]): Promise<boolean> {
 
 type AutoStartHandler = (threadId: string, prompt: string) => Promise<void>;
 
+const HEARTBEAT_INTERVAL_MS = 10_000;
+const ACTIVE_THREAD_STATUSES = ['running', 'waiting_for_input', 'waiting_for_user_action'];
+
 class ProjectsService {
   private sandboxManagers = new Map<string, SandboxManager>();
   private providerStatuses: ProviderStatus[] = [];
@@ -43,6 +46,8 @@ class ProjectsService {
   private currentEnvironmentVariables: Record<string, string> = {};
   private secretsCache = new Map<string, { envVars: Record<string, string>; secrets: string[]; timestamp: number }>();
   private readonly SECRETS_CACHE_TTL = 60000; // 1 minute cache TTL
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private reconnectingProjects = new Set<string>();
   async init() {
     await this.recoverStaleCreatingProjects();
     await this.initSandboxManagers();
@@ -52,6 +57,7 @@ class ProjectsService {
         console.warn('[projects] Bridge reconnection failed (non-fatal):', err);
       });
     }
+    this.startRemoteSandboxHeartbeat();
   }
 
   /**
@@ -76,6 +82,16 @@ class ProjectsService {
         }).where(eq(projects.id, p.id));
         projectsWsBroadcast('project_updated', await this.findById(p.id));
         console.log(`[projects]   → ${p.name} (${p.id}): creating → error`);
+      }
+      // Reset offline projects — the heartbeat loop will re-evaluate them once
+      // bridge connections are established.
+      const offline = await db.query.projects.findMany({
+        where: and(isNull(projects.deletedAt), eq(projects.status, 'offline')),
+      });
+      for (const p of offline) {
+        await db.update(projects).set({ status: 'running', statusError: null }).where(eq(projects.id, p.id));
+        projectsWsBroadcast('project_updated', await this.findById(p.id));
+        console.log(`[projects]   → ${p.name} (${p.id}): offline → running (will re-check via heartbeat)`);
       }
     } catch (err) {
       console.warn('[projects] Failed to recover stale creating projects:', err);
@@ -401,7 +417,7 @@ class ProjectsService {
 
   async startOrProvisionSandbox(projectId: string): Promise<void> {
     const project = await this.findById(projectId);
-    if (project.status !== 'stopped' && project.status !== 'error') return;
+    if (project.status !== 'stopped' && project.status !== 'error' && project.status !== 'offline') return;
 
     const manager = this.getManagerForProject(project);
     if (!manager) {
@@ -1190,6 +1206,112 @@ class ProjectsService {
       }
       throw err;
     }
+  }
+
+  // ── Remote sandbox heartbeat ─────────────────────────
+
+  private startRemoteSandboxHeartbeat(): void {
+    const hasRemote = [...this.sandboxManagers.values()].some((m) => m.isRemote);
+    if (!hasRemote) return;
+
+    console.log('[heartbeat] Starting remote sandbox heartbeat loop');
+    this.heartbeatTimer = setInterval(() => {
+      this.runHeartbeatCycle().catch((err) => {
+        console.warn('[heartbeat] Cycle error:', err);
+      });
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private async runHeartbeatCycle(): Promise<void> {
+    const candidates = await this.getHeartbeatCandidates();
+    if (candidates.length === 0) return;
+
+    for (const project of candidates) {
+      if (!project.sandboxId) continue;
+      const manager = this.getManagerForProject(project);
+      if (!manager || !manager.isRemote) continue;
+
+      const connected = manager.isBridgeConnected(project.sandboxId);
+
+      if (connected) {
+        if (project.status === 'offline') {
+          console.log(`[heartbeat] ${project.name} (${project.id.slice(0, 8)}): bridge reconnected — recovering`);
+          await db.update(projects).set({ status: 'running', statusError: null }).where(eq(projects.id, project.id));
+          const updated = await this.findById(project.id);
+          projectsWsBroadcast('project_updated', updated);
+          this.syncToProxy(updated);
+        }
+        continue;
+      }
+
+      if (project.status !== 'offline') {
+        console.log(`[heartbeat] ${project.name} (${project.id.slice(0, 8)}): bridge disconnected — marking offline`);
+        await db.update(projects).set({ status: 'offline', statusError: 'Sandbox unreachable' }).where(eq(projects.id, project.id));
+        const updated = await this.findById(project.id);
+        projectsWsBroadcast('project_updated', updated);
+      }
+
+      if (!this.reconnectingProjects.has(project.id)) {
+        this.attemptHeartbeatReconnect(project);
+      }
+    }
+  }
+
+  /**
+   * Get projects that need heartbeat checks: remote-provider projects that
+   * either have active threads or are already marked offline.
+   */
+  private async getHeartbeatCandidates(): Promise<Project[]> {
+    const remoteProviders = [...this.sandboxManagers.entries()]
+      .filter(([, m]) => m.isRemote)
+      .map(([type]) => type);
+    if (remoteProviders.length === 0) return [];
+
+    const allRemote = await db.query.projects.findMany({
+      where: and(
+        isNull(projects.deletedAt),
+        isNotNull(projects.sandboxId),
+        inArray(projects.provider, remoteProviders),
+        inArray(projects.status, ['running', 'offline']),
+      ),
+      with: { threads: true },
+    }) as Project[];
+
+    return allRemote.filter((p) => {
+      if (p.status === 'offline') return true;
+      return p.threads?.some((t) => ACTIVE_THREAD_STATUSES.includes(t.status));
+    });
+  }
+
+  /**
+   * Fire-and-forget reconnect attempt for an offline sandbox.
+   * On success the next heartbeat cycle will detect the bridge as connected
+   * and mark the project running.  The bridge reconnection flow automatically
+   * triggers `bridge_ready` → `bridge_threads` → `requestReplay` which
+   * syncs thread content.
+   */
+  private attemptHeartbeatReconnect(project: Project): void {
+    this.reconnectingProjects.add(project.id);
+    const manager = this.getManagerForProject(project);
+    if (!manager) { this.reconnectingProjects.delete(project.id); return; }
+
+    manager
+      .reconnectSandbox(project.sandboxId!, project.name, project.localDir || undefined)
+      .then(async () => {
+        console.log(`[heartbeat] ${project.name} (${project.id.slice(0, 8)}): reconnect succeeded`);
+        if (project.status === 'offline') {
+          await db.update(projects).set({ status: 'running', statusError: null }).where(eq(projects.id, project.id));
+          const updated = await this.findById(project.id);
+          projectsWsBroadcast('project_updated', updated);
+          this.syncToProxy(updated);
+        }
+      })
+      .catch((err) => {
+        console.log(`[heartbeat] ${project.name} (${project.id.slice(0, 8)}): reconnect failed — ${(err as Error).message}`);
+      })
+      .finally(() => {
+        this.reconnectingProjects.delete(project.id);
+      });
   }
 }
 

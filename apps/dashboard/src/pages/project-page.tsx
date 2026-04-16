@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Loader2, ArrowLeft, AlertCircle, RefreshCw, Play } from 'lucide-react';
+import { Loader2, ArrowLeft, AlertCircle, RefreshCw, Play, WifiOff } from 'lucide-react';
 import { projectsApi, type Project } from '../api/client';
 import { AppShell } from '../components/layout/app-shell';
 import { LeftSidebar } from '../components/layout/left-sidebar';
@@ -215,7 +215,7 @@ export function ProjectPage() {
 
 
 
-  const shouldPoll = project?.status === 'creating' || project?.status === 'pulling_image' || project?.status === 'stopped' || project?.status === 'starting' || project?.status === 'stopping';
+  const shouldPoll = project?.status === 'creating' || project?.status === 'pulling_image' || project?.status === 'stopped' || project?.status === 'starting' || project?.status === 'stopping' || project?.status === 'offline';
 
   useEffect(() => {
     if (!projectId || !project || !shouldPoll) {
@@ -378,7 +378,7 @@ export function ProjectPage() {
       }
     >
       {/* Loading overlay while sandbox provisions, starts, or layout restores */}
-      {(project.status === 'creating' || project.status === 'pulling_image' || project.status === 'starting' || project.status === 'stopping' || project.status === 'stopped' || project.status === 'error' || !layoutReady) && (
+      {(project.status === 'creating' || project.status === 'pulling_image' || project.status === 'starting' || project.status === 'stopping' || project.status === 'stopped' || project.status === 'error' || project.status === 'offline' || !layoutReady) && (
         <SandboxOverlay project={project} provisionMsg={provisionMsg} onStart={handleStartSandbox} onRestart={handleRestartSandbox} />
       )}
       <LspProvider socket={socket} projectId={projectId}>
@@ -488,31 +488,36 @@ function BackToProjectsButton() {
 function SandboxOverlay({ project, provisionMsg, onStart, onRestart }: { project: Project; provisionMsg: string | null; onStart?: () => void; onRestart?: () => void }) {
   const isError = project.status === 'error';
   const isStopped = project.status === 'stopped';
+  const isOffline = project.status === 'offline';
   const sandboxMissing = !project.sandboxId && (isStopped || isError);
 
   const isStopping = project.status === 'stopping';
   const statusMessage = provisionMsg
     ? provisionMsg
-    : project.status === 'pulling_image'
-      ? 'Pulling container image… This may take a few minutes.'
-      : project.status === 'creating'
-        ? 'Provisioning sandbox environment…'
-        : project.status === 'starting'
-          ? 'Starting sandbox…'
-          : isStopping
-            ? 'Stopping sandbox…'
-            : isStopped && !project.sandboxId
-              ? 'No sandbox provisioned.'
-              : isStopped
-                ? 'Sandbox is stopped.'
-                : isError
-                  ? project.statusError || 'Unknown sandbox error'
-                  : 'Restoring workspace…';
+    : isOffline
+      ? 'Sandbox is unreachable. Retrying automatically…'
+      : project.status === 'pulling_image'
+        ? 'Pulling container image… This may take a few minutes.'
+        : project.status === 'creating'
+          ? 'Provisioning sandbox environment…'
+          : project.status === 'starting'
+            ? 'Starting sandbox…'
+            : isStopping
+              ? 'Stopping sandbox…'
+              : isStopped && !project.sandboxId
+                ? 'No sandbox provisioned.'
+                : isStopped
+                  ? 'Sandbox is stopped.'
+                  : isError
+                    ? project.statusError || 'Unknown sandbox error'
+                    : 'Restoring workspace…';
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-scrim">
       <div className="flex flex-col items-center gap-4 max-w-[400px] text-center px-6">
-        {isError ? (
+        {isOffline ? (
+          <WifiOff className="w-8 h-8 text-orange-400" />
+        ) : isError ? (
           <AlertCircle className="w-8 h-8 text-danger" />
         ) : (
           <Loader2 className="w-8 h-8 text-primary animate-spin" />
@@ -520,7 +525,7 @@ function SandboxOverlay({ project, provisionMsg, onStart, onRestart }: { project
 
         <div>
           <p className="text-sm font-medium text-text-primary mb-1">
-            {isError ? 'Sandbox Error' : sandboxMissing ? 'Setting up sandbox' : 'Loading project'}
+            {isOffline ? 'Sandbox Offline' : isError ? 'Sandbox Error' : sandboxMissing ? 'Setting up sandbox' : 'Loading project'}
           </p>
           <p className="text-xs text-text-muted">
             {statusMessage}

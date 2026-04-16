@@ -165,6 +165,8 @@ export interface SandboxProviderConfig {
  */
 export interface SandboxProvider {
   readonly type: SandboxProviderType;
+  /** Whether this provider's sandboxes are accessed over the network (e.g. Daytona). */
+  readonly remote: boolean;
   initialize(): Promise<void>;
   create(params: CreateSandboxParams): Promise<SandboxInstance>;
   get(sandboxId: string): Promise<SandboxInstance>;
