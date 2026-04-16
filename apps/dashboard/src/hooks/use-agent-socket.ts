@@ -239,6 +239,22 @@ export function useAgentSocket(projectId: string | undefined) {
       }
     });
 
+    let hiddenSince: number | null = null;
+    const MIN_HIDDEN_MS = 30_000;
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenSince = Date.now();
+      } else if (document.visibilityState === 'visible' && hiddenSince) {
+        const elapsed = Date.now() - hiddenSince;
+        hiddenSince = null;
+        if (elapsed >= MIN_HIDDEN_MS) {
+          console.log(`[ws] Page visible after ${Math.round(elapsed / 1000)}s hidden, forcing agent WS reconnect`);
+          ws.forceReconnect();
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
     ws.on('agent_error', (data) => {
       console.error('[ws] agent_error:', data.payload);
       
@@ -257,6 +273,7 @@ export function useAgentSocket(projectId: string | undefined) {
     });
 
     return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       ws.destroy();
       wsRef.current = null;
     };

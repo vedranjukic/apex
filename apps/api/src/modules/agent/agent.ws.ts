@@ -544,6 +544,8 @@ async function executeAgainstSandbox(
   if (prevHealthCheck) clearInterval(prevHealthCheck);
 
   const RECONNECT_GRACE_MS = 90_000;
+  const MAX_GRACE_RETRIES = 3;
+  let graceRetryCount = 0;
   const startHealthCheck = () => {
     const hc = activeHealthChecks.get(threadId);
     if (hc) clearInterval(hc);
@@ -566,24 +568,33 @@ async function executeAgainstSandbox(
             console.log(`[agent-ws] Bridge reconnected during grace for thread ${threadId.slice(0, 8)}, requesting replay`);
             const afterSeq = lastSeenSeq.get(threadId) || 0;
             manager.requestReplay(project.sandboxId!, threadId, afterSeq);
+            graceRetryCount = 0;
             startHealthCheck();
             resetTimeout(AGENT_ACTIVITY_TIMEOUT_MS);
             return;
           }
-          console.log(`[agent-ws] Grace period expired for thread ${threadId.slice(0, 8)}, attempting reconnect`);
+          console.log(`[agent-ws] Grace period expired for thread ${threadId.slice(0, 8)}, attempting reconnect (attempt ${graceRetryCount + 1}/${MAX_GRACE_RETRIES})`);
           try {
             const dirName = await resolveDirName(project);
             await manager.reconnectSandbox(project.sandboxId!, dirName, project.localDir || undefined);
             const afterSeq = lastSeenSeq.get(threadId) || 0;
             manager.requestReplay(project.sandboxId!, threadId, afterSeq);
+            graceRetryCount = 0;
             startHealthCheck();
             resetTimeout(AGENT_ACTIVITY_TIMEOUT_MS);
           } catch (err) {
-            // Don't immediately error — the background monitor may still
-            // reconnect. Clean up the handler silently and let
-            // reconcileAndReconnect handle recovery on the next subscribe.
-            console.warn(`[agent-ws] Reconnect failed for ${threadId.slice(0, 8)} after grace, deferring to next subscribe:`, err instanceof Error ? err.message : err);
-            cleanupHandler();
+            graceRetryCount++;
+            if (graceRetryCount < MAX_GRACE_RETRIES) {
+              console.warn(`[agent-ws] Reconnect failed for ${threadId.slice(0, 8)} (attempt ${graceRetryCount}/${MAX_GRACE_RETRIES}), retrying in ${30 * graceRetryCount}s:`, err instanceof Error ? err.message : err);
+              startHealthCheck();
+            } else {
+              console.warn(`[agent-ws] Reconnect failed for ${threadId.slice(0, 8)} after ${MAX_GRACE_RETRIES} attempts, marking as error:`, err instanceof Error ? err.message : err);
+              cleanupHandler();
+              await updateThreadStatusAndNotify(threadId, 'error');
+              emitToSubscribers(project.sandboxId!, 'agent_error', {
+                threadId, error: 'Lost connection to sandbox and could not recover after multiple attempts.',
+              });
+            }
           }
         }, RECONNECT_GRACE_MS);
         activeTimeouts.set(threadId, graceTimer);
@@ -798,6 +809,28 @@ async function executeAgainstSandbox(
   activeHandlers.set(threadId, messageHandler);
   manager.on('message', messageHandler);
 
+  // Reconnect bridge first so we know whether the OC session is still reachable.
+  // If reconnect fails, doSend will retry via ensureConnected internally.
+  const bridgeConnected = manager.isBridgeConnected(project.sandboxId);
+  console.log(`[agent-ws] doSend: thread=${threadId.slice(0, 8)} bridgeConnected=${bridgeConnected} sandboxId=${project.sandboxId?.slice(0, 8)}`);
+  if (!bridgeConnected) {
+    emitToSubscribers(project.sandboxId, 'agent_message', {
+      threadId, message: { type: 'system', subtype: 'info', text: 'Reconnecting to sandbox…' },
+    });
+    try {
+      const dirName = await resolveDirName(project);
+      await manager.reconnectSandbox(project.sandboxId!, dirName, project.localDir || undefined);
+    } catch (reconnectErr) {
+      console.warn(`[agent-ws] Pre-send reconnect failed for ${threadId.slice(0, 8)}, doSend will retry:`, reconnectErr instanceof Error ? reconnectErr.message : reconnectErr);
+    }
+    if (thread.agentSessionId) {
+      console.log(`[agent-ws] Bridge was disconnected for ${threadId.slice(0, 8)}, clearing stale agentSessionId`);
+      await threadsService.updateAgentSessionId(threadId, null);
+      thread.agentSessionId = null;
+    }
+  }
+
+  // Build prompt AFTER reconnect so isSessionRecovery reflects reality
   let effectivePrompt = prompt;
   const priorMessages = (thread.messages || []).slice(0, -1);
   let contextFilePath: string | undefined;
@@ -813,8 +846,6 @@ async function executeAgainstSandbox(
         effectivePrompt += contextFileHint(contextFilePath);
       } catch { /* best-effort */ }
     } else {
-      // Session alive: silently update the context file so it stays current
-      // if the agent reads it (e.g., after OC compaction). No hint added.
       try {
         await writeThreadContext(manager, project.sandboxId, threadId, priorMessages);
       } catch { /* best-effort */ }
@@ -827,13 +858,6 @@ async function executeAgainstSandbox(
   ]);
 
   try {
-    const bridgeConnected = manager.isBridgeConnected(project.sandboxId);
-    console.log(`[agent-ws] doSend: thread=${threadId.slice(0, 8)} bridgeConnected=${bridgeConnected} sandboxId=${project.sandboxId?.slice(0, 8)}`);
-    if (!bridgeConnected) {
-      emitToSubscribers(project.sandboxId, 'agent_message', {
-        threadId, message: { type: 'system', subtype: 'info', text: 'Reconnecting to sandbox…' },
-      });
-    }
     await doSend();
     console.log(`[agent-ws] doSend success: thread=${threadId.slice(0, 8)}`);
     emitTo(client, 'prompt_accepted', { threadId });
@@ -1619,6 +1643,17 @@ async function reconcileAndReconnect(
         const onBridgeThreads = async (sandboxId: string, threads: Record<string, { lastSeq: number; status: string; sessionId: string | null }>) => {
           if (sandboxId !== reconciled.sandboxId) return;
           manager.removeListener('bridge_threads', onBridgeThreads);
+
+          const bridgeSessionIds = new Set(
+            Object.values(threads).map((t) => t.sessionId).filter(Boolean),
+          );
+          for (const pt of projectThreads) {
+            if (pt.agentSessionId && !bridgeSessionIds.has(pt.agentSessionId)) {
+              console.log(`[agent-ws] Clearing stale agentSessionId for thread ${pt.id.slice(0, 8)} (session not in bridge)`);
+              await threadsService.updateAgentSessionId(pt.id, null);
+            }
+          }
+
           for (const [threadId, info] of Object.entries(threads)) {
             if (info.status !== 'completed' && info.status !== 'error') continue;
             try {
@@ -1681,6 +1716,46 @@ export async function autoExecuteThread(threadId: string, prompt: string): Promi
   const noopClient: WsClient = { id: `__auto_${threadId}__`, wsSend: () => {} };
   await executeAgainstSandbox(noopClient, threadId, prompt);
 }
+
+const STALE_WATCHDOG_INTERVAL_MS = 60_000;
+const STALE_THREAD_AGE_MS = 3 * 60_000;
+
+setInterval(async () => {
+  try {
+    const staleThreads = await threadsService.findStaleRunning(STALE_THREAD_AGE_MS);
+    for (const thread of staleThreads) {
+      if (activeHandlers.has(thread.id)) continue;
+
+      const { sandboxId, provider } = thread;
+      if (!sandboxId) continue;
+
+      const manager = projectsService.getSandboxManager(provider);
+      if (!manager) continue;
+
+      console.log(`[stale-watchdog] Thread ${thread.id.slice(0, 8)} stuck in "${thread.status}" with no handler, attempting recovery`);
+
+      if (!manager.isBridgeConnected(sandboxId)) {
+        try {
+          const project = await projectsService.findById(thread.projectId);
+          const dirName = await resolveDirName(project);
+          await manager.reconnectSandbox(sandboxId, dirName, project.localDir || undefined);
+        } catch (err) {
+          console.warn(`[stale-watchdog] Reconnect failed for thread ${thread.id.slice(0, 8)}:`, err instanceof Error ? err.message : err);
+          continue;
+        }
+      }
+
+      if (manager.isBridgeConnected(sandboxId)) {
+        const afterSeq = Math.max(thread.lastPersistedSeq ?? 0, lastSeenSeq.get(thread.id) || 0);
+        reattachToRunningThread(sandboxId, thread.id, manager);
+        manager.requestReplay(sandboxId, thread.id, afterSeq);
+        console.log(`[stale-watchdog] Requested replay for thread ${thread.id.slice(0, 8)} (afterSeq=${afterSeq})`);
+      }
+    }
+  } catch (err) {
+    console.warn('[stale-watchdog] Error:', err instanceof Error ? err.message : err);
+  }
+}, STALE_WATCHDOG_INTERVAL_MS);
 
 export const agentWs = new Elysia()
   .ws('/ws/agent', {

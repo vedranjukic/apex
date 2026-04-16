@@ -90,6 +90,16 @@ class ThreadsService {
     return db.select().from(tasks).where(eq(tasks.projectId, projectId)).orderBy(desc(tasks.createdAt));
   }
 
+  async findStaleRunning(maxAgeMs: number): Promise<(Task & { provider: string; sandboxId: string | null })[]> {
+    const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+    const rows = await db
+      .select({ task: tasks, provider: projects.provider, sandboxId: projects.sandboxId })
+      .from(tasks)
+      .innerJoin(projects, eq(tasks.projectId, projects.id))
+      .where(sql`${tasks.status} IN ('running', 'waiting_for_input') AND ${tasks.updatedAt} < ${cutoff}`);
+    return rows.map((r) => ({ ...r.task, provider: r.provider, sandboxId: r.sandboxId }));
+  }
+
   /**
    * For Daytona projects, pull any threads from the proxy that don't exist
    * in the host DB (created by mobile-initiated prompts).

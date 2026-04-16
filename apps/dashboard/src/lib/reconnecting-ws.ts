@@ -194,6 +194,14 @@ export class ReconnectingWebSocket {
     this.statusHandlers.delete(handler);
   }
 
+  forceReconnect() {
+    if (this.destroyed) return;
+    this.cancelReconnect();
+    this.stopHeartbeat();
+    this.reconnectDelay = 1000;
+    this.ws?.close();
+  }
+
   destroy() {
     this.destroyed = true;
     this.cancelReconnect();
