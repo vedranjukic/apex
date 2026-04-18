@@ -912,6 +912,10 @@ export class SandboxManager extends EventEmitter {
   }
 
   /** Check if the bridge WebSocket for a sandbox is currently connected */
+  hasSession(sandboxId: string): boolean {
+    return this.sessions.has(sandboxId);
+  }
+
   isBridgeConnected(sandboxId: string): boolean {
     const session = this.sessions.get(sandboxId);
     return !!session?.ws && session.ws.readyState === WebSocket.OPEN;

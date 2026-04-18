@@ -587,6 +587,10 @@ async function executeAgainstSandbox(
             if (graceRetryCount < MAX_GRACE_RETRIES) {
               console.warn(`[agent-ws] Reconnect failed for ${threadId.slice(0, 8)} (attempt ${graceRetryCount}/${MAX_GRACE_RETRIES}), retrying in ${30 * graceRetryCount}s:`, err instanceof Error ? err.message : err);
               startHealthCheck();
+            } else if (manager.isRemote) {
+              console.warn(`[agent-ws] Reconnect failed for ${threadId.slice(0, 8)} after ${MAX_GRACE_RETRIES} attempts (remote provider), staying retryable`);
+              graceRetryCount = 0;
+              startHealthCheck();
             } else {
               console.warn(`[agent-ws] Reconnect failed for ${threadId.slice(0, 8)} after ${MAX_GRACE_RETRIES} attempts, marking as error:`, err instanceof Error ? err.message : err);
               cleanupHandler();
@@ -927,7 +931,7 @@ async function handleMessage(client: WsClient, message: unknown) {
           reconcileAndReconnect(payload.projectId, project, client).catch((err) => {
             console.warn(`[agent-ws] reconcileAndReconnect failed for ${payload.projectId}:`, err);
           });
-        } else if (project.status === 'stopped' || project.status === 'error') {
+        } else if (project.status === 'stopped' || project.status === 'error' || project.status === 'offline') {
           emitTo(client, 'agent_status', {
             projectId: payload.projectId, status: 'provisioning',
             message: 'Sandbox was not provisioned. Provisioning now...',
@@ -939,12 +943,6 @@ async function handleMessage(client: WsClient, message: unknown) {
             });
           });
         }
-        try {
-          const staleIds = await threadsService.reconcileStaleThreads(payload.projectId, new Set(activeHandlers.keys()));
-          for (const id of staleIds) {
-            emitTo(client, 'agent_status', { threadId: id, status: 'completed' });
-          }
-        } catch { /* ignore reconciliation errors */ }
         emitTo(client, 'subscribed', { projectId: payload.projectId, sandboxId: project.sandboxId });
         if (project.provider === 'daytona' && project.sandboxId) {
           startProxyPoller(payload.projectId, project.sandboxId);
@@ -1469,7 +1467,7 @@ async function handleMessage(client: WsClient, message: unknown) {
 
 async function reconcileAndStart(projectId: string) {
   const project = await projectsService.reconcileSandboxStatus(projectId);
-  if (project.status === 'stopped' || project.status === 'error') {
+  if (project.status === 'stopped' || project.status === 'error' || project.status === 'offline') {
     await projectsService.startOrProvisionSandbox(projectId);
   }
 }
@@ -1558,9 +1556,21 @@ function reattachToRunningThread(
     } else if (msg.type === 'agent_catchup') {
       const blocks = (msg as any).blocks;
       if (Array.isArray(blocks) && blocks.length > 0) {
-        emitToSubscribers(sandboxId, 'agent_message', {
-          threadId, message: { type: 'assistant', message: { role: 'assistant', model: '', content: blocks, stop_reason: 'end_turn' }, _catchup: true },
-        });
+        try {
+          const currentMessages = await threadsService.getMessages(threadId);
+          const lastMsg = currentMessages[currentMessages.length - 1];
+          const hasGap = lastMsg && (lastMsg.role === 'user' || (lastMsg.role === 'system' && currentMessages.length > 1 && currentMessages[currentMessages.length - 2]?.role === 'user'));
+          if (hasGap) {
+            await threadsService.addMessage(threadId, { role: 'assistant', content: blocks, metadata: { catchup: true } });
+            if (typeof msgSeq === 'number') await threadsService.updateLastPersistedSeq(threadId, msgSeq);
+            console.log(`[agent-ws] Saved ${blocks.length} catch-up blocks for thread ${threadId.slice(0, 8)}`);
+          }
+          emitToSubscribers(sandboxId, 'agent_message', {
+            threadId, message: { type: 'assistant', message: { role: 'assistant', model: '', content: blocks, stop_reason: 'end_turn' }, _catchup: true },
+          });
+        } catch (err) {
+          console.warn(`[agent-ws] Failed to persist catch-up for thread ${threadId.slice(0, 8)}:`, err);
+        }
       }
     } else if (msg.type === 'agent_error') {
       await updateThreadStatusAndNotify(threadId, 'error');
@@ -1579,6 +1589,17 @@ async function reconcileAndReconnect(
   _project: Awaited<ReturnType<typeof projectsService.findById>>,
   client: WsClient,
 ) {
+  let deferredReconcileScheduled = false;
+
+  const runImmediateReconcile = async () => {
+    try {
+      const staleIds = await threadsService.reconcileStaleThreads(projectId, new Set(activeHandlers.keys()));
+      for (const id of staleIds) {
+        emitTo(client, 'agent_status', { threadId: id, status: 'completed' });
+      }
+    } catch { /* ignore reconciliation errors */ }
+  };
+
   try {
     // Clean up stale active handlers from before sleep/disconnect.
     // Their timeouts would fire with stale state; recovery will be
@@ -1600,10 +1621,19 @@ async function reconcileAndReconnect(
 
     const reconciled = await projectsService.reconcileSandboxStatus(projectId);
     if (reconciled.status === 'error') {
+      await runImmediateReconcile();
       emitTo(client, 'project_updated', reconciled);
       emitTo(client, 'agent_status', {
         projectId, status: 'error',
         message: reconciled.statusError || 'Sandbox is in error state',
+      });
+      return;
+    }
+    if (reconciled.status === 'offline') {
+      emitTo(client, 'project_updated', reconciled);
+      emitTo(client, 'agent_status', {
+        projectId, status: 'offline',
+        message: 'Sandbox unreachable — retrying automatically…',
       });
       return;
     }
@@ -1627,8 +1657,12 @@ async function reconcileAndReconnect(
               await threadsService.updateAgentSessionId(s.threadId, s.sessionId);
               await threadsService.updateStatus(s.threadId, 'running');
               reattachToRunningThread(sandboxId, s.threadId, manager);
+              const dbSeq = thread.lastPersistedSeq ?? 0;
+              const memSeq = lastSeenSeq.get(s.threadId) || 0;
+              const afterSeq = Math.max(dbSeq, memSeq);
+              manager.requestReplay(sandboxId, s.threadId, afterSeq);
               emitToSubscribers(sandboxId, 'agent_status', { threadId: s.threadId, status: 'running' });
-              console.log(`[agent-ws] Restored running thread ${s.threadId.slice(0, 8)} (session ${s.sessionId.slice(0, 8)})`);
+              console.log(`[agent-ws] Restored running thread ${s.threadId.slice(0, 8)} (session ${s.sessionId.slice(0, 8)}), replaying afterSeq=${afterSeq}`);
             } catch (err) {
               console.warn(`[agent-ws] Failed to restore thread ${s.threadId.slice(0, 8)}:`, err);
             }
@@ -1639,6 +1673,14 @@ async function reconcileAndReconnect(
           } catch { /* ignore */ }
         };
         manager.on('running_sessions', onRunningSessions);
+
+        deferredReconcileScheduled = true;
+        let staleReconciled = false;
+        const runDeferredReconcile = async () => {
+          if (staleReconciled) return;
+          staleReconciled = true;
+          await runImmediateReconcile();
+        };
 
         const onBridgeThreads = async (sandboxId: string, threads: Record<string, { lastSeq: number; status: string; sessionId: string | null }>) => {
           if (sandboxId !== reconciled.sandboxId) return;
@@ -1655,7 +1697,6 @@ async function reconcileAndReconnect(
           }
 
           for (const [threadId, info] of Object.entries(threads)) {
-            if (info.status !== 'completed' && info.status !== 'error') continue;
             try {
               const thread = await threadsService.findById(threadId);
               if (!thread || thread.projectId !== projectId) continue;
@@ -1664,12 +1705,15 @@ async function reconcileAndReconnect(
               const memSeq = lastSeenSeq.get(threadId) || 0;
               const afterSeq = Math.max(dbSeq, memSeq);
 
-              if (thread.status === 'running' || thread.status === 'waiting_for_input') {
-                console.log(`[agent-ws] Bridge reports thread ${threadId.slice(0, 8)} as ${info.status}, requesting replay (afterSeq=${afterSeq})`);
+              const bridgeTerminal = info.status === 'completed' || info.status === 'error';
+              const dbActive = thread.status === 'running' || thread.status === 'waiting_for_input';
+
+              if (dbActive && bridgeTerminal) {
+                console.log(`[agent-ws] Bridge reports thread ${threadId.slice(0, 8)} as ${info.status} (DB: ${thread.status}), requesting replay (afterSeq=${afterSeq})`);
                 reattachToRunningThread(sandboxId, threadId, manager);
                 manager.requestReplay(sandboxId, threadId, afterSeq);
               } else if (info.lastSeq > afterSeq) {
-                console.log(`[agent-ws] Thread ${threadId.slice(0, 8)} force-completed but bridge has events beyond persisted seq (bridge=${info.lastSeq}, persisted=${afterSeq}), backfilling`);
+                console.log(`[agent-ws] Thread ${threadId.slice(0, 8)} has events beyond persisted seq (bridge=${info.lastSeq}, persisted=${afterSeq}, bridgeStatus=${info.status}), backfilling`);
                 reattachToRunningThread(sandboxId, threadId, manager);
                 manager.requestReplay(sandboxId, threadId, afterSeq);
               }
@@ -1677,34 +1721,69 @@ async function reconcileAndReconnect(
               console.warn(`[agent-ws] Failed to request replay for thread ${threadId.slice(0, 8)}:`, err);
             }
           }
+
+          await runDeferredReconcile();
         };
         manager.on('bridge_threads', onBridgeThreads);
-        // Auto-cleanup if no running_sessions/bridge_threads arrives within 30s
+        // Auto-cleanup if no running_sessions/bridge_threads arrives within 30s;
+        // also run deferred stale reconciliation as fallback.
         setTimeout(() => {
           manager.removeListener('running_sessions', onRunningSessions);
           manager.removeListener('bridge_threads', onBridgeThreads);
+          runDeferredReconcile();
         }, 30_000);
 
+        const wasAlreadyConnected = manager.isBridgeConnected(reconciled.sandboxId!);
         const dirName = await resolveDirName(reconciled);
         try {
           await manager.reconnectSandbox(reconciled.sandboxId!, dirName, reconciled.localDir || undefined);
         } catch (reconnectErr) {
           manager.removeListener('running_sessions', onRunningSessions);
           manager.removeListener('bridge_threads', onBridgeThreads);
-          console.warn(`[agent-ws] reconnect failed for ${projectId}, marking as error:`, reconnectErr);
+          await runDeferredReconcile();
           const message = reconnectErr instanceof Error ? reconnectErr.message : String(reconnectErr);
-          await projectsService.update(projectId, { status: 'error', statusError: message.slice(0, 500) });
-          emitTo(client, 'project_updated', await projectsService.findById(projectId));
-          emitTo(client, 'agent_status', {
-            projectId, status: 'error',
-            message: `Sandbox unreachable: ${message.slice(0, 300)}`,
-          });
+          if (manager.isRemote) {
+            console.warn(`[agent-ws] reconnect failed for ${projectId}, marking as offline:`, reconnectErr);
+            await projectsService.update(projectId, { status: 'offline', statusError: 'Sandbox unreachable' });
+            emitTo(client, 'project_updated', await projectsService.findById(projectId));
+            emitTo(client, 'agent_status', {
+              projectId, status: 'offline',
+              message: 'Sandbox unreachable — retrying automatically…',
+            });
+          } else {
+            console.warn(`[agent-ws] reconnect failed for ${projectId}, marking as error:`, reconnectErr);
+            await projectsService.update(projectId, { status: 'error', statusError: message.slice(0, 500) });
+            emitTo(client, 'project_updated', await projectsService.findById(projectId));
+            emitTo(client, 'agent_status', {
+              projectId, status: 'error',
+              message: `Sandbox unreachable: ${message.slice(0, 300)}`,
+            });
+          }
           return;
+        }
+
+        // If the bridge was already connected (pre-warmed), bridge_ready won't
+        // re-fire, so the onBridgeThreads handler will never trigger. Proactively
+        // request replay for any threads with potential gaps.
+        if (wasAlreadyConnected && manager.isBridgeConnected(reconciled.sandboxId!)) {
+          console.log(`[agent-ws] Bridge already connected for ${projectId.slice(0, 8)}, proactively checking threads for replay`);
+          for (const pt of projectThreads) {
+            const dbSeq = pt.lastPersistedSeq ?? 0;
+            const memSeq = lastSeenSeq.get(pt.id) || 0;
+            const afterSeq = Math.max(dbSeq, memSeq);
+            reattachToRunningThread(reconciled.sandboxId!, pt.id, manager);
+            manager.requestReplay(reconciled.sandboxId!, pt.id, afterSeq);
+            console.log(`[agent-ws] Proactive replay for thread ${pt.id.slice(0, 8)} (afterSeq=${afterSeq})`);
+          }
+          await runDeferredReconcile();
         }
       }
     }
   } catch (err) {
     console.warn(`[agent-ws] subscribe reconcile/reconnect error for ${projectId}:`, err);
+  }
+  if (!deferredReconcileScheduled) {
+    await runImmediateReconcile();
   }
   try {
     const latest = await projectsService.findById(projectId);

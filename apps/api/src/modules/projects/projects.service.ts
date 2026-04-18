@@ -403,9 +403,15 @@ class ProjectsService {
       }
     } catch (err) {
       if (SandboxManager.isSandboxNotFoundError(err)) {
-        const errMsg = `Sandbox ${project.sandboxId?.slice(0, 8)} no longer exists or is unavailable`;
-        console.error(`[projects] ${errMsg} for project ${projectId}`);
-        await db.update(projects).set({ status: 'error', statusError: errMsg }).where(eq(projects.id, projectId));
+        const isRemote = manager.isRemote;
+        if (isRemote) {
+          console.warn(`[projects] Sandbox ${project.sandboxId?.slice(0, 8)} unreachable for project ${projectId} — marking offline`);
+          await db.update(projects).set({ status: 'offline', statusError: 'Sandbox unreachable' }).where(eq(projects.id, projectId));
+        } else {
+          const errMsg = `Sandbox ${project.sandboxId?.slice(0, 8)} no longer exists or is unavailable`;
+          console.error(`[projects] ${errMsg} for project ${projectId}`);
+          await db.update(projects).set({ status: 'error', statusError: errMsg }).where(eq(projects.id, projectId));
+        }
         const updated = await this.findById(projectId);
         projectsWsBroadcast('project_updated', updated);
         return updated;
@@ -1259,7 +1265,8 @@ class ProjectsService {
 
   /**
    * Get projects that need heartbeat checks: remote-provider projects that
-   * either have active threads or are already marked offline.
+   * have active threads, are already marked offline, or have a known
+   * disconnected bridge (e.g. after laptop sleep/wake).
    */
   private async getHeartbeatCandidates(): Promise<Project[]> {
     const remoteProviders = [...this.sandboxManagers.entries()]
@@ -1279,7 +1286,12 @@ class ProjectsService {
 
     return allRemote.filter((p) => {
       if (p.status === 'offline') return true;
-      return p.threads?.some((t) => ACTIVE_THREAD_STATUSES.includes(t.status));
+      if (p.threads?.some((t) => ACTIVE_THREAD_STATUSES.includes(t.status))) return true;
+      if (p.sandboxId) {
+        const manager = this.getManagerForProject(p);
+        if (manager && manager.hasSession(p.sandboxId) && !manager.isBridgeConnected(p.sandboxId)) return true;
+      }
+      return false;
     });
   }
 
